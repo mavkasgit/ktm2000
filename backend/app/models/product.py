@@ -125,6 +125,12 @@ class Product(Base):
     anod_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     photo_thumb: Mapped[str | None] = mapped_column(String(500), nullable=True)
     photo_full: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Чертёж (ADR-0078): отдельный слот, в полном просмотре открывается первым.
+    # Пустой слот показывает photo_full (плакат/фото) как запасной вариант.
+    drawing_full: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Происхождение показанного изображения: own — снято для этого артикула,
+    # alias — взято у эквивалента (бейдж «чертёж алиаса», ADR-0078).
+    visual_origin: Mapped[str | None] = mapped_column(String(16), nullable=True)
     source: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     is_catalog_item: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"), default=False)
     dimension_state: Mapped[DimensionState] = mapped_column(

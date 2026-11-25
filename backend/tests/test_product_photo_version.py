@@ -112,6 +112,40 @@ def test_single_pair_helper_returns_named_versions(storage: Path) -> None:
     )[0]
 
 
+def test_versions_include_drawing_slot(storage: Path) -> None:
+    drawing = storage / "products" / "033_drawing.jpg"
+    drawing.write_bytes(b"drawing")
+    os.utime(drawing, ns=(MTIME_NS + 2, MTIME_NS + 2))
+
+    versions = photo_versions_for(
+        "products/033_full.jpg",
+        "products/033_full.jpg",
+        "products/033_drawing.jpg",
+    )
+
+    assert versions.drawing is not None
+    assert versions.drawing != versions.full
+    assert versions == photo_file_versions(
+        [("products/033_full.jpg", "products/033_full.jpg", "products/033_drawing.jpg")]
+    )[0]
+
+
+def test_batch_versions_accept_two_and_three_element_rows(storage: Path) -> None:
+    drawing = storage / "products" / "033_drawing.jpg"
+    drawing.write_bytes(b"drawing")
+    os.utime(drawing, ns=(MTIME_NS + 2, MTIME_NS + 2))
+
+    versions = photo_file_versions(
+        [
+            ("products/033_full.jpg", "products/033_full.jpg"),
+            ("products/033_full.jpg", "products/033_full.jpg", "products/033_drawing.jpg"),
+        ]
+    )
+
+    assert versions[0].drawing is None
+    assert versions[1].drawing is not None
+
+
 def test_batch_versions_align_with_pairs(storage: Path) -> None:
     thumb = storage / "products" / "033_thumb.jpg"
     thumb.write_bytes(b"thumb")

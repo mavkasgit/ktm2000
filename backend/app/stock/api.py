@@ -1536,7 +1536,7 @@ async def preview_remainders_excel(
     * ``clipboard_text`` — TSV из буфера (копия из Excel), альтернатива ``file``.
     * ``limit`` / ``offset`` / ``items_total`` — серверная пагинация по ``items``.
     * ``search`` — поиск по SKU, product_name, коду 1С, номеру строки.
-    * ``filter_status`` — ``all`` или ``invalid``.
+    * ``filter_status`` — ``all``, ``invalid`` или ``skipped``.
     * ``sort`` — сортировка страницы preview, ``field:order`` через запятую.
     * ``row``, ``sku``, ``quantity``, ``length``, ``operations``, ``quality``,
       ``section``, ``errors`` — column filters (partial match).
@@ -1546,14 +1546,22 @@ async def preview_remainders_excel(
     ``detected_section_name``, а элементы — ``source_code``, ``source_name``,
     ``source_unit``, ``source_quantity_m`` (метры). ``source_code`` участвует
     в ``search``, но не в колоночных фильтрах (спека §5.2).
+
+    Строки, разобранные реестром исключений (#464), приходят со статусом
+    ``skipped`` и полями ``skip_reason``/``skip_reason_label``/``skip_note``;
+    они не входят в ``summary.invalid`` и считаются отдельным
+    ``summary.skipped``.
     """
     if location_id is not None:
         location = await db.get(Section, location_id)
         if location is None:
             raise HTTPException(status_code=404, detail=f"Участок с id={location_id} не найден")
 
-    if filter_status not in {"all", "invalid"}:
-        raise HTTPException(status_code=422, detail="filter_status должен быть 'all' или 'invalid'")
+    if filter_status not in {"all", "invalid", "skipped"}:
+        raise HTTPException(
+            status_code=422,
+            detail="filter_status должен быть 'all', 'invalid' или 'skipped'",
+        )
 
     parsed_target_overrides = _parse_remainder_override_json(
         target_section_overrides,
@@ -1602,6 +1610,7 @@ async def preview_remainders_excel(
     # Recalculate summary after product enrichment
     valid_count = sum(1 for it in items if it.status == "valid")
     invalid_count = sum(1 for it in items if it.status == "invalid")
+    skipped_count = sum(1 for it in items if it.status == "skipped")
     quantity_total = sum(
         (it.quantity or 0) for it in items if it.status == "valid"
     )
@@ -1644,6 +1653,7 @@ async def preview_remainders_excel(
         "summary": {
             "total": len(items),
             "valid": valid_count,
+            "skipped": skipped_count,
             "invalid": invalid_count,
             "quantity_total": round(quantity_total, 3),
         },

@@ -22,12 +22,14 @@ from io import BytesIO
 from app.models import (
     Product,
     Product1CCode,
+    Product1CSkipped,
     ProductLength,
     ProductType,
     Section,
 )
 from app.models.action_journal import Action
 from app.reversal.service import reversal_service
+from app.stock.import_1c_osv import _norm_cell
 from app.stock.import_history import get_batch, get_batch_rows, mark_rolled_back
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
@@ -540,3 +542,63 @@ async def test_rollback_osv_import_returns_balances_and_keeps_invariants(
     assert batch.rolled_back_at is not None
     # Код номенклатуры — факт справочника, а не остатка: откат его не трогает.
     assert list(await _codes(session)) == ["30123"]
+
+
+# ─── Реестр исключений (#464) ─────────────────────────────────────────────────
+
+
+async def test_import_osv_registry_skipped_rows_not_imported_and_not_errors(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Разобранная строка не грузится, не считается ошибкой и видна в счётчиках.
+
+    Батч фиксирует вердикты импорта: строка валидна и залита, а исключённая
+    реестром — только в ``skipped_rows``/``summary.skipped_registry``, потому
+    что это решение каталога, а не дефект файла.
+    """
+    section = await _make_section(session, "RAW_STOCK", "Склад сырья")
+    product = await _make_product(
+        session, "OSV-REG-OK", name="Кант универсальный", lengths=[(2700, None, True)]
+    )
+    session.add(
+        Product1CSkipped(
+            code="19001",
+            name_norm=_norm_cell("Упаковка пакет 40*60"),
+            reason="not_mes",
+            note="упаковка",
+            decided_by="test",
+        )
+    )
+    await session.commit()
+
+    content = _make_osv_workbook(
+        [
+            _osv_row("20933", "Кант (OSV-REG-OK) 2,7м", "м", 2700),
+            # Код не привязан к артикулу, но записан в реестре.
+            _osv_row("19001", "Упаковка пакет 40*60", "шт", 10),
+        ]
+    )
+
+    resp = await _post_import(client, section, content)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is True
+    assert body["imported_count"] == 1
+    assert body["errors"] == []
+
+    txs = await _transactions(session, body["action_id"])
+    assert [tx.product_id for tx in txs] == [product.id]
+
+    batch = await get_batch(session, body["batch_id"])
+    assert batch.total_rows == 2
+    assert batch.imported_rows == 1
+    assert batch.skipped_rows == 1
+    assert batch.summary["skipped_registry"] == 1
+
+    # Вердиктов импорта у исключённой строки нет: её не рассматривали.
+    rows = await get_batch_rows(session, body["batch_id"])
+    assert [row.source_code for row in rows] == ["20933"]
+    assert rows[0].status == "valid"
+
+    await assert_no_invariants_violations(session, context="osv-registry-skip")

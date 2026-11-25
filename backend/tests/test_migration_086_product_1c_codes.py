@@ -31,7 +31,6 @@ pytestmark = pytest.mark.skipif(
     reason="PostgreSQL server not reachable for migration test",
 )
 
-REVISION = "086_product_1c_codes_source_fields"
 PREVIOUS_REVISION = "085_section_operation_updated_at"
 
 
@@ -70,9 +69,13 @@ async def test_migration_086_product_1c_codes_and_import_source_fields(tmp_path:
         _run("upgrade", "head")
 
         async with engine.connect() as conn:
-            assert (
+            # head уезжает с каждой новой миграцией, поэтому сравнивать его с
+            # литералом 086 нельзя: схема ниже — и есть доказательство, что
+            # 086 применилась поверх своей предшественницы.
+            head = (
                 await conn.execute(text("SELECT version_num FROM alembic_version"))
-            ).scalar_one() == REVISION
+            ).scalar_one()
+            assert head not in (None, PREVIOUS_REVISION)
             assert "product_1c_codes" in await _table_names(conn)
             code_columns = await _columns(conn, "product_1c_codes")
             row_columns = await _columns(conn, "stock_import_rows")

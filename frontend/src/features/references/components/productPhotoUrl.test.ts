@@ -27,6 +27,28 @@ describe("productPhotoUrl", () => {
     );
   });
 
+  it("takes the drawing path with the drawing version", () => {
+    expect(
+      productPhotoUrl(
+        {
+          ...product,
+          drawing_full: "products/033_drawing.jpg",
+          drawing_full_version: "dwg-1",
+        },
+        "drawing",
+      ),
+    ).toBe("/static/products/033_drawing.jpg?v=dwg-1");
+  });
+
+  it("falls back to full then thumb when the drawing slot is empty", () => {
+    expect(productPhotoUrl(product, "drawing")).toBe(
+      "/static/products/033_full.jpg?v=full-1",
+    );
+    expect(productPhotoUrl({ ...product, photo_full: null }, "drawing")).toBe(
+      "/static/products/033_thumb.jpg?v=thumb-1",
+    );
+  });
+
   it("returns null when neither photo exists or the product is empty", () => {
     expect(
       productPhotoUrl(

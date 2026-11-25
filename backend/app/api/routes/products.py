@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
@@ -66,6 +67,8 @@ from app.services.route_selection import select_route_for_payload
 
 router = APIRouter(prefix="/products", tags=["products"])
 
+logger = logging.getLogger(__name__)
+
 
 class ProcessingFlagOut(BaseModel):
     code: str
@@ -130,6 +133,8 @@ class ProductIn(BaseModel):
     cross_section: str | None = None
     photo_thumb: str | None = None
     photo_full: str | None = None
+    drawing_full: str | None = None
+    visual_origin: Literal["own", "alias"] | None = None
     source: str | None = None
     is_catalog_item: bool = False
     skip_shot_blast: bool = False
@@ -164,6 +169,8 @@ class ProductPatch(BaseModel):
     cross_section: str | None = None
     photo_thumb: str | None = None
     photo_full: str | None = None
+    drawing_full: str | None = None
+    visual_origin: Literal["own", "alias"] | None = None
     source: str | None = None
     is_catalog_item: bool | None = None
     skip_shot_blast: bool | None = None
@@ -226,9 +233,14 @@ class ProductOut(BaseModel):
     cross_section: str | None
     photo_thumb: str | None
     photo_full: str | None
+    # #463: чертёж — отдельный слот полного просмотра (ADR-0078).
+    drawing_full: str | None
+    # #463: own — чертёж снят для артикула, alias — взят у эквивалента.
+    visual_origin: str | None
     # #404: версия конкретного файла для `?v=` в URL — full и thumb независимо.
     photo_thumb_version: str | None
     photo_full_version: str | None
+    drawing_full_version: str | None
     source: str | None
     is_catalog_item: bool
     is_paired_profile: bool
@@ -762,6 +774,7 @@ def _to_product_out(
     """
     thumb_version = photo_versions.thumb
     full_version = photo_versions.full
+    drawing_version = photo_versions.drawing
     lengths = [
         ProductLengthOut(
             length_mm=float(row.length_mm),
@@ -819,8 +832,11 @@ def _to_product_out(
         cross_section=product.cross_section,
         photo_thumb=product.photo_thumb,
         photo_full=product.photo_full,
+        drawing_full=product.drawing_full,
+        visual_origin=product.visual_origin,
         photo_thumb_version=thumb_version,
         photo_full_version=full_version,
+        drawing_full_version=drawing_version,
         source=product.source,
         is_catalog_item=product.is_catalog_item,
         is_paired_profile=product.is_paired_profile,
@@ -997,7 +1013,8 @@ async def list_products(
     # #404: два stat на товар в event loop — до 2N блокировок на список.
     # Считаем версии одним вызовом в потоке и передаём в сериализатор.
     photo_versions = await asyncio.to_thread(
-        photo_file_versions, [(i.photo_thumb, i.photo_full) for i in items]
+        photo_file_versions,
+        [(i.photo_thumb, i.photo_full, i.drawing_full) for i in items],
     )
     return ProductsListResponse(
         items=[
@@ -1183,7 +1200,7 @@ async def create_product(
     await db.commit()
     await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
     photo_versions = await asyncio.to_thread(
-        photo_versions_for, item.photo_thumb, item.photo_full
+        photo_versions_for, item.photo_thumb, item.photo_full, item.drawing_full
     )
     return _to_product_out(item, photo_versions=photo_versions)
 
@@ -1217,7 +1234,7 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)) -> Pr
     if item.dimension_state in (DimensionState.area, DimensionState.volume):
         dimensions = await _sheet_dimension_values(db, product_id) or None
     photo_versions = await asyncio.to_thread(
-        photo_versions_for, item.photo_thumb, item.photo_full
+        photo_versions_for, item.photo_thumb, item.photo_full, item.drawing_full
     )
     return _to_product_out(item, dimensions, photo_versions=photo_versions)
 
@@ -1380,7 +1397,7 @@ async def patch_product(
     await db.commit()
     await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
     photo_versions = await asyncio.to_thread(
-        photo_versions_for, item.photo_thumb, item.photo_full
+        photo_versions_for, item.photo_thumb, item.photo_full, item.drawing_full
     )
     return _to_product_out(item, sheet_dims, photo_versions=photo_versions)
 
@@ -1547,6 +1564,46 @@ async def replace_product_composition(
     return CompositionOut(items=await _load_composition(db, product_id))
 
 
+def _stored_photo_path(stored: str | None) -> Path | None:
+    """Путь файла слота внутри storage или ``None`` для чужого/недопустимого.
+
+    В БД (ADR-0026) путь хранится относительно ``STORAGE_ROOT``
+    (``products/<файл>``). Абсолютный путь, ``..`` и внешний URL не удаляем:
+    промах DSN/ручная правка не должны сносить файл мимо storage.
+    """
+    raw = (stored or "").strip().replace("\\", "/")
+    if not raw or "://" in raw:
+        return None
+    relative = Path(raw)
+    if relative.is_absolute() or any(part == ".." for part in relative.parts):
+        logger.warning("refusing to delete photo outside storage: %r", stored)
+        return None
+    root = Path(settings.STORAGE_ROOT).resolve()
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        logger.warning("refusing to delete photo outside storage: %r", stored)
+        return None
+    return candidate
+
+
+async def _remove_stored_photo(stored: str | None) -> None:
+    """Удалить файл слота; сбой unlink не превращает ответ в 500.
+
+    Слот в БД уже очищен, поэтому отсутствие файла — штатная ситуация
+    (файл убрали мимо API). Ошибка доступа логируется: ответ остаётся
+    успешным, иначе оператор не смог бы очистить слот из-за чужого файла.
+    """
+    path = _stored_photo_path(stored)
+    if path is None:
+        return
+    try:
+        await asyncio.to_thread(path.unlink, missing_ok=True)
+    except OSError as exc:
+        logger.warning("could not delete product photo %s: %s", path, exc)
+
+
 @router.post(
     "/{product_id}/photo",
     response_model=ProductOut,
@@ -1555,7 +1612,7 @@ async def replace_product_composition(
 async def upload_product_photo(
     product_id: int,
     file: UploadFile = File(...),
-    kind: str = Query("full", pattern="^(full|thumb)$"),
+    kind: str = Query("full", pattern="^(full|thumb|drawing)$"),
     db: AsyncSession = Depends(get_db),
 ) -> ProductOut:
     item = await db.get(Product, product_id)
@@ -1574,6 +1631,13 @@ async def upload_product_photo(
         full_path = storage_dir / filename
         full_path.write_bytes(content)
         item.photo_full = str(full_path.relative_to(storage_dir.parent))
+    elif kind == "drawing":
+        drawing_name = f"{item.sku}_{product_id}_drawing.{ext}"
+        drawing_path = storage_dir / drawing_name
+        drawing_path.write_bytes(content)
+        item.drawing_full = str(drawing_path.relative_to(storage_dir.parent))
+        # Загруженный в эту карточку чертёж — свой, а не алиаса (ADR-0078).
+        item.visual_origin = "own"
     else:
         thumbname = f"{item.sku}_{product_id}_thumb.{ext}"
         thumb_path = storage_dir / thumbname
@@ -1584,7 +1648,52 @@ async def upload_product_photo(
     await db.commit()
     await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
     photo_versions = await asyncio.to_thread(
-        photo_versions_for, item.photo_thumb, item.photo_full
+        photo_versions_for, item.photo_thumb, item.photo_full, item.drawing_full
+    )
+    return _to_product_out(item, photo_versions=photo_versions)
+
+
+@router.delete(
+    "/{product_id}/photo",
+    response_model=ProductOut,
+    dependencies=[Depends(require_role(list(REFERENCES_WRITER_ROLES)))],
+)
+async def delete_product_photo(
+    product_id: int,
+    kind: str = Query("full", pattern="^(full|thumb|drawing)$"),
+    db: AsyncSession = Depends(get_db),
+) -> ProductOut:
+    """Очистить один слот изображения, не трогая соседние (#465).
+
+    Слоты независимы: удаление чертежа оставляет ``photo_full`` и
+    ``photo_thumb``, удаление фото — чертёж. Пустой слот — не ошибка:
+    повторный DELETE отвечает 200 и тем же телом, чтобы двойной клик не давал
+    500.
+    """
+    item = await db.get(Product, product_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Артикул не найден")
+
+    if kind == "full":
+        stored = item.photo_full
+        item.photo_full = None
+    elif kind == "drawing":
+        stored = item.drawing_full
+        item.drawing_full = None
+        # Происхождение описывает изображение чертежа: без файла бейдж
+        # «чертёж алиаса» относился бы к пустому слоту (ADR-0078).
+        item.visual_origin = None
+    else:
+        stored = item.photo_thumb
+        item.photo_thumb = None
+
+    # Коммит ДО удаления файла: если unlink не удался, слот уже пуст, а
+    # осиротевший файл безопаснее ссылки на несуществующий.
+    await db.commit()
+    await _remove_stored_photo(stored)
+    await db.refresh(item, attribute_names=["lengths", "processing_flags", "is_paired_profile"])
+    photo_versions = await asyncio.to_thread(
+        photo_versions_for, item.photo_thumb, item.photo_full, item.drawing_full
     )
     return _to_product_out(item, photo_versions=photo_versions)
 

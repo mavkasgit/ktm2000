@@ -16,12 +16,13 @@
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 from app.core.database import get_db
 from app.main import app
-from app.models.product import DimensionState, Product
+from app.models.product import Product
 from app.services.plan_position_hanger import resolve_position_hanger
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, text
@@ -36,7 +37,10 @@ from tests.helpers.mig_db import (
 )
 
 PREV_REVISION = "066_route_signature_backfill"
-HEAD_REVISION = "067_hanger_norm_key_normalization"
+# После проверки эффекта 067 схему поднимаем до head: тест дальше работает
+# текущими ORM-моделями, а они пишут и колонки поздних миграций (например,
+# `products.drawing_full`, #463). Эффект самой 067 от этого не меняется.
+SCHEMA_HEAD = "head"
 
 pytestmark = pytest.mark.skipif(
     not migration_db_reachable(),
@@ -54,45 +58,62 @@ async def _seed(session_factory, *, linear_norms: dict, auto_norms: dict) -> dic
 
     Лист нужен именно здесь: миграция обязана пройти мимо него, не тронув
     единственную запись по длине полотна (ADR-0047 п. 4).
+
+    Пишем продуктами сырым SQL, а не ORM: схема на этой ревизии старше
+    текущих моделей, и ORM добавил бы в INSERT колонки поздних миграций
+    (`drawing_full`, `visual_origin` — #463).
     """
     from app.models.dimension import DimensionType, ProductDimension
 
     async with session_factory() as session:
-        linear = Product(
-            sku="MIG218-LINEAR",
-            name="Линейный",
-            type="component",
-            unit="pcs",
-            attributes={
-                "hanger_mode": "manual",
-                "quantity_per_hanger": linear_norms,
-            },
-        )
-        auto = Product(
-            sku="MIG218-AUTO",
-            name="Авто",
-            type="component",
-            unit="pcs",
-            attributes={
-                "hanger_mode": "auto",
-                "perimeter_mm": 100,
-                "mount_width_mm": 50,
-                "quantity_per_hanger": auto_norms,
-            },
-        )
-        sheet = Product(
-            sku="MIG218-SHEET",
-            name="Лист",
-            type="component",
-            unit="pcs",
-            dimension_state=DimensionState.area,
-            attributes={
-                "hanger_mode": "manual",
-                "quantity_per_hanger": {"2000": {"auto": None, "manual": 5}},
-            },
-        )
-        session.add_all([linear, auto, sheet])
-        await session.flush()
+        ids = {}
+        seeded_attributes = {}
+        for sku, name, dimension_state, attributes in (
+            (
+                "MIG218-LINEAR",
+                "Линейный",
+                "length",
+                {"hanger_mode": "manual", "quantity_per_hanger": linear_norms},
+            ),
+            (
+                "MIG218-AUTO",
+                "Авто",
+                "length",
+                {
+                    "hanger_mode": "auto",
+                    "perimeter_mm": 100,
+                    "mount_width_mm": 50,
+                    "quantity_per_hanger": auto_norms,
+                },
+            ),
+            (
+                "MIG218-SHEET",
+                "Лист",
+                "area",
+                {
+                    "hanger_mode": "manual",
+                    "quantity_per_hanger": {"2000": {"auto": None, "manual": 5}},
+                },
+            ),
+        ):
+            seeded_attributes[sku] = attributes
+            ids[sku] = (
+                await session.execute(
+                    text(
+                        "INSERT INTO products "
+                        "(sku, name, type, unit, dimension_state, attributes) "
+                        "VALUES (:sku, :name, 'component', 'pcs', :dimension_state, "
+                        "        CAST(:attributes AS jsonb)) RETURNING id"
+                    ),
+                    {
+                        "sku": sku,
+                        "name": name,
+                        "dimension_state": dimension_state,
+                        "attributes": json.dumps(attributes, ensure_ascii=False),
+                    },
+                )
+            ).scalar_one()
+
         for code in ("length_mm", "width_mm"):
             session.add(DimensionType(code=code, name=code, unit="мм", value_type="number"))
         await session.flush()
@@ -105,10 +126,11 @@ async def _seed(session_factory, *, linear_norms: dict, auto_norms: dict) -> dic
                 )
             ).all()
         )
+        sheet_id = ids["MIG218-SHEET"]
         for code, value in (("length_mm", 2000.0), ("width_mm", 500.0)):
             session.add(
                 ProductDimension(
-                    product_id=sheet.id,
+                    product_id=sheet_id,
                     dimension_type_id=types[code],
                     default_value=value,
                 )
@@ -118,10 +140,16 @@ async def _seed(session_factory, *, linear_norms: dict, auto_norms: dict) -> dic
                 "INSERT INTO product_lengths (product_id, length_mm, raw_length_mm, is_primary) "
                 "VALUES (:linear, 2700, 2750, true), (:auto, 2700, 2750, true)"
             ),
-            {"linear": linear.id, "auto": auto.id},
+            {"linear": ids["MIG218-LINEAR"], "auto": ids["MIG218-AUTO"]},
         )
         await session.commit()
-        return {"linear": linear.id, "auto": auto.id, "sheet": sheet.id}
+        return {
+            "linear": ids["MIG218-LINEAR"],
+            "auto": ids["MIG218-AUTO"],
+            "sheet": sheet_id,
+            "linear_attributes": seeded_attributes["MIG218-LINEAR"],
+            "auto_attributes": seeded_attributes["MIG218-AUTO"],
+        }
 
 
 @pytest.mark.asyncio
@@ -141,17 +169,29 @@ async def test_after_migration_card_patch_keeps_norm_and_sheet_fallback_works(tm
 
         # До миграции у линейного артикула на плане пусто: ключ 2750 не
         # совпадает с нормальной длиной позиции 2700 (ADR-0047, инцидент).
-        async with session_factory() as session:
-            linear_before = resolve_position_hanger(
-                await session.get(Product, ids["linear"]),
-                length_mm=2700,
-                payload_quantity_per_hanger=None,
+        #
+        # Резолверу нужны только attributes артикула, поэтому на старой схеме
+        # собираем transient-Product в памяти: ORM-чтение продуктов на ревизии
+        # 066 упёрлось бы в колонки поздних миграций (#463).
+        def _transient(name: str, attributes: dict) -> Product:
+            return Product(
+                sku=name,
+                name=name,
+                type="component",
+                unit="pcs",
+                attributes=attributes,
             )
-            auto_before = resolve_position_hanger(
-                await session.get(Product, ids["auto"]),
-                length_mm=2700,
-                payload_quantity_per_hanger=None,
-            )
+
+        linear_before = resolve_position_hanger(
+            _transient("MIG218-LINEAR", ids["linear_attributes"]),
+            length_mm=2700,
+            payload_quantity_per_hanger=None,
+        )
+        auto_before = resolve_position_hanger(
+            _transient("MIG218-AUTO", ids["auto_attributes"]),
+            length_mm=2700,
+            payload_quantity_per_hanger=None,
+        )
         assert linear_before.quantity_per_hanger is None
         assert linear_before.source is None
         # Регресс авто-режима: словарь норм в нём не читается, движок считает
@@ -159,7 +199,7 @@ async def test_after_migration_card_patch_keeps_norm_and_sheet_fallback_works(tm
         assert auto_before.source == "auto"
         assert auto_before.quantity_per_hanger is not None
 
-        _alembic(target_url, tmp_path, "upgrade", HEAD_REVISION)
+        _alembic(target_url, tmp_path, "upgrade", SCHEMA_HEAD)
 
         async with session_factory() as session:
             linear_after = resolve_position_hanger(

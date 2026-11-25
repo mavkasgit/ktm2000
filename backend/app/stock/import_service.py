@@ -100,7 +100,7 @@ class RemainderItem:
     comment: str | None
     product_id: int | None
     product_name: str | None
-    status: Literal["valid", "invalid"]
+    status: Literal["valid", "invalid", "skipped"]
     errors: list[str]
     raw_values: list[str]
     warnings: list[str] = field(default_factory=list)
@@ -128,6 +128,13 @@ class RemainderItem:
     source_name: str | None = None
     source_unit: str | None = None
     source_quantity_m: float | None = None
+    # Реестр исключений (#464): строка разобрана человеком и не является
+    # ошибкой. `reason` — код (not_mes/purchased/no_catalog), `label` — его
+    # подпись для предпросмотра, `note` — пометка из реестра. Статус такие
+    # строки получают `skipped` и в импорт не попадают.
+    skip_reason: str | None = None
+    skip_reason_label: str | None = None
+    skip_note: str | None = None
 
 
 @dataclass
@@ -138,6 +145,8 @@ class SheetSummary:
     valid: int
     invalid: int
     quantity_total: float
+    # Разобранные строки реестра исключений (#464) — не ошибки и не импорт.
+    skipped: int = 0
 
 
 @dataclass
@@ -1190,6 +1199,9 @@ async def apply_remainders_import(
        or ``item.target_section_id`` (fallback to ``location_id``).
        If ``item.completed_stages`` is non-empty, appends operation names
        to the transaction comment.
+    4а. Строки со статусом ``skipped`` (реестр исключений #464) не грузятся и
+       не попадают в ``errors``: это разобранные позиции, а не дефект файла.
+       Их число уходит в ``skipped_rows`` батча и ``summary.skipped_registry``.
     5. Commits the database session.
     6. Writes the batch header and per-row records into the import history
        (``stock_import_batches`` / ``stock_import_rows``, ADR-0052): the
@@ -1243,6 +1255,10 @@ async def apply_remainders_import(
 
     valid_items = [it for it in items if it.status == "valid" and it.product_id is not None]
     invalid_items = [it for it in items if it.status == "invalid"]
+    # Реестр исключений (#464): разобранные строки не грузятся и не считаются
+    # ошибками. Они не отменяют импорт при `skip_invalid=False` — это не дефект
+    # файла, а решение каталога.
+    skipped_items = [it for it in items if it.status == "skipped"]
 
     for it in invalid_items:
         errors.append(f"Row {it.source_row_number}: {', '.join(it.errors)} (SKU={it.sku})")
@@ -1390,10 +1406,13 @@ async def apply_remainders_import(
         sheet_name=sheet_name,
         total_rows=len(items),
         imported_rows=imported_count,
-        skipped_rows=len(invalid_items),
+        # Пропущенные — и ошибки, и разобранные реестром (#464): «не загружено»
+        # у них общее, а причина видна в предпросмотре и в summary.
+        skipped_rows=len(invalid_items) + len(skipped_items),
         summary={
             "quality_state": quality_state.value,
             "source": "clipboard" if file_id is None else "excel",
+            "skipped_registry": len(skipped_items),
         },
         created_by=user.id if user else None,
         created_by_name=(
@@ -1404,6 +1423,12 @@ async def apply_remainders_import(
     await db.flush()
 
     for item in items:
+        if item.status == "skipped":
+            # Разобранная реестром строка (#464) — не вердикт импорта: она не
+            # грузилась и не ошибка. Её число несут `skipped_rows` и
+            # `summary.skipped_registry`, а `valid`/`invalid` остаются тем, что
+            # импорт действительно рассматривал.
+            continue
         row_quality = _resolve_item_quality_state(
             item, quality_state, quality_state_overrides
         )
@@ -1561,7 +1586,7 @@ class RemainderSectionMeta:
     """Compact per-row section info for client-side override validation."""
 
     source_row_number: int
-    status: Literal["valid", "invalid"]
+    status: Literal["valid", "invalid", "skipped"]
     target_section_id: int | None
     target_section_name: str | None
 
@@ -1637,6 +1662,11 @@ def _preview_section_label(
 
 
 def _preview_errors_label(item: RemainderItem) -> str:
+    if item.status == "skipped":
+        # Не ошибка: колонка показывает решение каталога, чтобы строка была
+        # объяснена прямо в таблице (#464). Сам статус и его счётчик — отдельно.
+        label = item.skip_reason_label or "пропущено по решению каталога"
+        return f"Пропущено: {label}"
     if not item.errors:
         return "—" if item.status == "valid" else "Ошибка"
     return ", ".join(item.errors)
@@ -1809,8 +1839,8 @@ def query_remainder_preview_items(
     section_meta = build_remainder_section_meta(items)
 
     filtered = list(items)
-    if filter_status == "invalid":
-        filtered = [item for item in filtered if item.status == "invalid"]
+    if filter_status in {"invalid", "skipped"}:
+        filtered = [item for item in filtered if item.status == filter_status]
 
     if search:
         filtered = [item for item in filtered if _preview_matches_search(item, search)]

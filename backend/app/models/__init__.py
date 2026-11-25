@@ -8,6 +8,7 @@ from .section import Section
 from .user import User, UserRole
 from .user_session import UserSession
 from .product import Product, ProductType, Product1CCode, ProductLength, ProcessingFlag, ProductProcessingFlag, ProductComposition, ProductPair as ProductPair
+from .product_1c_skipped import Product1CSkipped
 from .dimension import DimensionType, ProductDimension
 from .route import ProductionRoute, RouteOperation, RouteRuleProfile, RouteSelectionRule, RouteStage
 from .imports import ImportBatch, ImportBatchMode, ImportBatchStatus, ImportFile
@@ -106,6 +107,7 @@ __all__ = [
     "ProcessingFlag",
     "Product",
     "Product1CCode",
+    "Product1CSkipped",
     "ProductComposition",
     "ProductDimension",
     "ProductLength",

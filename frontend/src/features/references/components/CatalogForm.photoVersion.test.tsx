@@ -46,7 +46,10 @@ const product: Product = {
   photo_thumb: null,
   photo_thumb_version: null,
   photo_full: "products/033_full.jpg",
+  drawing_full: null,
+  visual_origin: null,
   photo_full_version: "old-version",
+  drawing_full_version: null,
   source: null,
   is_catalog_item: false,
   is_paired_profile: false,
@@ -89,16 +92,17 @@ describe("CatalogForm: версия фото", () => {
     });
     renderForm();
 
-    fireEvent.click(screen.getByRole("button", { name: /Загрузить основное фото/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Заменить фото/ }));
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     const file = new File(["photo"], "new-full.png", { type: "image/png" });
     fireEvent.change(input, { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: /^Загрузить$/ }));
 
     await waitFor(() => expect(uploadProductPhoto).toHaveBeenCalledWith(190, file, "full"));
-    const image = screen.getByAltText(product.name);
     await waitFor(() =>
-      expect(image.getAttribute("src")).toBe("/static/products/033_full.jpg?v=server-version"),
+      expect(screen.getByAltText(`${product.name} — фото`).getAttribute("src")).toBe(
+        "/static/products/033_full.jpg?v=server-version",
+      ),
     );
   });
 });

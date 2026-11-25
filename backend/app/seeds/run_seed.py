@@ -11,6 +11,7 @@ from app.seeds.seeders.defect_types_seeder import seed_defect_types
 from app.seeds.seeders.dimension_types_seeder import seed_dimension_types
 from app.seeds.seeders.import_template_seeder import seed_import_template
 from app.seeds.seeders.processing_flags_seeder import seed_processing_flags
+from app.seeds.seeders.product_1c_skipped_seeder import seed_product_1c_skipped
 from app.seeds.seeders.route_rule_profile_seeder import seed_route_rule_profile
 from app.seeds.seeders.routes_seeder import (
     seed_production_routes_from_profiles,
@@ -54,6 +55,12 @@ async def run_full_seed(
     # 1.1.1. Processing flags reference catalog (#17)
     flags_map = await seed_processing_flags(db)
     result["processing_flags"] = len(flags_map)
+
+    # 1.1.1.1. Реестр исключений разбора ОСВ (#464): разобранные строки 1С
+    # уходят в статус `skipped`, а не в ошибки. Идемпотентно: сид только
+    # добавляет недостающие записи и не перезаписывает решения человека.
+    skipped_registry = await seed_product_1c_skipped(db)
+    result["product_1c_skipped"] = skipped_registry["created"]
 
     # 1.1.2. Defect types reference catalog (#25)
     defect_types_count = await seed_defect_types(db, config.quality.defect_types)

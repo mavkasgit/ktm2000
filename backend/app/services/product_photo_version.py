@@ -30,10 +30,11 @@ _WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:/")
 
 
 class PhotoVersions(NamedTuple):
-    """Версии пары фото одного артикула: превью и основной файл."""
+    """Версии изображений артикула: превью, фото и чертёж (#463)."""
 
     thumb: str | None
     full: str | None
+    drawing: str | None = None
 
 
 def _resolve_storage_path(path: str) -> Path | None:
@@ -97,18 +98,30 @@ def photo_file_version(path: str | None) -> str | None:
     return f"{file_stat.st_mtime_ns:x}-{file_stat.st_size:x}"
 
 
-def photo_versions_for(thumb: str | None, full: str | None) -> PhotoVersions:
-    """Версии пары ``(thumb, full)`` одного артикула."""
-    return PhotoVersions(photo_file_version(thumb), photo_file_version(full))
+def photo_versions_for(
+    thumb: str | None,
+    full: str | None,
+    drawing: str | None = None,
+) -> PhotoVersions:
+    """Версии ``(thumb, full, drawing)`` одного артикула.
+
+    ``drawing`` — необязательный третий слот (#463): старые вызовы пары
+    продолжают работать, а список артикулов передаёт тройку.
+    """
+    return PhotoVersions(
+        photo_file_version(thumb),
+        photo_file_version(full),
+        photo_file_version(drawing),
+    )
 
 
 def photo_file_versions(
-    pairs: Iterable[tuple[str | None, str | None]],
+    rows: Iterable[tuple[str | None, ...]],
 ) -> list[PhotoVersions]:
-    """Версии для пар ``(thumb_path, full_path)`` одним вызовом.
+    """Версии для строк ``(thumb_path, full_path[, drawing_path])``.
 
     Синхронная функция: route-слой зовёт её через ``asyncio.to_thread``, чтобы
     ``stat`` не блокировал event loop. Для списка это один переход в поток на
-    весь ответ, а не по два ``stat`` на каждый товар в цикле.
+    весь ответ, а не по два-три ``stat`` на каждый товар в цикле.
     """
-    return [photo_versions_for(thumb, full) for thumb, full in pairs]
+    return [photo_versions_for(*row) for row in rows]

@@ -2,16 +2,27 @@ import React, { useEffect, useImperativeHandle, useState, forwardRef, useCallbac
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Image, Maximize2, Camera, Trash2, Plus, ChevronDown, ChevronUp } from "lucide-react";
+import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Checkbox } from "@/shared/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/shared/ui/alert-dialog";
 import { FullscreenPhoto } from "./FullscreenPhoto";
 import { ImageUploadModal } from "./ImageUploadModal";
 import { ProductSearchMulti } from "./ProductSearchMulti";
 import { ProductDimensionsSection, type ProductDimensionsSectionHandle } from "./ProductDimensionsSection";
 import { ProductPairsSection } from "./ProductPairsSection";
 import { productPhotoUrl } from "./productPhotoUrl";
-import { uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
+import { deleteProductPhoto, uploadProductPhoto, getErrorMessage } from "@/shared/api/products";
 import { listDimensionTypes } from "../api";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { calcHanger, type HangerCalcResult } from "@/shared/api/hangerCalc";
@@ -239,6 +250,32 @@ type HangerSheetPreviewState =
   | { status: "ready"; result: HangerCalcResult | null }
   | { status: "error"; message: string };
 
+/** Слоты изображения артикула (#465): фото, превью для списков, чертёж. */
+type PhotoSlot = "full" | "thumb" | "drawing";
+
+/** Состояние операции одного слота: прогресс и ошибка не общие. */
+type SlotOperation = { busy: "upload" | "delete" | null; error: string | null };
+
+const EMPTY_SLOT_OPERATION: SlotOperation = { busy: null, error: null };
+
+function emptySlotOperations(): Record<PhotoSlot, SlotOperation> {
+  return {
+    full: { ...EMPTY_SLOT_OPERATION },
+    thumb: { ...EMPTY_SLOT_OPERATION },
+    drawing: { ...EMPTY_SLOT_OPERATION },
+  };
+}
+
+/** Форматы, которые принимает любой слот (конвертация PDF — вне карточки). */
+const PHOTO_SLOT_ACCEPT = "image/png,image/jpeg";
+const PHOTO_SLOT_HINT = "PNG или JPEG";
+
+const PHOTO_DELETE_TITLES: Record<PhotoSlot, string> = {
+  full: "Удалить фото?",
+  thumb: "Удалить превью?",
+  drawing: "Удалить чертёж?",
+};
+
 export const CatalogForm = forwardRef<CatalogFormRef, {
   product: Product | null;
   mode: DialogMode;
@@ -265,11 +302,17 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
   const handleCloseFullscreen = useCallback(() => {
     setFullscreenPhoto(null);
   }, []);
-  const [localPhotoFull, setLocalPhotoFull] = useState<string | null>(null);
-  const [localPhotoThumb, setLocalPhotoThumb] = useState<string | null>(null);
+  // undefined — слот не трогали в этой сессии, null — удалён локально:
+  // так пустой слот честный, а не подставляет соседний файл (#465).
+  const [localPhotoFull, setLocalPhotoFull] = useState<string | null | undefined>(undefined);
+  const [localPhotoThumb, setLocalPhotoThumb] = useState<string | null | undefined>(undefined);
+  const [localPhotoDrawing, setLocalPhotoDrawing] = useState<string | null | undefined>(undefined);
+  const [localVisualOrigin, setLocalVisualOrigin] = useState<"own" | "alias" | null | undefined>(undefined);
+  const [slotOperations, setSlotOperations] = useState<Record<PhotoSlot, SlotOperation>>(emptySlotOperations);
+  const [pendingDelete, setPendingDelete] = useState<PhotoSlot | null>(null);
   const [uploadFullModal, setUploadFullModal] = useState(false);
   const [uploadThumbModal, setUploadThumbModal] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [uploadDrawingModal, setUploadDrawingModal] = useState(false);
   const [newLength, setNewLength] = useState("");
   const [form, setForm] = useState<CreateProductInput>(() => buildInitialForm(product, mode));
   const [hangerPreview, setHangerPreview] = useState<HangerPreviewState>({ status: "idle" });
@@ -296,8 +339,12 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
 
   useEffect(() => {
     setForm(buildInitialForm(product, mode));
-    setLocalPhotoFull(null);
-    setLocalPhotoThumb(null);
+    setLocalPhotoFull(undefined);
+    setLocalPhotoThumb(undefined);
+    setLocalPhotoDrawing(undefined);
+    setLocalVisualOrigin(undefined);
+    setSlotOperations(emptySlotOperations());
+    setPendingDelete(null);
     setNewLength("");
     setHangerPreview({ status: "idle" });
     setSheetPreview({ status: "idle" });
@@ -644,41 +691,107 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
     onChangesChange?.(changes);
   }, [isDirty, onDirtyChange, onChangesChange, changes]);
 
+  const revokeBlob = (url: string | null | undefined) => {
+    if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+  };
+
+  /** Заменить локальный URL одного слота, не трогая соседние (#465). */
+  const replaceLocalSlot = (slot: PhotoSlot, url: string | null) => {
+    if (slot === "full") {
+      revokeBlob(localPhotoFull);
+      setLocalPhotoFull(url);
+    } else if (slot === "drawing") {
+      revokeBlob(localPhotoDrawing);
+      setLocalPhotoDrawing(url);
+    } else {
+      revokeBlob(localPhotoThumb);
+      setLocalPhotoThumb(url);
+    }
+  };
+
+  const updateSlotOperation = (slot: PhotoSlot, patch: Partial<SlotOperation>) => {
+    setSlotOperations((current) => ({
+      ...current,
+      [slot]: { ...current[slot], ...patch },
+    }));
+  };
+
   // Cleanup blob URLs on unmount
   useEffect(() => {
     return () => {
       if (localPhotoFull?.startsWith("blob:")) URL.revokeObjectURL(localPhotoFull);
       if (localPhotoThumb?.startsWith("blob:")) URL.revokeObjectURL(localPhotoThumb);
+      if (localPhotoDrawing?.startsWith("blob:")) URL.revokeObjectURL(localPhotoDrawing);
     };
-  }, [localPhotoFull, localPhotoThumb]);
+  }, [localPhotoFull, localPhotoThumb, localPhotoDrawing]);
 
-  const handlePhotoUpload = async (file: File, target: "full" | "thumb") => {
+  const handlePhotoUpload = async (file: File, slot: PhotoSlot) => {
     if (!product?.id) return;
-    setUploading(true);
+    updateSlotOperation(slot, { busy: "upload", error: null });
     try {
-      const updated = await uploadProductPhoto(product.id, file, target);
-      if (target === "full") {
-        if (localPhotoFull?.startsWith("blob:")) URL.revokeObjectURL(localPhotoFull);
-        setLocalPhotoFull(productPhotoUrl(updated, "full"));
-      } else {
-        if (localPhotoThumb?.startsWith("blob:")) URL.revokeObjectURL(localPhotoThumb);
-        setLocalPhotoThumb(productPhotoUrl(updated, "thumb"));
-      }
-    } catch {
+      const updated = await uploadProductPhoto(product.id, file, slot);
+      // Свой файл слота: фото не подставляется вместо чертежа и наоборот.
+      const stored =
+        slot === "full"
+          ? updated.photo_full
+          : slot === "thumb"
+            ? updated.photo_thumb
+            : updated.drawing_full;
+      replaceLocalSlot(slot, stored ? productPhotoUrl(updated, slot) : null);
+      if (slot === "drawing") setLocalVisualOrigin(updated.visual_origin ?? "own");
+    } catch (error) {
+      // Ошибка одного слота остаётся в своём блоке и не трогает соседний.
+      updateSlotOperation(slot, { error: getErrorMessage(error) });
     } finally {
-      setUploading(false);
+      updateSlotOperation(slot, { busy: null });
     }
   };
 
-  const handlePhotoSelect = (file: File, target: "full" | "thumb") => {
-    if (isCreate) return;
-    handlePhotoUpload(file, target);
+  const handlePhotoDelete = async (slot: PhotoSlot) => {
+    if (!product?.id) return;
+    updateSlotOperation(slot, { busy: "delete", error: null });
+    try {
+      await deleteProductPhoto(product.id, slot);
+      replaceLocalSlot(slot, null);
+      if (slot === "drawing") setLocalVisualOrigin(null);
+    } catch (error) {
+      updateSlotOperation(slot, { error: getErrorMessage(error) });
+    } finally {
+      updateSlotOperation(slot, { busy: null });
+    }
   };
 
-  // #404: версия идёт в URL каждого фото отдельно. Локальная после загрузки
+  const handlePhotoSelect = (file: File, slot: PhotoSlot) => {
+    if (isCreate) return;
+    void handlePhotoUpload(file, slot);
+  };
+
+  // #404: версия идёт в URL каждого слота отдельно. Локальная после загрузки
   // уже содержит `?v=`, сохранённые в товаре — получают свою версию здесь.
-  const fullPhotoUrl = localPhotoFull ?? productPhotoUrl(product, "full");
-  const thumbPhotoUrl = localPhotoThumb ?? productPhotoUrl(product, "thumb");
+  // Слот без своего файла пуст: подстановка соседнего — только в просмотре.
+  const fullPhotoUrl =
+    localPhotoFull === undefined
+      ? product?.photo_full
+        ? productPhotoUrl(product, "full")
+        : null
+      : localPhotoFull;
+  const thumbPhotoUrl =
+    localPhotoThumb === undefined
+      ? product?.photo_thumb
+        ? productPhotoUrl(product, "thumb")
+        : null
+      : localPhotoThumb;
+  const drawingPhotoUrl =
+    localPhotoDrawing === undefined
+      ? product?.drawing_full
+        ? productPhotoUrl(product, "drawing")
+        : null
+      : localPhotoDrawing;
+  const visualOrigin = localVisualOrigin === undefined ? product?.visual_origin : localVisualOrigin;
+  const drawingFromAlias = Boolean(drawingPhotoUrl) && visualOrigin === "alias";
+  // Полный просмотр открывается чертежом, если он есть; иначе фото (ADR-0078).
+  const fullscreenUrl = drawingPhotoUrl ?? fullPhotoUrl ?? thumbPhotoUrl;
+  const anySlotBusy = Object.values(slotOperations).some((operation) => operation.busy !== null);
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4 mt-4">
@@ -692,80 +805,242 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
 
       <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-6">
         <div className="flex flex-col gap-3">
-          {/* Main photo */}
-          <div
-            className="relative w-full h-96 md:h-[420px] bg-muted rounded-lg flex items-center justify-center overflow-hidden group/photo cursor-pointer hover:ring-2 ring-primary transition-all"
-            onClick={() => {
-              if (fullPhotoUrl) setFullscreenPhoto(fullPhotoUrl);
-            }}
+          {/* Два независимых слота (#465): «Фото изделия» и «Чертёж».
+              У каждого своё превью, загрузка и удаление, а пустой слот
+              честный — соседний файл в карточке не подставляется. */}
+          <section
+            aria-label="Фото изделия"
+            className="rounded-lg border bg-muted/20 p-3 space-y-3"
           >
-            {fullPhotoUrl ? (
-              <>
-                <img
-                  src={fullPhotoUrl}
-                  alt={product?.name || ""}
-                  className="w-full h-full object-contain pointer-events-none"
-                />
-                <div className="absolute bottom-2 right-2 p-2 bg-black/50 text-white rounded-full pointer-events-none">
-                  <Maximize2 className="w-5 h-5" />
-                </div>
-              </>
-            ) : (
-              <Image className="w-16 h-16 text-muted-foreground" />
-            )}
-          </div>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">Фото изделия</h3>
+              <span className="text-[11px] text-muted-foreground">{PHOTO_SLOT_HINT}</span>
+            </div>
 
-          {/* Main photo upload button */}
+            <div
+              className={cn(
+                "relative w-full h-56 bg-muted rounded-lg flex items-center justify-center overflow-hidden transition-all",
+                fullPhotoUrl && "cursor-pointer hover:ring-2 ring-primary",
+              )}
+              onClick={() => {
+                if (fullPhotoUrl) setFullscreenPhoto(fullPhotoUrl);
+              }}
+            >
+              {fullPhotoUrl ? (
+                <>
+                  <img
+                    src={fullPhotoUrl}
+                    alt={`${product?.name || "Артикул"} — фото`}
+                    className="w-full h-full object-contain pointer-events-none"
+                  />
+                  <div className="absolute bottom-2 right-2 p-2 bg-black/50 text-white rounded-full pointer-events-none">
+                    <Maximize2 className="w-4 h-4" />
+                  </div>
+                </>
+              ) : (
+                <div className="text-center text-sm text-muted-foreground">
+                  <Image className="w-10 h-10 mx-auto mb-1" />
+                  Фото нет
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="flex-1"
+                disabled={slotOperations.full.busy !== null || isCreate || readOnly}
+                onClick={() => setUploadFullModal(true)}
+              >
+                <Camera className="w-4 h-4 mr-2" />
+                {slotOperations.full.busy === "upload"
+                  ? "Загрузка…"
+                  : fullPhotoUrl
+                    ? "Заменить фото"
+                    : "Загрузить фото"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                aria-label="Удалить фото"
+                disabled={!fullPhotoUrl || slotOperations.full.busy !== null || readOnly}
+                onClick={() => setPendingDelete("full")}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Удалить
+              </Button>
+            </div>
+            {slotOperations.full.busy === "delete" && (
+              <p className="text-xs text-muted-foreground">Удаление…</p>
+            )}
+            {slotOperations.full.error && (
+              <p role="alert" className="text-xs text-destructive">
+                {slotOperations.full.error}
+              </p>
+            )}
+
+            <div className="flex items-center gap-3 border-t pt-3">
+              <div
+                className={cn(
+                  "relative w-16 h-16 shrink-0 bg-muted rounded-lg flex items-center justify-center overflow-hidden transition-all",
+                  thumbPhotoUrl && "cursor-pointer hover:ring-2 ring-primary",
+                )}
+                onClick={() => {
+                  if (thumbPhotoUrl) setFullscreenPhoto(thumbPhotoUrl);
+                }}
+              >
+                {thumbPhotoUrl ? (
+                  <>
+                    <img
+                      src={thumbPhotoUrl}
+                      alt={`${product?.name || "Артикул"} — превью`}
+                      className="w-full h-full object-contain pointer-events-none"
+                    />
+                    <div className="absolute bottom-1 right-1 p-1 bg-black/50 text-white rounded-full pointer-events-none">
+                      <Maximize2 className="w-3 h-3" />
+                    </div>
+                  </>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground text-center px-1">
+                    Превью нет
+                  </span>
+                )}
+              </div>
+
+              <div className="flex-1 min-w-0 space-y-1">
+                <p className="text-xs text-muted-foreground">Превью для списков</p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="flex-1"
+                    disabled={slotOperations.thumb.busy !== null || isCreate || readOnly}
+                    onClick={() => setUploadThumbModal(true)}
+                  >
+                    <Camera className="w-4 h-4 mr-2" />
+                    {slotOperations.thumb.busy === "upload"
+                      ? "Загрузка…"
+                      : thumbPhotoUrl
+                        ? "Заменить превью"
+                        : "Загрузить превью"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    aria-label="Удалить превью"
+                    disabled={!thumbPhotoUrl || slotOperations.thumb.busy !== null || readOnly}
+                    onClick={() => setPendingDelete("thumb")}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                </div>
+                {slotOperations.thumb.error && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {slotOperations.thumb.error}
+                  </p>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section
+            aria-label="Чертёж"
+            className="rounded-lg border bg-muted/20 p-3 space-y-3"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">Чертёж</h3>
+              <div className="flex items-center gap-2">
+                {drawingFromAlias && (
+                  <Badge variant="outline" className="text-[10px]">
+                    Чертёж алиаса
+                  </Badge>
+                )}
+                <span className="text-[11px] text-muted-foreground">{PHOTO_SLOT_HINT}</span>
+              </div>
+            </div>
+
+            <div
+              className={cn(
+                "relative w-full h-56 bg-muted rounded-lg flex items-center justify-center overflow-hidden transition-all",
+                drawingPhotoUrl && "cursor-pointer hover:ring-2 ring-primary",
+              )}
+              onClick={() => {
+                if (drawingPhotoUrl) setFullscreenPhoto(drawingPhotoUrl);
+              }}
+            >
+              {drawingPhotoUrl ? (
+                <>
+                  <img
+                    src={drawingPhotoUrl}
+                    alt={`${product?.name || "Артикул"} — чертёж`}
+                    className="w-full h-full object-contain pointer-events-none"
+                  />
+                  <div className="absolute bottom-2 right-2 p-2 bg-black/50 text-white rounded-full pointer-events-none">
+                    <Maximize2 className="w-4 h-4" />
+                  </div>
+                </>
+              ) : (
+                <div className="text-center text-sm text-muted-foreground">
+                  <Image className="w-10 h-10 mx-auto mb-1" />
+                  Чертежа нет
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="flex-1"
+                disabled={slotOperations.drawing.busy !== null || isCreate || readOnly}
+                onClick={() => setUploadDrawingModal(true)}
+              >
+                <Camera className="w-4 h-4 mr-2" />
+                {slotOperations.drawing.busy === "upload"
+                  ? "Загрузка…"
+                  : drawingPhotoUrl
+                    ? "Заменить чертёж"
+                    : "Загрузить чертёж"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                aria-label="Удалить чертёж"
+                disabled={!drawingPhotoUrl || slotOperations.drawing.busy !== null || readOnly}
+                onClick={() => setPendingDelete("drawing")}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Удалить
+              </Button>
+            </div>
+            {slotOperations.drawing.busy === "delete" && (
+              <p className="text-xs text-muted-foreground">Удаление…</p>
+            )}
+            {slotOperations.drawing.error && (
+              <p role="alert" className="text-xs text-destructive">
+                {slotOperations.drawing.error}
+              </p>
+            )}
+          </section>
+
           <Button
             type="button"
             variant="outline"
             className="w-full"
-            disabled={uploading || isCreate || readOnly}
-            onClick={() => setUploadFullModal(true)}
+            disabled={!fullscreenUrl}
+            onClick={() => {
+              if (fullscreenUrl) setFullscreenPhoto(fullscreenUrl);
+            }}
           >
-            <Camera className="w-4 h-4 mr-2" />
-            Загрузить основное фото
+            <Maximize2 className="w-4 h-4 mr-2" />
+            Открыть полностью
           </Button>
-
-          {/* Thumbnail preview + upload */}
-          <div className="flex items-center gap-3">
-            <div
-              className="relative w-20 h-20 shrink-0 bg-muted rounded-lg flex items-center justify-center overflow-hidden cursor-pointer hover:ring-2 ring-primary transition-all"
-              onClick={() => {
-                if (thumbPhotoUrl) setFullscreenPhoto(thumbPhotoUrl);
-              }}
-            >
-              {thumbPhotoUrl ? (
-                <>
-                  <img
-                    src={thumbPhotoUrl}
-                    alt="Preview"
-                    className="w-full h-full object-contain pointer-events-none"
-                  />
-                  <div className="absolute bottom-1 right-1 p-1 bg-black/50 text-white rounded-full pointer-events-none">
-                    <Maximize2 className="w-3 h-3" />
-                  </div>
-                </>
-              ) : (
-                <Image className="w-6 h-6 text-muted-foreground" />
-              )}
-            </div>
-
-            <Button
-              type="button"
-              variant="outline"
-              className="flex-1"
-              disabled={uploading || isCreate || readOnly}
-              onClick={() => setUploadThumbModal(true)}
-            >
-              <Camera className="w-4 h-4 mr-2" />
-              Загрузить превью
-            </Button>
-          </div>
 
           {isCreate && (
             <p className="text-xs text-muted-foreground text-center">
-              Фото загружаются после создания товара
+              Фото и чертёж загружаются после создания товара
             </p>
           )}
         </div>
@@ -1363,22 +1638,65 @@ export const CatalogForm = forwardRef<CatalogFormRef, {
           )}
           <Button type="button" variant="outline" onClick={onCancel}>Закрыть</Button>
           {!readOnly && (
-            <Button type="submit" disabled={uploading || hasValidationErrors}>{isCreate ? "Создать" : "Сохранить"}</Button>
+            <Button type="submit" disabled={anySlotBusy || hasValidationErrors}>{isCreate ? "Создать" : "Сохранить"}</Button>
           )}
         </div>
       </div>
+
+      <AlertDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingDelete ? PHOTO_DELETE_TITLES[pendingDelete] : "Удалить изображение?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Файл будет удалён из хранилища, слот останется пустым. Соседний слот
+              не изменится.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button">Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              type="button"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (pendingDelete) void handlePhotoDelete(pendingDelete);
+              }}
+            >
+              Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <ImageUploadModal
         open={uploadFullModal}
         onOpenChange={setUploadFullModal}
         onFileSelected={(file) => handlePhotoSelect(file, "full")}
-        title="Основное фото"
+        title="Фото изделия"
+        accept={PHOTO_SLOT_ACCEPT}
+        hint={PHOTO_SLOT_HINT}
       />
       <ImageUploadModal
         open={uploadThumbModal}
         onOpenChange={setUploadThumbModal}
         onFileSelected={(file) => handlePhotoSelect(file, "thumb")}
-        title="Фото превью"
+        title="Превью для списков"
+        accept={PHOTO_SLOT_ACCEPT}
+        hint={PHOTO_SLOT_HINT}
+      />
+      <ImageUploadModal
+        open={uploadDrawingModal}
+        onOpenChange={setUploadDrawingModal}
+        onFileSelected={(file) => handlePhotoSelect(file, "drawing")}
+        title="Чертёж"
+        accept={PHOTO_SLOT_ACCEPT}
+        hint={PHOTO_SLOT_HINT}
       />
     </form>
   );

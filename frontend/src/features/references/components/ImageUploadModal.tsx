@@ -8,6 +8,22 @@ interface ImageUploadModalProps {
   onOpenChange: (open: boolean) => void;
   onFileSelected: (file: File) => void;
   title?: string;
+  /** Какие файлы принимает слот (`accept` у input и проверка типа). */
+  accept?: string;
+  /** Подпись под заголовком: «PNG или JPEG» и т.п. */
+  hint?: string;
+}
+
+const DEFAULT_IMAGE_ACCEPT = "image/*";
+
+/** Совпадает ли файл с `accept` (MIME и суффикс `/*`). */
+function matchesAccept(file: File, accept: string): boolean {
+  const type = file.type.toLowerCase();
+  return accept
+    .split(",")
+    .map((rule) => rule.trim().toLowerCase())
+    .filter(Boolean)
+    .some((rule) => (rule.endsWith("/*") ? type.startsWith(rule.slice(0, -1)) : type === rule));
 }
 
 export function ImageUploadModal({
@@ -15,6 +31,8 @@ export function ImageUploadModal({
   onOpenChange,
   onFileSelected,
   title = "Загрузка изображения",
+  accept = DEFAULT_IMAGE_ACCEPT,
+  hint,
 }: ImageUploadModalProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -35,12 +53,12 @@ export function ImageUploadModal({
   }, []);
 
   const handleFile = useCallback((file: File) => {
-    if (!file.type.startsWith("image/")) return;
+    if (!matchesAccept(file, accept)) return;
     replacePreviewUrl(URL.createObjectURL(file));
 
     // Store the file on the element so we can access it on confirm
     (dropZoneRef.current as any)._selectedFile = file;
-  }, [replacePreviewUrl]);
+  }, [accept, replacePreviewUrl]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -119,6 +137,10 @@ export function ImageUploadModal({
             {title}
           </Dialog.Title>
 
+          {hint && (
+            <p className="text-xs text-muted-foreground -mt-2 mb-3">{hint}</p>
+          )}
+
           <div
             ref={dropZoneRef}
             className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer ${
@@ -158,7 +180,7 @@ export function ImageUploadModal({
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*"
+            accept={accept}
             className="hidden"
             onChange={handleFileInput}
           />

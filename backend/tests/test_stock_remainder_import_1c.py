@@ -19,11 +19,13 @@ import pytest
 from app.models import (
     Product,
     Product1CCode,
+    Product1CSkipped,
     ProductLength,
     ProductType,
     Section,
 )
 from app.stock.import_1c_osv import (
+    _norm_cell,
     detect_1c_osv,
     detect_manual_template,
     parse_length_from_name,
@@ -1025,5 +1027,197 @@ async def test_preview_manual_template_reports_manual_kind(
     assert item["quantity"] == 7
     assert item["source_code"] is None
     assert item["source_quantity_m"] is None
+
+
+# ─── Реестр исключений (#464) ─────────────────────────────────────────────────
+
+
+def _skipped_entry(
+    *,
+    code: str | None = None,
+    name: str | None = None,
+    reason: str = "not_mes",
+    note: str | None = None,
+) -> Product1CSkipped:
+    """Запись реестра: ``name_norm`` — той же нормализацией, что и импорт."""
+    return Product1CSkipped(
+        code=code,
+        name_norm=_norm_cell(name) if name else None,
+        reason=reason,
+        note=note,
+        decided_by="test",
+    )
+
+
+async def test_lookup_1c_registry_skips_by_code_with_reason(
+    session: AsyncSession,
+) -> None:
+    """Код в реестре: строка не ошибка, статус ``skipped`` и причина в строке."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    session.add(
+        _skipped_entry(
+            code="16944",
+            name="Упаковка пакет 40*60",
+            reason="not_mes",
+            note="упаковка, не наша",
+        )
+    )
+    items = _items([_osv_row("16944", "Упаковка пакет 40*60", "шт", 100)])
+
+    await _lookup_1c_products(session, items)
+
+    item = items[0]
+    assert item.status == "skipped"
+    assert item.product_id is None
+    assert item.errors == []
+    assert item.skip_reason == "not_mes"
+    assert item.skip_reason_label == "не MES (химия, плёнки, крепёж, СИЗ, газы)"
+    assert item.skip_note == "упаковка, не наша"
+
+
+async def test_lookup_1c_registry_skips_by_name_when_code_changed(
+    session: AsyncSession,
+) -> None:
+    """Код в 1С сменился: позиция находится по нормализованному имени."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    session.add(
+        _skipped_entry(
+            code="99999",
+            name="Плёнка ПВХ MJ-502 0,16мм/Латунь",
+            reason="not_mes",
+        )
+    )
+    items = _items([
+        # NBSP и двойной пробел в имени 1С не мешают реестру.
+        _osv_row("12345", "Плёнка\u00a0ПВХ  MJ-502 0,16мм/Латунь", "м2", 12),
+    ])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].status == "skipped"
+    assert items[0].skip_reason == "not_mes"
+    assert items[0].errors == []
+
+
+async def test_lookup_1c_catalog_wins_over_registry(
+    session: AsyncSession,
+) -> None:
+    """Артикул, заведённый позже, выигрывает: код в реестре не глушит матч."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    product = await _make_product(session, "ЮП-2616", name="Кант универсальный")
+    await _bind_1c_code(session, product, "20933")
+    session.add(
+        _skipped_entry(code="20933", name="Кант 26мм 2,70м", reason="no_catalog")
+    )
+    items = _items([_osv_row("20933", "Кант 26мм 2,70м", "шт", 10)])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].status == "valid"
+    assert items[0].product_id == product.id
+    assert items[0].skip_reason is None
+
+
+async def test_lookup_1c_registry_does_not_silence_ambiguity(
+    session: AsyncSession,
+) -> None:
+    """Неоднозначность каталога — ошибка, даже если код записан в реестре."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    await _make_product(session, "ALS-1103")
+    await _make_product(session, "ЮП-3773")
+    session.add(
+        _skipped_entry(code="16944", name="Кант (ALS-1103 / ЮП-3773)", reason="no_catalog")
+    )
+    items = _items([_osv_row("16944", "Кант (ALS-1103 / ЮП-3773)", "м", 100)])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].status == "invalid"
+    assert items[0].skip_reason is None
+    assert items[0].errors == ["Артикул неоднозначен: ALS-1103, ЮП-3773"]
+
+
+async def test_lookup_1c_registry_does_not_hide_row_errors(
+    session: AsyncSession,
+) -> None:
+    """Отрицательный остаток остаётся ошибкой: реестр не отменяет разбор данных."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    session.add(_skipped_entry(code="16944", name="Упаковка пакет", reason="not_mes"))
+    items = _items([_osv_row("16944", "Упаковка пакет", "шт", -5)])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].status == "invalid"
+    assert items[0].skip_reason is None
+    assert "Отрицательный остаток" in items[0].errors
+
+
+async def test_preview_osv_counts_skipped_and_filters_by_it(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Предпросмотр: отдельный счётчик ``skipped``, фильтр, причина в строке.
+
+    Каталог главнее реестра — строка с кодом, привязанным к артикулу, остаётся
+    valid, хотя тот же код есть в реестре.
+    """
+    await _make_section(session, "RAW_STOCK", "Склад сырья")
+    product = await _make_product(session, "KANT-OK", lengths=[(2700, None, True)])
+    await _bind_1c_code(session, product, "20933")
+    session.add_all([
+        _skipped_entry(code="20933", name="Кант 2,70м", reason="no_catalog"),
+        _skipped_entry(
+            code="16944", name="Упаковка пакет", reason="not_mes", note="упаковка"
+        ),
+    ])
+    await session.commit()
+
+    excel = _make_osv_workbook([
+        _osv_row("20933", "Кант 2,70м", "м", 2700),
+        _osv_row("16944", "Упаковка пакет", "шт", 10),
+        _osv_row("22069", "Неизвестный профиль", "м", 10),
+    ])
+
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={"file": ("osv.xlsx", excel, XLSX_MIME)},
+        data={"sheet_index": "0"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["summary"] == {
+        "total": 3,
+        "valid": 1,
+        "skipped": 1,
+        "invalid": 1,
+        "quantity_total": 1000,
+    }
+
+    by_code = {item["source_code"]: item for item in body["items"]}
+    assert by_code["20933"]["status"] == "valid"
+    assert by_code["20933"]["product_id"] == product.id
+    skipped = by_code["16944"]
+    assert skipped["status"] == "skipped"
+    assert skipped["errors"] == []
+    assert skipped["skip_reason"] == "not_mes"
+    assert skipped["skip_note"] == "упаковка"
+    assert by_code["22069"]["status"] == "invalid"
+
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={"file": ("osv.xlsx", excel, XLSX_MIME)},
+        data={"sheet_index": "0", "filter_status": "skipped"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    filtered = resp.json()
+    assert filtered["items_total"] == 1
+    assert [item["source_code"] for item in filtered["items"]] == ["16944"]
+
 
 

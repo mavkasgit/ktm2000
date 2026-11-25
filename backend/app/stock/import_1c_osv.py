@@ -21,7 +21,7 @@ from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import TYPE_CHECKING, Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.domain.dimensions import (
     LENGTH_MM,
@@ -30,6 +30,7 @@ from app.domain.dimensions import (
     format_mm_as_meters,
 )
 from app.models.product import Product, Product1CCode, ProductLength
+from app.models.product_1c_skipped import SKIP_REASON_LABELS, Product1CSkipped
 from app.models.section import Section
 from app.services.import_normalization import match_sku_cell, sku_entry
 from app.services.product_alias_groups import (
@@ -732,11 +733,19 @@ async def _load_catalog(db: AsyncSession) -> _Catalog:
 
 @dataclass
 class _MatchDecision:
-    """Решение по строке до загрузки объекта артикула."""
+    """Решение по строке до загрузки объекта артикула.
+
+    ``unmatched`` — каталог не нашёл ничего (ни кода, ни артикула в
+    наименовании, ни точного имени). Только такая строка может получить
+    статус ``skipped`` из реестра исключений: неоднозначность и конфликт кода
+    с наименованием остаются ошибками — это дефект данных, а не решение
+    «строка не наша».
+    """
 
     product_id: int | None = None
     warning: str | None = None
     errors: list[str] | None = None
+    unmatched: bool = False
 
 
 @dataclass
@@ -864,6 +873,62 @@ async def _load_exact_name_products(
     return by_name
 
 
+@dataclass(frozen=True)
+class _SkippedRegistry:
+    """Прочитанный реестр исключений: код первичен, имя — запасной ключ.
+
+    Строка ищется сначала по коду номенклатуры 1С, потом по нормализованному
+    наименованию: код — стабильный ключ, имя — способ поймать позицию, у
+    которой в 1С поменялся код.
+    """
+
+    by_code: dict[str, Product1CSkipped]
+    by_name: dict[str, Product1CSkipped]
+
+    def match(self, item: RemainderItem) -> Product1CSkipped | None:
+        if item.source_code:
+            entry = self.by_code.get(item.source_code)
+            if entry is not None:
+                return entry
+        name_norm = _norm_cell(item.source_name)
+        if not name_norm:
+            return None
+        return self.by_name.get(name_norm)
+
+
+async def _load_skipped(
+    db: AsyncSession,
+    items: Sequence[RemainderItem],
+) -> _SkippedRegistry:
+    """Реестр исключений (#464) только по ключам строк, которые не нашлись.
+
+    Читаются лишь записи, способные совпасть: полная выгрузка реестра на
+    каждом предпросмотре росла бы вместе с ним, а строки файла дают точный
+    набор кодов и имён.
+    """
+    codes = {item.source_code for item in items if item.source_code}
+    names = {_norm_cell(item.source_name) for item in items if item.source_name}
+    conditions = []
+    if codes:
+        conditions.append(Product1CSkipped.code.in_(codes))
+    if names:
+        conditions.append(Product1CSkipped.name_norm.in_(names))
+    if not conditions:
+        return _SkippedRegistry(by_code={}, by_name={})
+
+    rows = (
+        await db.scalars(select(Product1CSkipped).where(or_(*conditions)))
+    ).all()
+    by_code: dict[str, Product1CSkipped] = {}
+    by_name: dict[str, Product1CSkipped] = {}
+    for row in rows:
+        if row.code:
+            by_code[row.code] = row
+        if row.name_norm:
+            by_name[row.name_norm] = row
+    return _SkippedRegistry(by_code=by_code, by_name=by_name)
+
+
 async def _lookup_1c_products(
     db: AsyncSession,
     items: Sequence[RemainderItem],
@@ -874,6 +939,13 @@ async def _lookup_1c_products(
     наименование ``Product.name``. Любой матч приводится к канону группы
     алиасов; кандидаты из разных групп и конфликт кода с наименованием —
     ошибка строки. Артикулы не создаются.
+
+    Каталог главнее реестра исключений (#464): найденная строка остаётся
+    ``valid``, даже если её код или имя записаны в ``product_1c_skipped``.
+    Реестр применяется последним и только к строкам, которые каталог не
+    нашёл вовсе (``_MatchDecision.unmatched``); тогда строка получает статус
+    ``skipped`` с причиной и перестаёт быть ошибкой. Неоднозначность и
+    конфликт кода с наименованием реестр не глушит — это дефект данных.
     """
     rows_items = [item for item in items if item.source_code]
     if not rows_items:
@@ -919,7 +991,8 @@ async def _lookup_1c_products(
                     errors=[
                         f"Код {item.source_code} не привязан к артикулу, "
                         "в наименовании артикул не найден"
-                    ]
+                    ],
+                    unmatched=True,
                 )
                 continue
             group_keys = {catalog.group_key(product.id) for product in matches}
@@ -950,11 +1023,38 @@ async def _lookup_1c_products(
         loaded = await db.execute(select(Product).where(Product.id.in_(product_ids)))
         by_id = {product.id: product for product in loaded.scalars()}
 
+    # Реестр исключений (#464) читается только под строки, которые каталог не
+    # нашёл и которые не имеют собственных ошибок разбора: запись реестра —
+    # решение «строка не наша», а не способ скрыть отрицательный остаток.
+    unmatched_items = [
+        item
+        for item in rows_items
+        if (decision := decisions.get(id(item))) is not None
+        and decision.unmatched
+        and not item.errors
+    ]
+    skipped = (
+        await _load_skipped(db, unmatched_items)
+        if unmatched_items
+        else _SkippedRegistry(by_code={}, by_name={})
+    )
+
     for item in rows_items:
         decision = decisions.get(id(item))
         if decision is None:
             continue
         if decision.errors:
+            entry = skipped.match(item) if decision.unmatched and not item.errors else None
+            if entry is not None:
+                # Разобранная строка: не ошибка и не импорт. Причина остаётся в
+                # строке — в предпросмотре её видно рядом с прочерком в ошибках.
+                item.status = "skipped"
+                item.skip_reason = entry.reason
+                item.skip_reason_label = SKIP_REASON_LABELS.get(
+                    entry.reason, entry.reason
+                )
+                item.skip_note = entry.note
+                continue
             item.errors.extend(decision.errors)
             item.status = "invalid"
             continue

@@ -58,9 +58,18 @@ export type Product = {
   cross_section: string | null;
   photo_thumb: string | null;
   photo_full: string | null;
+  /**
+   * Чертёж — отдельный слот полного просмотра (#463, ADR-0078).
+   * Необязателен: пока миграция 087 не применена на стенде, ответ старой
+   * схемы не должен ломать карточку (#465).
+   */
+  drawing_full?: string | null;
+  /** `own` — чертёж снят для артикула, `alias` — взят у эквивалента. */
+  visual_origin?: "own" | "alias" | null;
   /** Версии файлов для `?v=` (#404): меняются только у изменённого фото. */
   photo_thumb_version: string | null;
   photo_full_version: string | null;
+  drawing_full_version?: string | null;
   source: string | null;
   is_catalog_item: boolean;
   is_paired_profile: boolean;
@@ -112,6 +121,8 @@ export type CreateProductInput = {
   quantity_per_hanger?: QuantityPerHangerDict | null;
   hanger_mode?: HangerMode;
   cross_section?: string | null;
+  drawing_full?: string | null;
+  visual_origin?: "own" | "alias" | null;
   source?: string | null;
   is_catalog_item?: boolean;
   third_party?: boolean;
@@ -325,11 +336,29 @@ export async function deleteProductPair(productId: number, pairId: number) {
   await apiClient.delete(`/products/${productId}/pairs/${pairId}`);
 }
 
-export async function uploadProductPhoto(productId: number, file: File, kind: "full" | "thumb" = "full") {
+export async function uploadProductPhoto(
+  productId: number,
+  file: File,
+  kind: "full" | "thumb" | "drawing" = "full",
+) {
   const formData = new FormData();
   formData.append("file", file);
   const { data } = await apiClient.post<Product>(`/products/${productId}/photo?kind=${kind}`, formData, {
     headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
+}
+
+/**
+ * Очистить один слот изображения (#465): файл удаляется из storage, поле в
+ * карточке обнуляется. Соседние слоты не меняются.
+ */
+export async function deleteProductPhoto(
+  productId: number,
+  kind: "full" | "thumb" | "drawing",
+) {
+  const { data } = await apiClient.delete<Product>(`/products/${productId}/photo`, {
+    params: { kind },
   });
   return data;
 }
