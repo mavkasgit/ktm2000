@@ -30,6 +30,8 @@ npm run bundle:update          # Осознанно поднять порог н
 npm run prove-checks           # Показать, что каждый шаг гейта умеет падать (красный ход, #357); read-only
 npm run prove-checks -- --record  # То же + обновить даты в журнале доказательств (осознанно)
 npm run verify:sync            # Сверка shared-файлов из scripts/sync-manifest.json с ../hrms (baseline + known)
+npm run docs:reviews           # HTML-обзоры каталога в data/reviews: изображения артикулов и реестр исключений ОСВ
+npm run docs:reviews:check     # Проверки обзоров: разметка ↔ карточка ↔ storage, реестр ↔ каталог (exit 1)
 ```
 
 Порты dev: Postgres `5440`, backend `8012`, frontend `5172`.
@@ -248,6 +250,7 @@ GitHub Actions — фоновый второй взгляд. Готовност�
 | [`docs/toolchain.md`](docs/toolchain.md) | Тулчейн: генерируется из `tools.json`, дрейф ловит `check:registry` |
 | [`docs/ekranchik-catalog-sync.md`](docs/ekranchik-catalog-sync.md) | Синк каталога из прода: «Экранчик» и dev-БД + storage (`npm run verify:ekranchik` / `sync:ekranchik`) |
 | [`docs/catalog/ktm-profile-register.md`](docs/catalog/ktm-profile-register.md) | **Реестр профилей**: строка на артикул, данные прод-БД, фото, связи, уверенность; `npm run docs:profiles` |
+| [`docs/catalog/prod-changes.md`](docs/catalog/prod-changes.md) | **Журнал правок прод-данных**: метка, что, почему, бэкап «до/после», откат (артефакты — `data/storage-prod/backups/changesets/`) |
 
 ## Логи контейнеров
 

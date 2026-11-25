@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-20T08:30:15+00:00",
-  "db_fingerprint": "40b1fcb7d2ae63e8",
+  "generated_at": "2026-11-25T22:52:41+00:00",
+  "db_fingerprint": "0d0d44a1d1775724",
   "review_fingerprint": "45a1bfcd976aaf46",
   "db": {
     "container": "ktm2000-postgres-prod",
@@ -981,8 +981,7 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ПТ40",
-        "ЮП-3035"
+        "ЮП-3773"
       ],
       "lengths": [
         {
@@ -1033,7 +1032,7 @@
           "default_value": 2500
         }
       ],
-      "notes": "Периметр 94,71 / ширина 39,65 по ALS1103.pdf; 98,8 — профиль ПТ40/ЮП-3035.",
+      "notes": "Форма профиля похожа на ПТ40/ЮП-3035, но профиль другой: периметр 94,71 против 98,8 мм, длина 2,5 против 2,7 м. Периметр 94,71 / ширина 39,65 по ALS1103.pdf.",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -1094,29 +1093,20 @@
         "perimeter:чертёж",
         "confidence:94",
         "status:confirmed",
-        "alias:ПТ40",
-        "alias:ЮП-3035",
+        "alias:ЮП-3773",
         "refuted"
       ],
       "relations": [
         {
           "from_sku": "ALS-1103",
           "relation": "alias_of",
-          "to_sku": "ПТ40",
+          "to_sku": "ЮП-3773",
           "status": "confirmed",
           "source": "db:aliases",
-          "note": "ALS-1103 — 94,71/39,65 по ALS1103.pdf; ПТ40 — 98,8."
-        },
-        {
-          "from_sku": "ALS-1103",
-          "relation": "alias_of",
-          "to_sku": "ЮП-3035",
-          "status": "confirmed",
-          "source": "db:aliases",
-          "note": "ALS-1103 — 94,71/39,65 по ALS1103.pdf; ЮП-3035 — 98,8."
+          "note": "DB-алиас: тот же товар под другим кодом"
         }
       ],
-      "relation_text": "alias_of→ПТ40; alias_of→ЮП-3035",
+      "relation_text": "alias_of→ЮП-3773",
       "confirmed": [
         {
           "claim": "Периметр 94.71 по чертежу",
@@ -2576,6 +2566,11 @@
       ],
       "lengths": [
         {
+          "length_mm": 2500,
+          "raw_length_mm": 2500,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -2586,6 +2581,10 @@
       "mount_width_mm": 29.3,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
+        "2500": {
+          "auto": 52,
+          "manual": null
+        },
         "2700": {
           "auto": 47,
           "manual": 47
@@ -2610,6 +2609,10 @@
         "perimeter_mm": 99.5,
         "mount_width_mm": 29.3,
         "quantity_per_hanger": {
+          "2500": {
+            "auto": 52,
+            "manual": null
+          },
           "2700": {
             "auto": 47,
             "manual": 47
@@ -3902,7 +3905,7 @@
         }
       ],
       "length_primary_mm": 2700,
-      "perimeter_mm": 75.2,
+      "perimeter_mm": 75.0,
       "mount_width_mm": 30.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
@@ -3927,7 +3930,7 @@
       "photo_thumb_sha12": "e440e617a6bf",
       "attributes_json": {
         "hanger_mode": "auto",
-        "perimeter_mm": 75.2,
+        "perimeter_mm": 75.0,
         "mount_width_mm": 30.0,
         "quantity_per_hanger": {
           "2700": {
@@ -3971,9 +3974,9 @@
       "perimeter_archive": "75",
       "perimeter_poster": "76",
       "perimeter_best": "75",
-      "perimeter_source": "БД",
+      "perimeter_source": "чертёж",
       "dimension_status": "match",
-      "dimension_note": "db 75.2 / archive 75 / poster 76",
+      "dimension_note": "db 75.0 / archive 75 / poster 76 (исправлено 26.11.2026 по чертежу)",
       "applied_decision": "",
       "archive_file": "РП/АТ-7121.pdf",
       "poster_source": "2025:1360.5,1676,1455.5,1724 dimensions/types/70-035.png",
@@ -4002,7 +4005,7 @@
         "photo:full+thumb",
         "photo-origin:own",
         "photo-verdict:needs_decision",
-        "perimeter:бд",
+        "perimeter:чертёж",
         "confidence:92",
         "status:probable",
         "alias:035",
@@ -4026,7 +4029,7 @@
           "evidence": "РП/АТ-7121.pdf"
         },
         {
-          "claim": "Периметр 75,2 в БД",
+          "claim": "Периметр 75 в БД",
           "verdict": "confirmed",
           "evidence": "совпадает с чертежом"
         }
@@ -4198,7 +4201,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "ЮП-3284"
+      ],
       "lengths": [
         {
           "length_mm": 2700,
@@ -4309,10 +4314,20 @@
         "photo-verdict:upgrade_available",
         "perimeter:чертёж",
         "confidence:96",
-        "status:confirmed"
+        "status:confirmed",
+        "alias:ЮП-3284"
       ],
-      "relations": [],
-      "relation_text": "",
+      "relations": [
+        {
+          "from_sku": "АТ-7314",
+          "relation": "alias_of",
+          "to_sku": "ЮП-3284",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        }
+      ],
+      "relation_text": "alias_of→ЮП-3284",
       "confirmed": [
         {
           "claim": "Периметр 75 по чертежу",
@@ -4635,17 +4650,17 @@
       ],
       "lengths": [
         {
-          "length_mm": 3050,
+          "length_mm": 3000,
           "raw_length_mm": 3080,
-          "is_primary": false
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 78.5,
       "mount_width_mm": 25.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": 53,
           "manual": 53
         }
@@ -4669,7 +4684,7 @@
         "perimeter_mm": 78.5,
         "mount_width_mm": 25.0,
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": 53,
             "manual": 53
           }
@@ -5147,6 +5162,11 @@
       ],
       "lengths": [
         {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3080,
           "is_primary": true
@@ -5157,6 +5177,10 @@
       "mount_width_mm": 10.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
+        "2000": {
+          "auto": 96,
+          "manual": null
+        },
         "3000": {
           "auto": 96,
           "manual": 96
@@ -5181,6 +5205,10 @@
         "perimeter_mm": 40.0,
         "mount_width_mm": 10.0,
         "quantity_per_hanger": {
+          "2000": {
+            "auto": 96,
+            "manual": null
+          },
           "3000": {
             "auto": 96,
             "manual": 96
@@ -5657,7 +5685,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "3329"
+      ],
       "lengths": [
         {
           "length_mm": 2700,
@@ -5766,10 +5796,20 @@
         "perimeter:—",
         "confidence:46",
         "status:unknown",
+        "alias:3329",
         "open"
       ],
-      "relations": [],
-      "relation_text": "",
+      "relations": [
+        {
+          "from_sku": "ЮП-1807",
+          "relation": "alias_of",
+          "to_sku": "3329",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        }
+      ],
+      "relation_text": "alias_of→3329",
       "confirmed": [],
       "refuted": [],
       "open_claims": [
@@ -5808,6 +5848,11 @@
           "length_mm": 2500,
           "raw_length_mm": 2550,
           "is_primary": true
+        },
+        {
+          "length_mm": 2700,
+          "raw_length_mm": 2750,
+          "is_primary": false
         }
       ],
       "length_primary_mm": 2500,
@@ -5818,6 +5863,10 @@
         "2500": {
           "auto": 36,
           "manual": 36
+        },
+        "2700": {
+          "auto": 33,
+          "manual": null
         }
       },
       "n_per_hanger": 36,
@@ -5842,6 +5891,10 @@
           "2500": {
             "auto": 36,
             "manual": 36
+          },
+          "2700": {
+            "auto": 33,
+            "manual": null
           }
         }
       },
@@ -5990,6 +6043,11 @@
           "length_mm": 2500,
           "raw_length_mm": 2550,
           "is_primary": true
+        },
+        {
+          "length_mm": 2700,
+          "raw_length_mm": 2750,
+          "is_primary": false
         }
       ],
       "length_primary_mm": 2500,
@@ -6000,21 +6058,25 @@
         "2500": {
           "auto": 28,
           "manual": 28
+        },
+        "2700": {
+          "auto": 26,
+          "manual": null
         }
       },
       "n_per_hanger": 28,
       "n_per_hanger_manual": 28,
       "n_per_hanger_auto": 28,
       "n_mismatch": false,
-      "photo_full": "products/ЮП-1880_full.jpg",
+      "photo_full": "",
       "photo_thumb": "products/ЮП-1880_thumb.jpg",
-      "photo_full_exists": true,
+      "photo_full_exists": false,
       "photo_thumb_exists": true,
-      "photo_full_px": "414x131",
+      "photo_full_px": "",
       "photo_thumb_px": "175x44",
-      "photo_full_bytes": 7386,
+      "photo_full_bytes": 0,
       "photo_thumb_bytes": 1855,
-      "photo_full_sha12": "9e9664591333",
+      "photo_full_sha12": "",
       "photo_thumb_sha12": "fdc75734a15c",
       "attributes_json": {
         "hanger_mode": "auto",
@@ -6024,6 +6086,10 @@
           "2500": {
             "auto": 28,
             "manual": 28
+          },
+          "2700": {
+            "auto": 26,
+            "manual": null
           }
         }
       },
@@ -6052,9 +6118,9 @@
       "audit_confidence": "high",
       "audit_note": "текущий full — заглушка «БЕЗ ФОТО»; на плакате 2025 есть карточка H80/H100",
       "audit_evidence": "candidates/ЮП-1880_full.jpg; sheets/_sheet-2.jpg",
-      "photo_status": "full+thumb",
-      "photo_label": "full+thumb",
-      "photo_origin": "own",
+      "photo_status": "нет",
+      "photo_label": "нет",
+      "photo_origin": "none",
       "photo_from": "",
       "photo_origin_scope": "",
       "photo_origin_note": "",
@@ -6079,23 +6145,24 @@
       "material": "—",
       "identity_confidence": 100,
       "dimension_confidence": 75,
-      "photo_confidence": 90,
+      "photo_confidence": 0,
       "classification_confidence": 85,
-      "overall_confidence": 88,
-      "overall_status": "probable",
+      "overall_confidence": 66,
+      "overall_status": "unknown",
       "tags": [
         "group:04-plinths",
         "profile:plinth",
         "shape:complex",
         "series:ЮП",
         "size:80",
-        "photo:full+thumb",
-        "photo-origin:own",
+        "photo:нет",
+        "photo-origin:none",
         "photo-verdict:upgrade_available",
         "perimeter:бд",
-        "confidence:88",
-        "status:probable",
-        "alias:ПТ80"
+        "confidence:66",
+        "status:unknown",
+        "alias:ПТ80",
+        "open"
       ],
       "relations": [
         {
@@ -6110,7 +6177,13 @@
       "relation_text": "alias_of→ПТ80",
       "confirmed": [],
       "refuted": [],
-      "open_claims": []
+      "open_claims": [
+        {
+          "claim": "Есть фото товара",
+          "verdict": "open",
+          "evidence": "файл отсутствует"
+        }
+      ]
     },
     {
       "id": 35,
@@ -6601,9 +6674,14 @@
       ],
       "lengths": [
         {
-          "length_mm": 2550,
+          "length_mm": 2500,
           "raw_length_mm": null,
           "is_primary": false
+        },
+        {
+          "length_mm": 2550,
+          "raw_length_mm": null,
+          "is_primary": true
         }
       ],
       "length_primary_mm": 2550,
@@ -6611,6 +6689,10 @@
       "mount_width_mm": 95.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
+        "2500": {
+          "auto": 23,
+          "manual": null
+        },
         "2550": {
           "auto": 22,
           "manual": 22
@@ -6635,6 +6717,10 @@
         "perimeter_mm": 225.6,
         "mount_width_mm": 95.0,
         "quantity_per_hanger": {
+          "2500": {
+            "auto": 23,
+            "manual": null
+          },
           "2550": {
             "auto": 22,
             "manual": 22
@@ -7722,16 +7808,16 @@
       "n_per_hanger_manual": 29,
       "n_per_hanger_auto": 29,
       "n_mismatch": false,
-      "photo_full": "",
-      "photo_thumb": "",
-      "photo_full_exists": false,
-      "photo_thumb_exists": false,
-      "photo_full_px": "",
-      "photo_thumb_px": "",
-      "photo_full_bytes": 0,
-      "photo_thumb_bytes": 0,
-      "photo_full_sha12": "",
-      "photo_thumb_sha12": "",
+      "photo_full": "products/ЮП-2384_45_full.png",
+      "photo_thumb": "products/ЮП-2384_45_thumb.jpg",
+      "photo_full_exists": true,
+      "photo_thumb_exists": true,
+      "photo_full_px": "1220x1702",
+      "photo_thumb_px": "1250x1241",
+      "photo_full_bytes": 1302022,
+      "photo_thumb_bytes": 58422,
+      "photo_full_sha12": "be98bd62a51f",
+      "photo_thumb_sha12": "70e51d3af145",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 162.1,
@@ -7768,9 +7854,9 @@
       "audit_confidence": "high",
       "audit_note": "full — фото 4040 (2025), thumb — сечение архивного 4040 (ЮП-2384); периметр 162,1",
       "audit_evidence": "archive:КТМ/4040 (ЮП-2384).jpg; candidates/ЮП-2384_full.jpg; candidates/ЮП-2384_thumb.jpg; sheets/_sheet-2.jpg",
-      "photo_status": "нет",
-      "photo_label": "нет",
-      "photo_origin": "none",
+      "photo_status": "full+thumb",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
       "photo_from": "",
       "photo_origin_scope": "",
       "photo_origin_note": "",
@@ -7795,24 +7881,24 @@
       "material": "—",
       "identity_confidence": 100,
       "dimension_confidence": 100,
-      "photo_confidence": 0,
+      "photo_confidence": 90,
       "classification_confidence": 85,
-      "overall_confidence": 74,
-      "overall_status": "needs_review",
+      "overall_confidence": 96,
+      "overall_status": "confirmed",
       "tags": [
         "group:02-corners",
         "profile:corner",
         "shape:L",
         "series:ЮП",
         "size:40×40",
-        "photo:нет",
-        "photo-origin:none",
+        "photo:full+thumb",
+        "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:чертёж",
-        "confidence:74",
-        "status:needs_review",
+        "confidence:96",
+        "status:confirmed",
         "alias:4040",
-        "open"
+        "shared_photo_thumb:4040"
       ],
       "relations": [
         {
@@ -7822,6 +7908,14 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
+        },
+        {
+          "from_sku": "ЮП-2384",
+          "relation": "shared_photo_thumb",
+          "to_sku": "4040",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "70e51d3af145"
         }
       ],
       "relation_text": "alias_of→4040",
@@ -7838,13 +7932,7 @@
         }
       ],
       "refuted": [],
-      "open_claims": [
-        {
-          "claim": "Есть фото товара",
-          "verdict": "open",
-          "evidence": "файл отсутствует"
-        }
-      ]
+      "open_claims": []
     },
     {
       "id": 46,
@@ -8024,7 +8112,8 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "П101010"
+        "П101010",
+        "389"
       ],
       "lengths": [
         {
@@ -8151,9 +8240,18 @@
         "status:confirmed",
         "review:open",
         "review-drawing:есть",
-        "alias:П101010"
+        "alias:П101010",
+        "alias:389"
       ],
       "relations": [
+        {
+          "from_sku": "ЮП-2397",
+          "relation": "alias_of",
+          "to_sku": "389",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        },
         {
           "from_sku": "ЮП-2397",
           "relation": "alias_of",
@@ -8163,7 +8261,7 @@
           "note": "DB-алиас: тот же товар под другим кодом"
         }
       ],
-      "relation_text": "alias_of→П101010",
+      "relation_text": "alias_of→389; alias_of→П101010",
       "confirmed": [
         {
           "claim": "Периметр 57.6 по чертежу",
@@ -8194,29 +8292,28 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ПП37",
-        "ПП47"
+        "ПП37"
       ],
       "lengths": [
         {
-          "length_mm": 2550,
-          "raw_length_mm": 2580,
-          "is_primary": false
+          "length_mm": 2500,
+          "raw_length_mm": 2540,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 2550,
+      "length_primary_mm": 2500,
       "perimeter_mm": 126.9,
       "mount_width_mm": 36.7,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
-        "2550": {
-          "auto": 39,
+        "2500": {
+          "auto": 40,
           "manual": 39
         }
       },
-      "n_per_hanger": 39,
+      "n_per_hanger": 40,
       "n_per_hanger_manual": 39,
-      "n_per_hanger_auto": 39,
+      "n_per_hanger_auto": 40,
       "n_mismatch": false,
       "photo_full": "products/ЮП-2413_full.jpg",
       "photo_thumb": "products/ЮП-2413_thumb.jpg",
@@ -8233,8 +8330,8 @@
         "perimeter_mm": 126.9,
         "mount_width_mm": 36.7,
         "quantity_per_hanger": {
-          "2550": {
-            "auto": 39,
+          "2500": {
+            "auto": 40,
             "manual": 39
           }
         }
@@ -8308,7 +8405,6 @@
         "confidence:96",
         "status:confirmed",
         "alias:ПП37",
-        "alias:ПП47",
         "shared_photo_full:ПП37",
         "shared_photo_thumb:ПП37"
       ],
@@ -8317,14 +8413,6 @@
           "from_sku": "ЮП-2413",
           "relation": "alias_of",
           "to_sku": "ПП37",
-          "status": "confirmed",
-          "source": "db:aliases",
-          "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "ЮП-2413",
-          "relation": "alias_of",
-          "to_sku": "ПП47",
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
@@ -8346,7 +8434,7 @@
           "note": "86eb2d24d8cd"
         }
       ],
-      "relation_text": "alias_of→ПП37; alias_of→ПП47",
+      "relation_text": "alias_of→ПП37",
       "confirmed": [
         {
           "claim": "Периметр 126.9 по чертежу",
@@ -8398,16 +8486,16 @@
       "n_per_hanger_manual": 30,
       "n_per_hanger_auto": 30,
       "n_mismatch": false,
-      "photo_full": "",
-      "photo_thumb": "",
-      "photo_full_exists": false,
-      "photo_thumb_exists": false,
-      "photo_full_px": "",
-      "photo_thumb_px": "",
-      "photo_full_bytes": 0,
-      "photo_thumb_bytes": 0,
-      "photo_full_sha12": "",
-      "photo_thumb_sha12": "",
+      "photo_full": "products/ЮП-2414_49_full.png",
+      "photo_thumb": "products/ЮП-2414_49_thumb.png",
+      "photo_full_exists": true,
+      "photo_thumb_exists": true,
+      "photo_full_px": "1050x1480",
+      "photo_thumb_px": "1368x432",
+      "photo_full_bytes": 769533,
+      "photo_thumb_bytes": 170223,
+      "photo_full_sha12": "a193fbe668a2",
+      "photo_thumb_sha12": "3197fdd1851c",
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 167.5,
@@ -8444,9 +8532,9 @@
       "audit_confidence": "high",
       "audit_note": "фото не было вообще; из архива — лист чертежа и чистое сечение 50×15",
       "audit_evidence": "candidates/ЮП-2414_full.jpg; candidates/ЮП-2414_thumb.jpg; sheets/_sheet-3.jpg",
-      "photo_status": "нет",
-      "photo_label": "нет",
-      "photo_origin": "none",
+      "photo_status": "full+thumb",
+      "photo_label": "full+thumb",
+      "photo_origin": "own",
       "photo_from": "",
       "photo_origin_scope": "",
       "photo_origin_note": "",
@@ -8471,23 +8559,22 @@
       "material": "—",
       "identity_confidence": 100,
       "dimension_confidence": 100,
-      "photo_confidence": 0,
+      "photo_confidence": 90,
       "classification_confidence": 85,
-      "overall_confidence": 74,
-      "overall_status": "needs_review",
+      "overall_confidence": 96,
+      "overall_status": "confirmed",
       "tags": [
         "group:04-plinths",
         "profile:plinth_hidden",
         "shape:complex",
         "series:ЮП",
         "size:50×15(13.8)",
-        "photo:нет",
-        "photo-origin:none",
+        "photo:full+thumb",
+        "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:чертёж",
-        "confidence:74",
-        "status:needs_review",
-        "open"
+        "confidence:96",
+        "status:confirmed"
       ],
       "relations": [],
       "relation_text": "",
@@ -8504,13 +8591,7 @@
         }
       ],
       "refuted": [],
-      "open_claims": [
-        {
-          "claim": "Есть фото товара",
-          "verdict": "open",
-          "evidence": "файл отсутствует"
-        }
-      ]
+      "open_claims": []
     },
     {
       "id": 50,
@@ -9580,6 +9661,11 @@
       ],
       "lengths": [
         {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -9590,6 +9676,10 @@
       "mount_width_mm": 40.6,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
+        "1800": {
+          "auto": 46,
+          "manual": null
+        },
         "2700": {
           "auto": 46,
           "manual": 46
@@ -9614,6 +9704,10 @@
         "perimeter_mm": 97.6,
         "mount_width_mm": 40.6,
         "quantity_per_hanger": {
+          "1800": {
+            "auto": 46,
+            "manual": null
+          },
           "2700": {
             "auto": 46,
             "manual": 46
@@ -11523,7 +11617,7 @@
       "id": 70,
       "sku": "ЮП-2910",
       "code": "",
-      "name": "Стык Т-образный 23мм",
+      "name": "Стык Т-образный 26 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -11535,7 +11629,8 @@
       "dimension_state": "length",
       "aliases": [
         "325",
-        "ЮП-3473"
+        "ЮП-3473",
+        "Стык Т-образный 23мм"
       ],
       "lengths": [
         {
@@ -11653,6 +11748,7 @@
         "review-drawing:есть",
         "alias:325",
         "alias:ЮП-3473",
+        "alias:Стык Т-образный 23мм",
         "shared_photo_full:ЮП-3473",
         "shared_photo_thumb:ЮП-3473",
         "refuted"
@@ -11727,17 +11823,17 @@
       ],
       "lengths": [
         {
-          "length_mm": 3050,
+          "length_mm": 3000,
           "raw_length_mm": 3080,
-          "is_primary": false
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 50.3,
       "mount_width_mm": 16.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": 80,
           "manual": 80
         }
@@ -11761,7 +11857,7 @@
         "perimeter_mm": 50.3,
         "mount_width_mm": 16.0,
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": 80,
             "manual": 80
           }
@@ -11888,7 +11984,7 @@
           "is_primary": true
         },
         {
-          "length_mm": 3050,
+          "length_mm": 3000,
           "raw_length_mm": 3080,
           "is_primary": false
         }
@@ -11902,7 +11998,7 @@
           "auto": 45,
           "manual": 45
         },
-        "3050": {
+        "3000": {
           "auto": 40,
           "manual": 40
         }
@@ -11930,7 +12026,7 @@
             "auto": 45,
             "manual": 45
           },
-          "3050": {
+          "3000": {
             "auto": 40,
             "manual": 40
           }
@@ -12393,6 +12489,11 @@
           "length_mm": 2700,
           "raw_length_mm": 2780,
           "is_primary": true
+        },
+        {
+          "length_mm": 3000,
+          "raw_length_mm": null,
+          "is_primary": false
         }
       ],
       "length_primary_mm": 2700,
@@ -12403,6 +12504,10 @@
         "2700": {
           "auto": 72,
           "manual": 72
+        },
+        "3000": {
+          "auto": 72,
+          "manual": null
         }
       },
       "n_per_hanger": 72,
@@ -12427,6 +12532,10 @@
           "2700": {
             "auto": 72,
             "manual": 72
+          },
+          "3000": {
+            "auto": 72,
+            "manual": null
           }
         }
       },
@@ -13295,6 +13404,11 @@
       ],
       "lengths": [
         {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2780,
           "is_primary": true
@@ -13305,6 +13419,10 @@
       "mount_width_mm": 33.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
+        "1800": {
+          "auto": 54,
+          "manual": null
+        },
         "2700": {
           "auto": 54,
           "manual": 54
@@ -13329,6 +13447,10 @@
         "perimeter_mm": 67.4,
         "mount_width_mm": 33.0,
         "quantity_per_hanger": {
+          "1800": {
+            "auto": 54,
+            "manual": null
+          },
           "2700": {
             "auto": 54,
             "manual": 54
@@ -14357,7 +14479,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "АТ-7314"
+      ],
       "lengths": [],
       "length_primary_mm": null,
       "perimeter_mm": null,
@@ -14443,10 +14567,20 @@
         "perimeter:—",
         "confidence:55",
         "status:unknown",
+        "alias:АТ-7314",
         "open"
       ],
-      "relations": [],
-      "relation_text": "",
+      "relations": [
+        {
+          "from_sku": "ЮП-3284",
+          "relation": "alias_of",
+          "to_sku": "АТ-7314",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        }
+      ],
+      "relation_text": "alias_of→АТ-7314",
       "confirmed": [],
       "refuted": [],
       "open_claims": [
@@ -15940,7 +16074,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "324"
+      ],
       "lengths": [
         {
           "length_mm": 2700,
@@ -16049,10 +16185,28 @@
         "perimeter:—",
         "confidence:64",
         "status:unknown",
+        "alias:324",
         "open"
       ],
-      "relations": [],
-      "relation_text": "",
+      "relations": [
+        {
+          "from_sku": "ЮП-3755",
+          "relation": "alias_of",
+          "to_sku": "324",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        },
+        {
+          "from_sku": "ЮП-3755",
+          "relation": "alias_of",
+          "to_sku": "ЮП-081",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        }
+      ],
+      "relation_text": "alias_of→324; alias_of→ЮП-081",
       "confirmed": [],
       "refuted": [],
       "open_claims": [
@@ -16219,7 +16373,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "ALS-1103"
+      ],
       "lengths": [
         {
           "length_mm": 2500,
@@ -16328,10 +16484,20 @@
         "perimeter:—",
         "confidence:46",
         "status:unknown",
+        "alias:ALS-1103",
         "open"
       ],
-      "relations": [],
-      "relation_text": "",
+      "relations": [
+        {
+          "from_sku": "ЮП-3773",
+          "relation": "alias_of",
+          "to_sku": "ALS-1103",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        }
+      ],
+      "relation_text": "alias_of→ALS-1103",
       "confirmed": [],
       "refuted": [],
       "open_claims": [
@@ -16351,7 +16517,7 @@
       "id": 102,
       "sku": "ЮП-004",
       "code": "",
-      "name": "ЮП-004",
+      "name": "Полоса 25 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -16364,9 +16530,14 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2780,
-          "is_primary": false
+          "is_primary": true
         }
       ],
       "length_primary_mm": 2700,
@@ -16374,6 +16545,10 @@
       "mount_width_mm": 25.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
+        "2000": {
+          "auto": 64,
+          "manual": null
+        },
         "2700": {
           "auto": 64,
           "manual": 64
@@ -16398,6 +16573,10 @@
         "perimeter_mm": 54.0,
         "mount_width_mm": 25.0,
         "quantity_per_hanger": {
+          "2000": {
+            "auto": 64,
+            "manual": null
+          },
           "2700": {
             "auto": 64,
             "manual": 64
@@ -16445,11 +16624,11 @@
       "applied_decision": "",
       "archive_file": "",
       "poster_source": "",
-      "linear_best": "",
+      "linear_best": "25",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "strip",
+      "classification_profile_label": "полоса",
+      "classification_shape": "flat",
       "classification_series": "ЮП",
       "classification_family": "",
       "classification_family_name": "",
@@ -16457,19 +16636,20 @@
       "identity_confidence": 80,
       "dimension_confidence": 75,
       "photo_confidence": 100,
-      "classification_confidence": 55,
-      "overall_confidence": 81,
+      "classification_confidence": 60,
+      "overall_confidence": 82,
       "overall_status": "needs_review",
       "tags": [
         "group:08-unknown-missing",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:strip",
+        "shape:flat",
         "series:ЮП",
+        "size:25",
         "photo:full+thumb",
         "photo-origin:own",
         "photo-verdict:verified_best",
         "perimeter:бд",
-        "confidence:81",
+        "confidence:82",
         "status:needs_review",
         "shared_photo_full:ЮП-005"
       ],
@@ -16965,7 +17145,7 @@
       "id": 106,
       "sku": "ЮП-005",
       "code": "",
-      "name": "ЮП-005",
+      "name": "Полоса 40 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -16978,17 +17158,17 @@
       "aliases": [],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 84.0,
       "mount_width_mm": 40.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": 48,
           "manual": 48
         }
@@ -17012,7 +17192,7 @@
         "perimeter_mm": 84.0,
         "mount_width_mm": 40.0,
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": 48,
             "manual": 48
           }
@@ -17059,11 +17239,11 @@
       "applied_decision": "",
       "archive_file": "",
       "poster_source": "",
-      "linear_best": "",
+      "linear_best": "40",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "strip",
+      "classification_profile_label": "полоса",
+      "classification_shape": "flat",
       "classification_series": "ЮП",
       "classification_family": "",
       "classification_family_name": "",
@@ -17071,19 +17251,20 @@
       "identity_confidence": 80,
       "dimension_confidence": 75,
       "photo_confidence": 100,
-      "classification_confidence": 55,
-      "overall_confidence": 81,
+      "classification_confidence": 60,
+      "overall_confidence": 82,
       "overall_status": "needs_review",
       "tags": [
         "group:08-unknown-missing",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:strip",
+        "shape:flat",
         "series:ЮП",
+        "size:40",
         "photo:full+thumb",
         "photo-origin:own",
         "photo-verdict:verified_best",
         "perimeter:бд",
-        "confidence:81",
+        "confidence:82",
         "status:needs_review",
         "shared_photo_full:ЮП-004"
       ],
@@ -17263,7 +17444,7 @@
         }
       ],
       "length_primary_mm": 2700,
-      "perimeter_mm": 43.8,
+      "perimeter_mm": 44.8,
       "mount_width_mm": 13.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
@@ -17288,7 +17469,7 @@
       "photo_thumb_sha12": "282dc535c4cd",
       "attributes_json": {
         "hanger_mode": "auto",
-        "perimeter_mm": 43.8,
+        "perimeter_mm": 44.8,
         "mount_width_mm": 13.0,
         "quantity_per_hanger": {
           "2700": {
@@ -17332,9 +17513,9 @@
       "perimeter_archive": "44.8",
       "perimeter_poster": "—",
       "perimeter_best": "44.8",
-      "perimeter_source": "БД",
+      "perimeter_source": "чертёж",
       "dimension_status": "match",
-      "dimension_note": "db 43.8 / archive 44.8",
+      "dimension_note": "db 44.8 / archive 44.8 (исправлено 26.11.2026 по чертежу)",
       "applied_decision": "",
       "archive_file": "РП/ЮП-081.jpg",
       "poster_source": "2025:1665.5,1676,1790,1724 dimensions/types/324-325.png",
@@ -17363,7 +17544,7 @@
         "photo:full+thumb",
         "photo-origin:own",
         "photo-verdict:needs_decision",
-        "perimeter:бд",
+        "perimeter:чертёж",
         "confidence:92",
         "status:probable",
         "alias:324",
@@ -17377,9 +17558,17 @@
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
+        },
+        {
+          "from_sku": "ЮП-081",
+          "relation": "alias_of",
+          "to_sku": "ЮП-3755",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
         }
       ],
-      "relation_text": "alias_of→324",
+      "relation_text": "alias_of→324; alias_of→ЮП-3755",
       "confirmed": [
         {
           "claim": "Периметр 44.8 по чертежу",
@@ -17387,7 +17576,7 @@
           "evidence": "РП/ЮП-081.jpg"
         },
         {
-          "claim": "Периметр 43,8 в БД",
+          "claim": "Периметр 44,8 в БД",
           "verdict": "confirmed",
           "evidence": "совпадает с чертежом"
         }
@@ -19797,17 +19986,17 @@
       "aliases": [],
       "lengths": [
         {
-          "length_mm": 2750,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 2700,
+          "raw_length_mm": 2750,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 2750,
+      "length_primary_mm": 2700,
       "perimeter_mm": 101.6,
       "mount_width_mm": 26.3,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
-        "2750": {
+        "2700": {
           "auto": 46,
           "manual": 46
         }
@@ -19831,7 +20020,7 @@
         "perimeter_mm": 101.6,
         "mount_width_mm": 26.3,
         "quantity_per_hanger": {
-          "2750": {
+          "2700": {
             "auto": 46,
             "manual": 46
           }
@@ -20098,17 +20287,17 @@
       "aliases": [],
       "lengths": [
         {
-          "length_mm": 2750,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 2700,
+          "raw_length_mm": 2750,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 2750,
+      "length_primary_mm": 2700,
       "perimeter_mm": 88.6,
       "mount_width_mm": 39.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
-        "2750": {
+        "2700": {
           "auto": 48,
           "manual": 48
         }
@@ -20132,7 +20321,7 @@
         "perimeter_mm": 88.6,
         "mount_width_mm": 39.0,
         "quantity_per_hanger": {
-          "2750": {
+          "2700": {
             "auto": 48,
             "manual": 48
           }
@@ -20227,20 +20416,22 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "ЮП-1807"
+      ],
       "lengths": [
         {
-          "length_mm": 2750,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 2700,
+          "raw_length_mm": 2750,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 2750,
+      "length_primary_mm": 2700,
       "perimeter_mm": 52.3,
       "mount_width_mm": 25.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
-        "2750": {
+        "2700": {
           "auto": 64,
           "manual": 64
         }
@@ -20264,7 +20455,7 @@
         "perimeter_mm": 52.3,
         "mount_width_mm": 25.0,
         "quantity_per_hanger": {
-          "2750": {
+          "2700": {
             "auto": 64,
             "manual": 64
           }
@@ -20338,10 +20529,20 @@
         "perimeter:плакат",
         "confidence:93",
         "status:confirmed",
+        "alias:ЮП-1807",
         "refuted"
       ],
-      "relations": [],
-      "relation_text": "",
+      "relations": [
+        {
+          "from_sku": "3329",
+          "relation": "alias_of",
+          "to_sku": "ЮП-1807",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        }
+      ],
+      "relation_text": "alias_of→ЮП-1807",
       "confirmed": [],
       "refuted": [
         {
@@ -20369,17 +20570,17 @@
       "aliases": [],
       "lengths": [
         {
-          "length_mm": 2750,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 2700,
+          "raw_length_mm": 2750,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 2750,
+      "length_primary_mm": 2700,
       "perimeter_mm": 82.6,
       "mount_width_mm": 35.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
-        "2750": {
+        "2700": {
           "auto": 52,
           "manual": 52
         }
@@ -20403,7 +20604,7 @@
         "perimeter_mm": 82.6,
         "mount_width_mm": 35.0,
         "quantity_per_hanger": {
-          "2750": {
+          "2700": {
             "auto": 52,
             "manual": 52
           }
@@ -22933,7 +23134,7 @@
       "id": 147,
       "sku": "Кр.труба 10мм",
       "code": "",
-      "name": "Кр.труба 10мм",
+      "name": "Круглая труба 10 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -22943,7 +23144,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "Кр.труба 10мм"
+      ],
       "lengths": [
         {
           "length_mm": 2700,
@@ -23052,7 +23255,8 @@
         "photo-verdict:wrong",
         "perimeter:—",
         "confidence:71",
-        "status:needs_review"
+        "status:needs_review",
+        "alias:Кр.труба 10мм"
       ],
       "relations": [],
       "relation_text": "",
@@ -23064,7 +23268,7 @@
       "id": 148,
       "sku": "Кр.труба 12мм",
       "code": "",
-      "name": "Кр.труба 12мм",
+      "name": "Круглая труба 12 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -23074,7 +23278,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "Кр.труба 12мм"
+      ],
       "lengths": [
         {
           "length_mm": 2700,
@@ -23183,7 +23389,8 @@
         "photo-verdict:upgrade_available",
         "perimeter:—",
         "confidence:82",
-        "status:needs_review"
+        "status:needs_review",
+        "alias:Кр.труба 12мм"
       ],
       "relations": [],
       "relation_text": "",
@@ -23195,7 +23402,7 @@
       "id": 149,
       "sku": "Кр.труба 20мм",
       "code": "",
-      "name": "Кр.труба 20мм",
+      "name": "Круглая труба 20 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -23205,7 +23412,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "Кр.труба 20мм"
+      ],
       "lengths": [
         {
           "length_mm": 2700,
@@ -23314,7 +23523,8 @@
         "photo-verdict:wrong",
         "perimeter:—",
         "confidence:71",
-        "status:needs_review"
+        "status:needs_review",
+        "alias:Кр.труба 20мм"
       ],
       "relations": [],
       "relation_text": "",
@@ -23326,7 +23536,7 @@
       "id": 150,
       "sku": "Кр.труба 28мм",
       "code": "",
-      "name": "Кр.труба 28мм",
+      "name": "Круглая труба 28 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -23336,7 +23546,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "Кр.труба 28мм"
+      ],
       "lengths": [
         {
           "length_mm": 2500,
@@ -23446,6 +23658,7 @@
         "perimeter:—",
         "confidence:82",
         "status:needs_review",
+        "alias:Кр.труба 28мм",
         "shared_photo_full:Кр.труба 16мм",
         "shared_photo_full:Кр.труба 25мм",
         "shared_photo_full:ПС20"
@@ -23485,7 +23698,7 @@
       "id": 151,
       "sku": "Кр.труба 8мм",
       "code": "",
-      "name": "Кр.труба 8мм",
+      "name": "Круглая труба 8 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -23495,7 +23708,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "Кр.труба 8мм"
+      ],
       "lengths": [
         {
           "length_mm": 2700,
@@ -23604,7 +23819,8 @@
         "photo-verdict:upgrade_available",
         "perimeter:—",
         "confidence:82",
-        "status:needs_review"
+        "status:needs_review",
+        "alias:Кр.труба 8мм"
       ],
       "relations": [],
       "relation_text": "",
@@ -24185,7 +24401,7 @@
       "id": 156,
       "sku": "У1212",
       "code": "",
-      "name": "У1212",
+      "name": "Уголок 12*12",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -24195,20 +24411,22 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "У1212"
+      ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": null,
           "manual": 88
         }
@@ -24230,7 +24448,7 @@
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": null,
             "manual": 88
           }
@@ -24279,9 +24497,9 @@
       "poster_source": "—",
       "linear_best": "12×12",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "corner",
+      "classification_profile_label": "угол / уголок",
+      "classification_shape": "L",
       "classification_series": "У",
       "classification_family": "series_У",
       "classification_family_name": "Серия У [series_У]",
@@ -24289,13 +24507,13 @@
       "identity_confidence": 100,
       "dimension_confidence": 55,
       "photo_confidence": 90,
-      "classification_confidence": 55,
-      "overall_confidence": 80,
+      "classification_confidence": 80,
+      "overall_confidence": 82,
       "overall_status": "needs_review",
       "tags": [
         "group:09-discrepancies",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:corner",
+        "shape:L",
         "series:У",
         "family:series_У",
         "size:12×12",
@@ -24303,10 +24521,11 @@
         "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:—",
-        "confidence:80",
+        "confidence:82",
         "status:needs_review",
         "review:open",
         "review-drawing:нет",
+        "alias:У1212",
         "shared_photo_full:У1010",
         "shared_photo_full:У1515",
         "shared_photo_full:У2020",
@@ -24400,7 +24619,7 @@
       "id": 157,
       "sku": "У4020",
       "code": "",
-      "name": "У4020",
+      "name": "Уголок 40*20",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -24410,20 +24629,22 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "У4020"
+      ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": null,
           "manual": 35
         }
@@ -24445,7 +24666,7 @@
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": null,
             "manual": 35
           }
@@ -24494,9 +24715,9 @@
       "poster_source": "—",
       "linear_best": "40×20",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "corner",
+      "classification_profile_label": "угол / уголок",
+      "classification_shape": "L",
       "classification_series": "У",
       "classification_family": "series_У",
       "classification_family_name": "Серия У [series_У]",
@@ -24504,13 +24725,13 @@
       "identity_confidence": 100,
       "dimension_confidence": 55,
       "photo_confidence": 90,
-      "classification_confidence": 55,
-      "overall_confidence": 80,
+      "classification_confidence": 80,
+      "overall_confidence": 82,
       "overall_status": "needs_review",
       "tags": [
         "group:07-tubes-variants",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:corner",
+        "shape:L",
         "series:У",
         "family:series_У",
         "size:40×20",
@@ -24518,8 +24739,9 @@
         "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:—",
-        "confidence:80",
+        "confidence:82",
         "status:needs_review",
+        "alias:У4020",
         "shared_photo_full:У1010",
         "shared_photo_full:У1212",
         "shared_photo_full:У1515",
@@ -24613,7 +24835,7 @@
       "id": 158,
       "sku": "У4040",
       "code": "",
-      "name": "У4040",
+      "name": "Уголок 40*40",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -24623,20 +24845,22 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "У4040"
+      ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": null,
           "manual": 26
         }
@@ -24658,7 +24882,7 @@
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": null,
             "manual": 26
           }
@@ -24707,9 +24931,9 @@
       "poster_source": "—",
       "linear_best": "40×40",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "corner",
+      "classification_profile_label": "угол / уголок",
+      "classification_shape": "L",
       "classification_series": "У",
       "classification_family": "series_У",
       "classification_family_name": "Серия У [series_У]",
@@ -24717,13 +24941,13 @@
       "identity_confidence": 100,
       "dimension_confidence": 55,
       "photo_confidence": 90,
-      "classification_confidence": 55,
-      "overall_confidence": 80,
+      "classification_confidence": 80,
+      "overall_confidence": 82,
       "overall_status": "needs_review",
       "tags": [
         "group:07-tubes-variants",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:corner",
+        "shape:L",
         "series:У",
         "family:series_У",
         "size:40×40",
@@ -24731,8 +24955,9 @@
         "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:—",
-        "confidence:80",
+        "confidence:82",
         "status:needs_review",
+        "alias:У4040",
         "shared_photo_full:У1010",
         "shared_photo_full:У1212",
         "shared_photo_full:У1515",
@@ -24826,7 +25051,7 @@
       "id": 159,
       "sku": "У5030",
       "code": "",
-      "name": "У5030",
+      "name": "Уголок 50*30",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -24836,20 +25061,22 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "У5030"
+      ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": null,
           "manual": 26
         }
@@ -24871,7 +25098,7 @@
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": null,
             "manual": 26
           }
@@ -24920,9 +25147,9 @@
       "poster_source": "—",
       "linear_best": "50×30",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "corner",
+      "classification_profile_label": "угол / уголок",
+      "classification_shape": "L",
       "classification_series": "У",
       "classification_family": "series_У",
       "classification_family_name": "Серия У [series_У]",
@@ -24930,13 +25157,13 @@
       "identity_confidence": 100,
       "dimension_confidence": 55,
       "photo_confidence": 90,
-      "classification_confidence": 55,
-      "overall_confidence": 80,
+      "classification_confidence": 80,
+      "overall_confidence": 82,
       "overall_status": "needs_review",
       "tags": [
         "group:07-tubes-variants",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:corner",
+        "shape:L",
         "series:У",
         "family:series_У",
         "size:50×30",
@@ -24944,8 +25171,9 @@
         "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:—",
-        "confidence:80",
+        "confidence:82",
         "status:needs_review",
+        "alias:У5030",
         "shared_photo_full:У1010",
         "shared_photo_full:У1212",
         "shared_photo_full:У1515",
@@ -25039,7 +25267,7 @@
       "id": 160,
       "sku": "У5050",
       "code": "",
-      "name": "У5050",
+      "name": "Уголок 50*50",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -25049,20 +25277,22 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "У5050"
+      ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": null,
           "manual": 21
         }
@@ -25084,7 +25314,7 @@
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": null,
             "manual": 21
           }
@@ -25133,9 +25363,9 @@
       "poster_source": "—",
       "linear_best": "50×50",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "corner",
+      "classification_profile_label": "угол / уголок",
+      "classification_shape": "L",
       "classification_series": "У",
       "classification_family": "series_У",
       "classification_family_name": "Серия У [series_У]",
@@ -25143,13 +25373,13 @@
       "identity_confidence": 100,
       "dimension_confidence": 55,
       "photo_confidence": 90,
-      "classification_confidence": 55,
-      "overall_confidence": 80,
+      "classification_confidence": 80,
+      "overall_confidence": 82,
       "overall_status": "needs_review",
       "tags": [
         "group:07-tubes-variants",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:corner",
+        "shape:L",
         "series:У",
         "family:series_У",
         "size:50×50",
@@ -25157,8 +25387,9 @@
         "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:—",
-        "confidence:80",
+        "confidence:82",
         "status:needs_review",
+        "alias:У5050",
         "shared_photo_full:У1010",
         "shared_photo_full:У1212",
         "shared_photo_full:У1515",
@@ -26041,7 +26272,7 @@
       "id": 167,
       "sku": "Кр.труба 16мм",
       "code": "",
-      "name": "Кр.труба 16мм",
+      "name": "Круглая труба 16 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -26052,21 +26283,22 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ЮП-2972"
+        "ЮП-2972",
+        "Кр.труба 16мм"
       ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 50.3,
       "mount_width_mm": 16.0,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": 80,
           "manual": 80
         }
@@ -26090,7 +26322,7 @@
         "perimeter_mm": 50.3,
         "mount_width_mm": 16.0,
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": 80,
             "manual": 80
           }
@@ -26166,6 +26398,7 @@
         "confidence:96",
         "status:confirmed",
         "alias:ЮП-2972",
+        "alias:Кр.труба 16мм",
         "shared_photo_full:Кр.труба 25мм",
         "shared_photo_full:Кр.труба 28мм",
         "shared_photo_full:ПС20"
@@ -26224,7 +26457,7 @@
       "id": 168,
       "sku": "Кр.труба 25мм",
       "code": "",
-      "name": "Кр.труба 25мм",
+      "name": "Круглая труба 25 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -26235,21 +26468,22 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ЮП-1053"
+        "ЮП-1053",
+        "Кр.труба 25мм"
       ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 78.5,
       "mount_width_mm": 25.0,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": 54,
           "manual": 54
         }
@@ -26273,7 +26507,7 @@
         "perimeter_mm": 78.5,
         "mount_width_mm": 25.0,
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": 54,
             "manual": 54
           }
@@ -26349,6 +26583,7 @@
         "confidence:96",
         "status:confirmed",
         "alias:ЮП-1053",
+        "alias:Кр.труба 25мм",
         "shared_photo_full:Кр.труба 16мм",
         "shared_photo_full:Кр.труба 28мм",
         "shared_photo_full:ПС20"
@@ -26890,18 +27125,18 @@
       ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 57.6,
       "mount_width_mm": 10.0,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
-          "auto": null,
+        "3000": {
+          "auto": 73,
           "manual": 73
         }
       },
@@ -26924,8 +27159,8 @@
         "perimeter_mm": 57.6,
         "mount_width_mm": 10.0,
         "quantity_per_hanger": {
-          "3050": {
-            "auto": null,
+          "3000": {
+            "auto": 73,
             "manual": 73
           }
         }
@@ -27007,6 +27242,14 @@
         {
           "from_sku": "П101010",
           "relation": "alias_of",
+          "to_sku": "389",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        },
+        {
+          "from_sku": "П101010",
+          "relation": "alias_of",
           "to_sku": "ЮП-2397",
           "status": "confirmed",
           "source": "db:aliases",
@@ -27029,7 +27272,7 @@
           "note": "c968cead27a3"
         }
       ],
-      "relation_text": "alias_of→ЮП-2397",
+      "relation_text": "alias_of→389; alias_of→ЮП-2397",
       "confirmed": [
         {
           "claim": "Периметр 57.6 по чертежу",
@@ -27059,9 +27302,7 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [
-        "ЮП-2413"
-      ],
+      "aliases": [],
       "lengths": [
         {
           "length_mm": 2550,
@@ -27172,28 +27413,10 @@
         "photo-verdict:upgrade_available",
         "perimeter:чертёж",
         "confidence:96",
-        "status:confirmed",
-        "alias:ЮП-2413"
+        "status:confirmed"
       ],
-      "relations": [
-        {
-          "from_sku": "ПП47",
-          "relation": "alias_of",
-          "to_sku": "ПП37",
-          "status": "confirmed",
-          "source": "db:aliases",
-          "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "ПП47",
-          "relation": "alias_of",
-          "to_sku": "ЮП-2413",
-          "status": "confirmed",
-          "source": "db:aliases",
-          "note": "DB-алиас: тот же товар под другим кодом"
-        }
-      ],
-      "relation_text": "alias_of→ПП37; alias_of→ЮП-2413",
+      "relations": [],
+      "relation_text": "",
       "confirmed": [
         {
           "claim": "Периметр 126.9 по чертежу",
@@ -27854,8 +28077,7 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ЮП-3035",
-        "ALS-1103"
+        "ЮП-3035"
       ],
       "lengths": [
         {
@@ -27906,7 +28128,7 @@
           "default_value": 2700
         }
       ],
-      "notes": "",
+      "notes": "Эквивалентны между собой, 2,7 м. Не эквивалент ALS-1103: другой периметр и длина.",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -27970,18 +28192,9 @@
         "confidence:93",
         "status:confirmed",
         "alias:ЮП-3035",
-        "alias:ALS-1103",
         "shared_photo_full:ПТ60"
       ],
       "relations": [
-        {
-          "from_sku": "ПТ40",
-          "relation": "alias_of",
-          "to_sku": "ALS-1103",
-          "status": "confirmed",
-          "source": "db:aliases",
-          "note": "ALS-1103 — 94,71/39,65 по ALS1103.pdf; ПТ40 — 98,8."
-        },
         {
           "from_sku": "ПТ40",
           "relation": "alias_of",
@@ -27999,7 +28212,7 @@
           "note": "3eca25d3c716"
         }
       ],
-      "relation_text": "alias_of→ALS-1103; alias_of→ЮП-3035",
+      "relation_text": "alias_of→ЮП-3035",
       "confirmed": [
         {
           "claim": "Периметр 98.8 по чертежу",
@@ -28338,7 +28551,7 @@
       "id": 181,
       "sku": "У1010",
       "code": "",
-      "name": "У1010",
+      "name": "Уголок 10*10",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -28349,21 +28562,22 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
+        "У1010",
         "ЮП-1401"
       ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 40.0,
       "mount_width_mm": 10.0,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": 96,
           "manual": 96
         }
@@ -28387,7 +28601,7 @@
         "perimeter_mm": 40.0,
         "mount_width_mm": 10.0,
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": 96,
             "manual": 96
           }
@@ -28436,9 +28650,9 @@
       "poster_source": "—",
       "linear_best": "10×10",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "corner",
+      "classification_profile_label": "угол / уголок",
+      "classification_shape": "L",
       "classification_series": "У",
       "classification_family": "series_У",
       "classification_family_name": "Серия У [series_У]",
@@ -28446,13 +28660,13 @@
       "identity_confidence": 100,
       "dimension_confidence": 75,
       "photo_confidence": 95,
-      "classification_confidence": 55,
-      "overall_confidence": 87,
+      "classification_confidence": 80,
+      "overall_confidence": 89,
       "overall_status": "probable",
       "tags": [
         "group:07-tubes-variants",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:corner",
+        "shape:L",
         "series:У",
         "family:series_У",
         "size:10×10",
@@ -28460,8 +28674,9 @@
         "photo-origin:own",
         "photo-verdict:upgrade_applied",
         "perimeter:бд",
-        "confidence:87",
+        "confidence:89",
         "status:probable",
+        "alias:У1010",
         "alias:ЮП-1401",
         "shared_photo_full:У1212",
         "shared_photo_full:У1515",
@@ -28564,7 +28779,7 @@
       "id": 182,
       "sku": "У1515",
       "code": "",
-      "name": "У1515",
+      "name": "Уголок 15*15",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -28575,21 +28790,22 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ЮП-009"
+        "ЮП-009",
+        "У1515"
       ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 60.0,
       "mount_width_mm": 15.0,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": 71,
           "manual": 71
         }
@@ -28613,7 +28829,7 @@
         "perimeter_mm": 60.0,
         "mount_width_mm": 15.0,
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": 71,
             "manual": 71
           }
@@ -28662,9 +28878,9 @@
       "poster_source": "—",
       "linear_best": "15×15",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "corner",
+      "classification_profile_label": "угол / уголок",
+      "classification_shape": "L",
       "classification_series": "У",
       "classification_family": "series_У",
       "classification_family_name": "Серия У [series_У]",
@@ -28672,13 +28888,13 @@
       "identity_confidence": 100,
       "dimension_confidence": 75,
       "photo_confidence": 95,
-      "classification_confidence": 55,
-      "overall_confidence": 87,
+      "classification_confidence": 80,
+      "overall_confidence": 89,
       "overall_status": "probable",
       "tags": [
         "group:07-tubes-variants",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:corner",
+        "shape:L",
         "series:У",
         "family:series_У",
         "size:15×15",
@@ -28686,9 +28902,10 @@
         "photo-origin:own",
         "photo-verdict:upgrade_applied",
         "perimeter:бд",
-        "confidence:87",
+        "confidence:89",
         "status:probable",
         "alias:ЮП-009",
+        "alias:У1515",
         "shared_photo_full:У1010",
         "shared_photo_full:У1212",
         "shared_photo_full:У2020",
@@ -28790,7 +29007,7 @@
       "id": 183,
       "sku": "У2020",
       "code": "",
-      "name": "У2020",
+      "name": "Уголок 20*20",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -28801,21 +29018,22 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ЮП-011"
+        "ЮП-011",
+        "У2020"
       ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 80.0,
       "mount_width_mm": 20.0,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": 53,
           "manual": 53
         }
@@ -28839,7 +29057,7 @@
         "perimeter_mm": 80.0,
         "mount_width_mm": 20.0,
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": 53,
             "manual": 53
           }
@@ -28888,9 +29106,9 @@
       "poster_source": "—",
       "linear_best": "20×20",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "corner",
+      "classification_profile_label": "угол / уголок",
+      "classification_shape": "L",
       "classification_series": "У",
       "classification_family": "series_У",
       "classification_family_name": "Серия У [series_У]",
@@ -28898,13 +29116,13 @@
       "identity_confidence": 100,
       "dimension_confidence": 75,
       "photo_confidence": 95,
-      "classification_confidence": 55,
-      "overall_confidence": 87,
+      "classification_confidence": 80,
+      "overall_confidence": 89,
       "overall_status": "probable",
       "tags": [
         "group:07-tubes-variants",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:corner",
+        "shape:L",
         "series:У",
         "family:series_У",
         "size:20×20",
@@ -28912,9 +29130,10 @@
         "photo-origin:own",
         "photo-verdict:upgrade_applied",
         "perimeter:бд",
-        "confidence:87",
+        "confidence:89",
         "status:probable",
         "alias:ЮП-011",
+        "alias:У2020",
         "shared_photo_full:У1010",
         "shared_photo_full:У1212",
         "shared_photo_full:У1515",
@@ -29016,7 +29235,7 @@
       "id": 184,
       "sku": "У2525",
       "code": "",
-      "name": "У2525",
+      "name": "Уголок 25*25",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -29027,21 +29246,22 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
+        "У2525",
         "ЮП-2004"
       ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 99.0,
       "mount_width_mm": 25.0,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": 43,
           "manual": 43
         }
@@ -29065,7 +29285,7 @@
         "perimeter_mm": 99.0,
         "mount_width_mm": 25.0,
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": 43,
             "manual": 43
           }
@@ -29114,9 +29334,9 @@
       "poster_source": "—",
       "linear_best": "25×25",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "corner",
+      "classification_profile_label": "угол / уголок",
+      "classification_shape": "L",
       "classification_series": "У",
       "classification_family": "series_У",
       "classification_family_name": "Серия У [series_У]",
@@ -29124,13 +29344,13 @@
       "identity_confidence": 100,
       "dimension_confidence": 75,
       "photo_confidence": 95,
-      "classification_confidence": 55,
-      "overall_confidence": 87,
+      "classification_confidence": 80,
+      "overall_confidence": 89,
       "overall_status": "probable",
       "tags": [
         "group:07-tubes-variants",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:corner",
+        "shape:L",
         "series:У",
         "family:series_У",
         "size:25×25",
@@ -29138,10 +29358,11 @@
         "photo-origin:own",
         "photo-verdict:upgrade_applied",
         "perimeter:бд",
-        "confidence:87",
+        "confidence:89",
         "status:probable",
         "review:resolved",
         "review-drawing:есть",
+        "alias:У2525",
         "alias:ЮП-2004",
         "shared_photo_full:У1010",
         "shared_photo_full:У1212",
@@ -29244,7 +29465,7 @@
       "id": 185,
       "sku": "У3030",
       "code": "",
-      "name": "У3030",
+      "name": "Уголок 30*30",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -29255,21 +29476,22 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ЮП-1629"
+        "ЮП-1629",
+        "У3030"
       ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 119.0,
       "mount_width_mm": 30.0,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
+        "3000": {
           "auto": 35,
           "manual": 35
         }
@@ -29293,7 +29515,7 @@
         "perimeter_mm": 119.0,
         "mount_width_mm": 30.0,
         "quantity_per_hanger": {
-          "3050": {
+          "3000": {
             "auto": 35,
             "manual": 35
           }
@@ -29342,9 +29564,9 @@
       "poster_source": "—",
       "linear_best": "30×30",
       "linear_source": "name",
-      "classification_profile": "unknown",
-      "classification_profile_label": "не определено",
-      "classification_shape": "unknown",
+      "classification_profile": "corner",
+      "classification_profile_label": "угол / уголок",
+      "classification_shape": "L",
       "classification_series": "У",
       "classification_family": "series_У",
       "classification_family_name": "Серия У [series_У]",
@@ -29352,13 +29574,13 @@
       "identity_confidence": 100,
       "dimension_confidence": 75,
       "photo_confidence": 95,
-      "classification_confidence": 55,
-      "overall_confidence": 87,
+      "classification_confidence": 80,
+      "overall_confidence": 89,
       "overall_status": "probable",
       "tags": [
         "group:07-tubes-variants",
-        "profile:unknown",
-        "shape:unknown",
+        "profile:corner",
+        "shape:L",
         "series:У",
         "family:series_У",
         "size:30×30",
@@ -29366,9 +29588,10 @@
         "photo-origin:own",
         "photo-verdict:upgrade_applied",
         "perimeter:бд",
-        "confidence:87",
+        "confidence:89",
         "status:probable",
         "alias:ЮП-1629",
+        "alias:У3030",
         "shared_photo_full:У1010",
         "shared_photo_full:У1212",
         "shared_photo_full:У1515",
@@ -29470,7 +29693,7 @@
       "id": 186,
       "sku": "Ш-15,6_8,8",
       "code": "",
-      "name": "Ш-15,6_8,8",
+      "name": "Профиль Ш-обр 15,6*8,8",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -29480,21 +29703,23 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "Ш-15,6*8,8"
+      ],
       "lengths": [
         {
-          "length_mm": 3050,
-          "raw_length_mm": null,
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
           "is_primary": true
         }
       ],
-      "length_primary_mm": 3050,
+      "length_primary_mm": 3000,
       "perimeter_mm": 79.2,
       "mount_width_mm": 15.6,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "3050": {
-          "auto": 66,
+        "3000": {
+          "auto": 53,
           "manual": 66
         }
       },
@@ -29517,8 +29742,8 @@
         "perimeter_mm": 79.2,
         "mount_width_mm": 15.6,
         "quantity_per_hanger": {
-          "3050": {
-            "auto": 66,
+          "3000": {
+            "auto": 53,
             "manual": 66
           }
         }
@@ -29564,7 +29789,7 @@
       "applied_decision": "",
       "archive_file": "",
       "poster_source": "",
-      "linear_best": "",
+      "linear_best": "15.6×8.8",
       "linear_source": "name",
       "classification_profile": "unknown",
       "classification_profile_label": "не определено",
@@ -29584,13 +29809,15 @@
         "profile:unknown",
         "shape:unknown",
         "series:Ш",
+        "size:15.6×8.8",
         "photo:full+thumb",
         "photo-origin:own",
         "photo-verdict:upgrade_available",
         "perimeter:бд",
         "n-mismatch",
         "confidence:86",
-        "status:probable"
+        "status:probable",
+        "alias:Ш-15,6*8,8"
       ],
       "relations": [],
       "relation_text": "",
@@ -29613,7 +29840,6 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ALS-1103",
         "ПТ40"
       ],
       "lengths": [
@@ -29629,7 +29855,7 @@
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "2700": {
-          "auto": null,
+          "auto": 47,
           "manual": 47
         }
       },
@@ -29653,7 +29879,7 @@
         "mount_width_mm": 40.0,
         "quantity_per_hanger": {
           "2700": {
-            "auto": null,
+            "auto": 47,
             "manual": 47
           }
         }
@@ -29665,7 +29891,7 @@
           "default_value": 2750
         }
       ],
-      "notes": "",
+      "notes": "Эквивалентны между собой, 2,7 м. Не эквивалент ALS-1103: другой периметр и длина.",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -29726,18 +29952,9 @@
         "perimeter:чертёж",
         "confidence:93",
         "status:confirmed",
-        "alias:ALS-1103",
         "alias:ПТ40"
       ],
       "relations": [
-        {
-          "from_sku": "ЮП-3035",
-          "relation": "alias_of",
-          "to_sku": "ALS-1103",
-          "status": "confirmed",
-          "source": "db:aliases",
-          "note": "ALS-1103 — 94,71/39,65 по ALS1103.pdf; ЮП-3035 — 98,8."
-        },
         {
           "from_sku": "ЮП-3035",
           "relation": "alias_of",
@@ -29747,7 +29964,7 @@
           "note": "DB-алиас: тот же товар под другим кодом"
         }
       ],
-      "relation_text": "alias_of→ALS-1103; alias_of→ПТ40",
+      "relation_text": "alias_of→ПТ40",
       "confirmed": [
         {
           "claim": "Периметр 98.8 по чертежу",
@@ -29788,12 +30005,12 @@
         }
       ],
       "length_primary_mm": 2700,
-      "perimeter_mm": 93.5,
+      "perimeter_mm": 93.0,
       "mount_width_mm": 27.5,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
         "2700": {
-          "auto": null,
+          "auto": 51,
           "manual": 51
         }
       },
@@ -29813,11 +30030,11 @@
       "photo_thumb_sha12": "397cffd488d1",
       "attributes_json": {
         "hanger_mode": "manual",
-        "perimeter_mm": 93.5,
+        "perimeter_mm": 93.0,
         "mount_width_mm": 27.5,
         "quantity_per_hanger": {
           "2700": {
-            "auto": null,
+            "auto": 51,
             "manual": 51
           }
         }
@@ -29857,9 +30074,9 @@
       "perimeter_archive": "93",
       "perimeter_poster": "—",
       "perimeter_best": "93",
-      "perimeter_source": "БД",
+      "perimeter_source": "чертёж",
       "dimension_status": "match",
-      "dimension_note": "db 93.5 / archive 93 | resolved: штамп 93 (Ø28.9); в БД 93.5",
+      "dimension_note": "db 93.0 / archive 93 (исправлено 26.11.2026 по штампу)",
       "applied_decision": "",
       "archive_file": "РП/ЮП-3077.pdf",
       "poster_source": "",
@@ -29887,7 +30104,7 @@
         "photo:full+thumb",
         "photo-origin:own",
         "photo-verdict:verified_best",
-        "perimeter:бд",
+        "perimeter:чертёж",
         "confidence:96",
         "status:confirmed",
         "alias:АТ-4892"
@@ -29910,7 +30127,7 @@
           "evidence": "РП/ЮП-3077.pdf"
         },
         {
-          "claim": "Периметр 93,5 в БД",
+          "claim": "Периметр 93 в БД",
           "verdict": "confirmed",
           "evidence": "совпадает с чертежом"
         }
@@ -31265,7 +31482,8 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ЮП-081"
+        "ЮП-081",
+        "ЮП-3755"
       ],
       "lengths": [
         {
@@ -31379,6 +31597,7 @@
         "confidence:99",
         "status:confirmed",
         "alias:ЮП-081",
+        "alias:ЮП-3755",
         "shared_photo_full:318",
         "shared_photo_full:325"
       ],
@@ -31387,6 +31606,14 @@
           "from_sku": "324",
           "relation": "alias_of",
           "to_sku": "ЮП-081",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        },
+        {
+          "from_sku": "324",
+          "relation": "alias_of",
+          "to_sku": "ЮП-3755",
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
@@ -31424,7 +31651,7 @@
           "note": "6bc3fb58b291"
         }
       ],
-      "relation_text": "alias_of→ЮП-081",
+      "relation_text": "alias_of→ЮП-081; alias_of→ЮП-3755",
       "confirmed": [
         {
           "claim": "Периметр 43.8 по чертежу",
@@ -31571,7 +31798,8 @@
         "alias:ЮП-2384",
         "shared_photo_full:1010",
         "shared_photo_full:1515",
-        "shared_photo_full:2525"
+        "shared_photo_full:2525",
+        "shared_photo_thumb:ЮП-2384"
       ],
       "relations": [
         {
@@ -31629,6 +31857,14 @@
           "status": "confirmed",
           "source": "storage:sha256",
           "note": "f763d9089ce9"
+        },
+        {
+          "from_sku": "4040",
+          "relation": "shared_photo_thumb",
+          "to_sku": "ЮП-2384",
+          "status": "confirmed",
+          "source": "storage:sha256",
+          "note": "70e51d3af145"
         }
       ],
       "relation_text": "alias_of→ЮП-2384",
@@ -32114,14 +32350,6 @@
         {
           "from_sku": "ПП37",
           "relation": "alias_of",
-          "to_sku": "ПП47",
-          "status": "confirmed",
-          "source": "db:aliases",
-          "note": "DB-алиас: тот же товар под другим кодом"
-        },
-        {
-          "from_sku": "ПП37",
-          "relation": "alias_of",
           "to_sku": "ЮП-2413",
           "status": "confirmed",
           "source": "db:aliases",
@@ -32144,7 +32372,7 @@
           "note": "86eb2d24d8cd"
         }
       ],
-      "relation_text": "alias_of→ПП47; alias_of→ЮП-2413",
+      "relation_text": "alias_of→ЮП-2413",
       "confirmed": [
         {
           "claim": "Периметр 126.9 по чертежу",
@@ -32677,7 +32905,7 @@
       "id": 208,
       "sku": "325",
       "code": "",
-      "name": "Стык Т-образный 23мм",
+      "name": "Стык Т-образный 26 мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -32688,7 +32916,8 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ЮП-2910"
+        "ЮП-2910",
+        "Стык Т-образный 23мм"
       ],
       "lengths": [
         {
@@ -32802,6 +33031,7 @@
         "confidence:95",
         "status:confirmed",
         "alias:ЮП-2910",
+        "alias:Стык Т-образный 23мм",
         "shared_photo_full:318",
         "shared_photo_full:324"
       ],
@@ -34539,7 +34769,9 @@
       "color": "",
       "anod_type": "",
       "dimension_state": "length",
-      "aliases": [],
+      "aliases": [
+        "ЮП-2397"
+      ],
       "lengths": [
         {
           "length_mm": 2700,
@@ -34646,10 +34878,28 @@
         "photo-verdict:unverified",
         "perimeter:—",
         "confidence:66",
-        "status:unknown"
+        "status:unknown",
+        "alias:ЮП-2397"
       ],
-      "relations": [],
-      "relation_text": "",
+      "relations": [
+        {
+          "from_sku": "389",
+          "relation": "alias_of",
+          "to_sku": "П101010",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        },
+        {
+          "from_sku": "389",
+          "relation": "alias_of",
+          "to_sku": "ЮП-2397",
+          "status": "confirmed",
+          "source": "db:aliases",
+          "note": "DB-алиас: тот же товар под другим кодом"
+        }
+      ],
+      "relation_text": "alias_of→П101010; alias_of→ЮП-2397",
       "confirmed": [],
       "refuted": [],
       "open_claims": []
@@ -35117,6 +35367,22 @@
       "note": "DB-алиас: тот же товар под другим кодом"
     },
     {
+      "from_sku": "324",
+      "relation": "alias_of",
+      "to_sku": "ЮП-3755",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
+      "from_sku": "ЮП-3755",
+      "relation": "alias_of",
+      "to_sku": "324",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
       "from_sku": "325",
       "relation": "alias_of",
       "to_sku": "ЮП-2910",
@@ -35160,6 +35426,22 @@
       "from_sku": "ЮП-2083",
       "relation": "alias_of",
       "to_sku": "3328",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
+      "from_sku": "3329",
+      "relation": "alias_of",
+      "to_sku": "ЮП-1807",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
+      "from_sku": "ЮП-1807",
+      "relation": "alias_of",
+      "to_sku": "3329",
       "status": "confirmed",
       "source": "db:aliases",
       "note": "DB-алиас: тот же товар под другим кодом"
@@ -35261,6 +35543,38 @@
       "note": "DB-алиас: тот же товар под другим кодом"
     },
     {
+      "from_sku": "389",
+      "relation": "alias_of",
+      "to_sku": "П101010",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
+      "from_sku": "П101010",
+      "relation": "alias_of",
+      "to_sku": "389",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
+      "from_sku": "389",
+      "relation": "alias_of",
+      "to_sku": "ЮП-2397",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
+      "from_sku": "ЮП-2397",
+      "relation": "alias_of",
+      "to_sku": "389",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
       "from_sku": "4040",
       "relation": "alias_of",
       "to_sku": "ЮП-2384",
@@ -35327,34 +35641,18 @@
     {
       "from_sku": "ALS-1103",
       "relation": "alias_of",
-      "to_sku": "ПТ40",
+      "to_sku": "ЮП-3773",
       "status": "confirmed",
       "source": "db:aliases",
-      "note": "ALS-1103 — 94,71/39,65 по ALS1103.pdf; ПТ40 — 98,8."
+      "note": "DB-алиас: тот же товар под другим кодом"
     },
     {
-      "from_sku": "ПТ40",
+      "from_sku": "ЮП-3773",
       "relation": "alias_of",
       "to_sku": "ALS-1103",
       "status": "confirmed",
       "source": "db:aliases",
-      "note": "ALS-1103 — 94,71/39,65 по ALS1103.pdf; ПТ40 — 98,8."
-    },
-    {
-      "from_sku": "ALS-1103",
-      "relation": "alias_of",
-      "to_sku": "ЮП-3035",
-      "status": "confirmed",
-      "source": "db:aliases",
-      "note": "ALS-1103 — 94,71/39,65 по ALS1103.pdf; ЮП-3035 — 98,8."
-    },
-    {
-      "from_sku": "ЮП-3035",
-      "relation": "alias_of",
-      "to_sku": "ALS-1103",
-      "status": "confirmed",
-      "source": "db:aliases",
-      "note": "ALS-1103 — 94,71/39,65 по ALS1103.pdf; ЮП-3035 — 98,8."
+      "note": "DB-алиас: тот же товар под другим кодом"
     },
     {
       "from_sku": "ALS-915",
@@ -35416,6 +35714,22 @@
       "from_sku": "ЮП-3485",
       "relation": "alias_of",
       "to_sku": "АТ-4893",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
+      "from_sku": "АТ-7314",
+      "relation": "alias_of",
+      "to_sku": "ЮП-3284",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
+      "from_sku": "ЮП-3284",
+      "relation": "alias_of",
+      "to_sku": "АТ-7314",
       "status": "confirmed",
       "source": "db:aliases",
       "note": "DB-алиас: тот же товар под другим кодом"
@@ -35519,22 +35833,6 @@
     {
       "from_sku": "ПП37",
       "relation": "alias_of",
-      "to_sku": "ПП47",
-      "status": "confirmed",
-      "source": "db:aliases",
-      "note": "DB-алиас: тот же товар под другим кодом"
-    },
-    {
-      "from_sku": "ПП47",
-      "relation": "alias_of",
-      "to_sku": "ПП37",
-      "status": "confirmed",
-      "source": "db:aliases",
-      "note": "DB-алиас: тот же товар под другим кодом"
-    },
-    {
-      "from_sku": "ПП37",
-      "relation": "alias_of",
       "to_sku": "ЮП-2413",
       "status": "confirmed",
       "source": "db:aliases",
@@ -35544,22 +35842,6 @@
       "from_sku": "ЮП-2413",
       "relation": "alias_of",
       "to_sku": "ПП37",
-      "status": "confirmed",
-      "source": "db:aliases",
-      "note": "DB-алиас: тот же товар под другим кодом"
-    },
-    {
-      "from_sku": "ПП47",
-      "relation": "alias_of",
-      "to_sku": "ЮП-2413",
-      "status": "confirmed",
-      "source": "db:aliases",
-      "note": "DB-алиас: тот же товар под другим кодом"
-    },
-    {
-      "from_sku": "ЮП-2413",
-      "relation": "alias_of",
-      "to_sku": "ПП47",
       "status": "confirmed",
       "source": "db:aliases",
       "note": "DB-алиас: тот же товар под другим кодом"
@@ -35771,6 +36053,22 @@
       "status": "confirmed",
       "source": "db:aliases",
       "note": "Один товар — уголок ГОСТ 30×30, P=119. ЮП-1629 — дубль-алиас У3030."
+    },
+    {
+      "from_sku": "ЮП-081",
+      "relation": "alias_of",
+      "to_sku": "ЮП-3755",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
+    },
+    {
+      "from_sku": "ЮП-3755",
+      "relation": "alias_of",
+      "to_sku": "ЮП-081",
+      "status": "confirmed",
+      "source": "db:aliases",
+      "note": "DB-алиас: тот же товар под другим кодом"
     },
     {
       "from_sku": "ЮП-1875",
@@ -37579,6 +37877,22 @@
       "status": "confirmed",
       "source": "storage:sha256",
       "note": "47bf4e2dabed"
+    },
+    {
+      "from_sku": "4040",
+      "relation": "shared_photo_thumb",
+      "to_sku": "ЮП-2384",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "70e51d3af145"
+    },
+    {
+      "from_sku": "ЮП-2384",
+      "relation": "shared_photo_thumb",
+      "to_sku": "4040",
+      "status": "confirmed",
+      "source": "storage:sha256",
+      "note": "70e51d3af145"
     },
     {
       "from_sku": "ПП37",
