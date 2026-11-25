@@ -29,7 +29,7 @@ from app.domain.dimensions import (
     format_dimensions,
     parse_length_m_to_mm,
 )
-from app.models.product import Product
+from app.models.product import Product, Product1CCode
 from app.models.route import SectionOperation
 from app.models.section import Section
 from app.models.user import User
@@ -53,6 +53,7 @@ from app.services.material_operations import (
     canonicalize_completed_operations,
     format_completed_operations_label,
 )
+from app.services.product_alias_groups import load_alias_groups
 from app.services.route_storage_classifier import (
     is_production_section,
     is_terminal_section,
@@ -187,6 +188,26 @@ _QUALITY_VALUE_MAP: dict[str, QualityState] = {
 # сматчилось со справочником, — неизвестное состояние, угадывать запрещено
 # (ADR-0021).
 _EMPTY_CELL_VALUES = ("", "—", "-")
+
+# Комментарий проводки ОСВ (спека §3 п.12): только пометка, без чисел —
+# штуки живут в количестве, метры в истории импорта, и дублировать их в
+# тексте проводки значило бы завести второй источник правды.
+_OSV_TRANSACTION_COMMENT = "Импорт остатков из 1С"
+_MANUAL_TRANSACTION_COMMENT = "Импорт остатков из Excel"
+
+
+def _is_1c_osv_item(item: RemainderItem) -> bool:
+    """Строка пришла из выгрузки ОСВ 1С (#458).
+
+    Признак один — код номенклатуры: у ручного шаблона его нет, а ОСВ-строку
+    без кода парсер не создаёт (итоги и пустые коды пропускаются). Такой
+    строке артикул, нормальная длина и штуки уже разрешены парсером по
+    коду/наименованию, поэтому повторные ``_lookup_products`` и
+    ``resolve_remainder_dimensions`` не нужны и вредны: «шт»-строка
+    длинномерного артикула на повторном резолве габаритов стала бы invalid,
+    хотя в предпросмотре она валидна (спека §6.3, §8).
+    """
+    return item.source_code is not None
 
 
 def _norm_hdr(value: str) -> str:
@@ -716,9 +737,15 @@ async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None
     выигрывает всегда; привязка по числовому коду или по части остаётся
     валидной строкой, но с видимым предупреждением, а неоднозначный код или
     часть строку блокирует.
+
+    Строка, у которой артикул уже найден (ОСВ 1С находит его по коду
+    номенклатуры раньше, чем сюда попадает содержимое ячейки), не
+    перепривязывается: SKU в ней — следствие матча, а не вход для второго.
     """
     skus = list(dict.fromkeys(
-        it.sku for it in items if it.status == "valid" and it.sku
+        it.sku
+        for it in items
+        if it.status == "valid" and it.sku and it.product_id is None
     ))
     if not skus:
         return
@@ -738,7 +765,7 @@ async def _lookup_products(db: AsyncSession, items: list[RemainderItem]) -> None
     entries = [row.entry for row in rows]
 
     for item in items:
-        if item.status != "valid" or not item.sku:
+        if item.status != "valid" or not item.sku or item.product_id is not None:
             continue
 
         match = match_sku_cell(item.sku, entries)
@@ -806,9 +833,15 @@ async def resolve_remainder_dimensions(
 
     Продукты без привязок (крепёж и пр.) остаются безразмерными
     (``dimensions=None``), если длина не указана явно.
+
+    ОСВ 1С пропускается: парсер уже привёл длину к нормальной (спека §8) и
+    положил ``dimensions`` в строку, а у «шт»-строк длинномерных артикулов
+    габарита нет по определению — повторный резолв сделал бы их invalid.
     """
     for item in items:
         if item.status != "valid" or item.product_id is None:
+            continue
+        if _is_1c_osv_item(item):
             continue
         try:
             resolved = await resolve_product_dimensions(
@@ -1013,6 +1046,87 @@ def _row_completed_operations(item: RemainderItem) -> list[str] | None:
     )
 
 
+async def _resolve_1c_code_bindings(
+    db: AsyncSession,
+    items: list[RemainderItem],
+    user: User | None,
+) -> list[Product1CCode]:
+    """Разобрать коды номенклатуры 1С у валидных строк ОСВ (спека §3 п.4, §7).
+
+    Код свободен → готовится ``product_1c_codes`` для артикула строки. Код уже
+    привязан к артикулу той же группы алиасов → оставляем как есть (повторный
+    импорт не плодит дублей). Код привязан к другой группе → строка становится
+    invalid с видимой причиной, молчаливой перепривязки нет.
+
+    Возвращает **ещё не добавленные в сессию** записи: их пишет вызывающий
+    только после решения «импорт продолжается». Так отмена батча
+    (``skip_invalid=False``) не оставляет выученных кодов от отклонённого
+    импорта. Вызывается до проводок: конфликт обязан отсечь строку до того,
+    как она изменит остаток, и попасть в ``errors``/историю наравне с
+    ошибками разбора.
+    """
+    rows = [
+        item
+        for item in items
+        if item.status == "valid" and item.product_id is not None and item.source_code
+    ]
+    if not rows:
+        return []
+
+    codes = {item.source_code for item in rows}
+    bindings: dict[str, Product1CCode] = {
+        binding.code: binding
+        for binding in (
+            await db.scalars(select(Product1CCode).where(Product1CCode.code.in_(codes)))
+        ).all()
+    }
+    groups = await load_alias_groups(db)
+
+    def group_key(product_id: int) -> int:
+        key = groups.group_key(product_id)
+        return key if key is not None else product_id
+
+    product_ids = {binding.product_id for binding in bindings.values()} | {
+        item.product_id for item in rows
+    }
+    skus = {
+        product.id: product.sku
+        for product in (
+            await db.scalars(select(Product).where(Product.id.in_(product_ids)))
+        ).all()
+    }
+
+    pending: list[Product1CCode] = []
+    for item in rows:
+        code = item.source_code
+        product_id = item.product_id
+        if code is None or product_id is None:  # отобрано выше; защита от мутации
+            continue
+        binding = bindings.get(code)
+        if binding is not None:
+            if group_key(binding.product_id) == group_key(product_id):
+                continue
+            bound_sku = skus.get(binding.product_id) or str(binding.product_id)
+            name_sku = skus.get(product_id) or str(product_id)
+            item.status = "invalid"
+            item.errors.append(
+                f"Код {code} привязан к {bound_sku}, в наименовании {name_sku}"
+            )
+            continue
+        # Код свободен: изучение — часть успешного импорта строки. В ``bindings``
+        # кладём сразу, чтобы две строки одного файла с одним кодом не создали
+        # две записи (уникальный индекс кода упал бы на flush).
+        binding = Product1CCode(
+            code=code,
+            product_id=product_id,
+            source="1c_osv",
+            created_by=user.id if user else None,
+        )
+        pending.append(binding)
+        bindings[code] = binding
+    return pending
+
+
 async def apply_remainders_import(
     db: AsyncSession,
     location_id: int,
@@ -1033,7 +1147,11 @@ async def apply_remainders_import(
     1. Validates the location exists.
     2. Looks up products by SKU (``_lookup_products``) and resolves per-row
        dimensions against the dimension dictionary
-       (``resolve_remainder_dimensions``).
+       (``resolve_remainder_dimensions``). Строки, у которых артикул уже
+       найден (ОСВ 1С), не перепривязываются и не перерезолвятся.
+    2а. Разбирает коды номенклатуры 1С (``_resolve_1c_code_bindings``):
+       свободный код записывается артикулу, код другой группы алиасов делает
+       строку invalid. Коды пишутся только если импорт не отменён.
     3. If ``clear_existing=True``, zeros out current balances for
        ``(location_id, quality_state)`` with ``ADJUSTMENT_OUT``.
        **Cannot** be combined with ``target_section_overrides``.
@@ -1090,6 +1208,9 @@ async def apply_remainders_import(
     # --- Resolve dimensions (явная длина / типовой размер / invalid) ---------
     await resolve_remainder_dimensions(db, items)
 
+    # --- Изучение кодов 1С (ОСВ): до проводок, конфликт блокирует строку ------
+    new_code_bindings = await _resolve_1c_code_bindings(db, items, user)
+
     valid_items = [it for it in items if it.status == "valid" and it.product_id is not None]
     invalid_items = [it for it in items if it.status == "invalid"]
 
@@ -1113,6 +1234,9 @@ async def apply_remainders_import(
             errors=["clear_existing не поддерживается при построчном указании участков"],
             transaction_ids=[],
         )
+    # Коды пишутся только у импорта, который прошёл обе проверки выше: отмена
+    # (skip_invalid=False) не должна изучать коды отклонённых строк.
+    db.add_all(new_code_bindings)
     svc = StockCommandService()
 
     # Журнал действий (#116): импорт-батч = одно действие; обе фазы
@@ -1204,7 +1328,13 @@ async def apply_remainders_import(
             completed_operations=row_ops,
             reason=Reason.MANUAL_IN,
             quality_state=row_quality,
-            comment=final_comment or "Импорт остатков из Excel",
+            # ОСВ: только пометка без чисел (спека §3 п.12). Ручной шаблон
+            # сохраняет свой комментарий и подпись операций как раньше.
+            comment=(
+                _OSV_TRANSACTION_COMMENT
+                if _is_1c_osv_item(item)
+                else (final_comment or _MANUAL_TRANSACTION_COMMENT)
+            ),
             source_ref=batch_source_ref,
             created_by=user.id if user else 1,
             created_by_user_name=(
@@ -1265,6 +1395,12 @@ async def apply_remainders_import(
                 quantity=(
                     Decimal(str(item.quantity))
                     if is_valid and item.quantity is not None
+                    else None
+                ),
+                source_code=item.source_code,
+                source_quantity_m=(
+                    Decimal(str(item.source_quantity_m))
+                    if item.source_quantity_m is not None
                     else None
                 ),
                 dimensions=item.dimensions,
