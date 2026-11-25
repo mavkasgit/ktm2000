@@ -456,8 +456,6 @@ E2E (`frontend/e2e/`): загрузка ОСВ-файла → предпросм
 
 ## 16. Тикеты
 
-## 15. Тикеты
-
 - T1 — [#455](https://github.com/mavkasgit/ktm2000/issues/455) — схема и
   миграция (коды 1С + поля источника)
 - T2 — [#458](https://github.com/mavkasgit/ktm2000/issues/458) — парсер ОСВ,
