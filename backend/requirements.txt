@@ -11,7 +11,7 @@ python-multipart>=0.0.6
 httpx>=0.28.1
 # Прямой импорт в app/api/backups.py (anyio.open_file) — объявляем явно:
 # транзитивно приходит из FastAPI/Starlette, но прямой импорт не должен на это опираться.
-anyio>=4.0
+anyio>=4.16.0
 python-dateutil>=4.0.0
 openpyxl>=3.1.0
 python-calamine>=0.1.0
