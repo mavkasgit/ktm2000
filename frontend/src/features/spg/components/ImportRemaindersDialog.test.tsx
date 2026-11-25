@@ -139,6 +139,23 @@ describe("ImportRemaindersDialog", () => {
     }
   });
 
+  it("на шаге загрузки подсказывает про ОСВ и ручной шаблон", async () => {
+    vi.mocked(listSections).mockResolvedValue([]);
+    vi.mocked(getRemainderImportOperations).mockResolvedValue([]);
+
+    const { cleanup } = mountDialog();
+    try {
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("выгрузка 1С (ОСВ)");
+        expect(text).toContain("ручной шаблон");
+        expect(text).toContain("тип каждого листа виден на вкладках");
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
   it("shows an explicit error when the sections reference fails to load", async () => {
     vi.mocked(listSections).mockRejectedValue(new Error("network down"));
     vi.mocked(getRemainderImportOperations).mockResolvedValue([]);
@@ -422,6 +439,40 @@ describe("вкладки листов файла остатков", () => {
       cleanup();
     }
   });
+
+  it("новый файл начинает предпросмотр заново, а не берёт чужой кэш", async () => {
+    vi.mocked(listSections).mockResolvedValue([
+      makeSection({ id: 11, code: "RAW", name: "Зона Альфа" }),
+    ]);
+    vi.mocked(getRemainderImportOperations).mockResolvedValue([]);
+    vi.mocked(getRemainderSheets).mockResolvedValue([
+      makeSheet({ index: 0, name: "Склад сырой", kind: "1c_osv", detected_section_id: 11 }),
+    ]);
+    vi.mocked(previewRemaindersExcel).mockResolvedValue(
+      osvPreview(0, 11, "Зона Альфа"),
+    );
+
+    const { cleanup } = mountDialog();
+    try {
+      await selectFile("первый.xlsx");
+      await vi.waitFor(() => {
+        expect(previewRemaindersExcel).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Назад" }));
+      });
+      await selectFile("второй.xlsx");
+
+      // Ключ кэша — лист и параметры, файла в нём нет: без сброса диалог
+      // показал бы предпросмотр прошлого файла.
+      await vi.waitFor(() => {
+        expect(previewRemaindersExcel).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe("колонки предпросмотра ОСВ", () => {
@@ -681,6 +732,41 @@ describe("импорт всех листов ОСВ", () => {
     }
   });
 
+  it("на ручном листе нет «все листы», а очистка разрешена", async () => {
+    mockReferences();
+    vi.mocked(getRemainderSheets).mockResolvedValue(osvSheets());
+    vi.mocked(previewRemaindersExcel).mockImplementation(async (_source, opts) =>
+      opts?.sheet_index === 0
+        ? makePreview({ sheet_name: "Импорт остатков" })
+        : makePreview({ source_kind: "1c_osv", detected_section_id: 11 }),
+    );
+
+    const { cleanup } = mountDialog();
+    try {
+      await selectFile();
+      // По умолчанию выбран первый ОСВ-лист — действие доступно.
+      await screen.findByRole("button", { name: "Импортировать все листы ОСВ (2)" });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Импорт остатков · шаблон" }));
+      });
+
+      // На ручном листе действие «все листы» не показывается: оно про ОСВ.
+      await vi.waitFor(() => {
+        expect(
+          screen.queryByRole("button", { name: /Импортировать все листы ОСВ/ }),
+        ).toBeNull();
+      });
+      // Очистка одного листа не мультилист: на ручном листе она разрешена.
+      const checkbox = await screen.findByRole("checkbox", {
+        name: /Очистить перед импортом/,
+      });
+      expect((checkbox as HTMLInputElement).disabled).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("гасит clear_existing с видимым объяснением в мультилисте", async () => {
     mockReferences();
     vi.mocked(getRemainderSheets).mockResolvedValue(osvSheets());
@@ -696,7 +782,7 @@ describe("импорт всех листов ОСВ", () => {
       });
       expect((checkbox as HTMLInputElement).disabled).toBe(true);
       expect(document.body.textContent).toContain(
-        "Очистка перед импортом недоступна для файла с листами ОСВ",
+        "Очистка перед импортом недоступна в мультилисте",
       );
     } finally {
       cleanup();

@@ -23,6 +23,7 @@ import {
   TableCornerResetHeader,
   TablePaginationFooter,
   DATA_TABLE_STYLES,
+  TABLE_ROW_COMPACT,
   toast,
   renderIcon,
 } from "@/shared/ui";
@@ -286,6 +287,10 @@ interface ImportRemaindersDialogProps {
 }
 
 const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.headerCell}`;
+// Итоговая таблица мультилиста — та же компактная строка, что у соседей
+// (ADR-0030): размеры берутся из общего набора, своих `px-*` у неё нет.
+const summaryHeaderCellClass = `${DATA_TABLE_STYLES.headerRow} ${TABLE_ROW_COMPACT.headerCell}`;
+const summaryCellClass = TABLE_ROW_COMPACT.cell;
 
 export function ImportRemaindersDialog({
   open,
@@ -446,6 +451,10 @@ export function ImportRemaindersDialog({
   const { toggleRow, isRowExpanded, resetExpansion } = expansion;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Версия источника предпросмотра: новый файл/буфер/открытие диалога её
+  // поднимают, и ответ прошлого источника не попадает в кэш нового (ключ
+  // кэша — лист и параметры, файла в нём нет).
+  const previewSourceVersion = useRef(0);
 
   // ── Preview request identity and per-sheet cache ──────────────────────
   // Параметры без `location_id`: ключ кэша не должен зависеть от участка,
@@ -514,6 +523,7 @@ export function ImportRemaindersDialog({
   // ── Reset state when dialog opens ─────────────────────────────────────
   useEffect(() => {
     if (open) {
+      previewSourceVersion.current += 1;
       setStep("upload");
       setImportMode("file");
       setFile(null);
@@ -566,15 +576,20 @@ export function ImportRemaindersDialog({
     if (!source) return;
     const key = buildPreviewCacheKey(selectedSheet, previewParams);
     if (previewCache[key] || previewLoadingKeys[key]) return;
+    const sourceVersion = previewSourceVersion.current;
     setPreviewLoadingKeys((prev) => ({ ...prev, [key]: true }));
     setError(null);
     try {
       const data = await previewRemaindersExcel(source, previewQueryOptions);
+      if (previewSourceVersion.current !== sourceVersion) return;
       setPreviewCache((prev) => ({ ...prev, [key]: data }));
     } catch (err: unknown) {
+      if (previewSourceVersion.current !== sourceVersion) return;
       setError(getErrorMessage(err) || "Не удалось загрузить предварительный просмотр листа.");
     } finally {
-      setPreviewLoadingKeys((prev) => ({ ...prev, [key]: false }));
+      if (previewSourceVersion.current === sourceVersion) {
+        setPreviewLoadingKeys((prev) => ({ ...prev, [key]: false }));
+      }
     }
   };
 
@@ -582,6 +597,7 @@ export function ImportRemaindersDialog({
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const selectedFile = e.target.files[0];
+      previewSourceVersion.current += 1;
       setImportMode("file");
       setClipboardText("");
       setFile(selectedFile);
@@ -612,6 +628,7 @@ export function ImportRemaindersDialog({
   const applyClipboardText = useCallback((text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
+    previewSourceVersion.current += 1;
     setImportMode("clipboard");
     setClipboardText(trimmed);
     setFile(null);
@@ -721,6 +738,10 @@ export function ImportRemaindersDialog({
 
   const handleClose = () => {
     setStep("upload");
+    // Кэш и незавершённые ответы предпросмотра не переживают закрытие:
+    // следующий сеанс начинает с чистого листа.
+    previewSourceVersion.current += 1;
+    resetPreviewState();
     onOpenChange(false);
   };
 
@@ -802,12 +823,19 @@ export function ImportRemaindersDialog({
     () => sheetTabs.filter((sheet) => sheet.kind === "1c_osv"),
     [sheetTabs],
   );
+  const selectedSheetKind = sheetTabs.find((sheet) => sheet.index === selectedSheet)?.kind;
   // Буфер обмена — один лист: мультилистовое действие к нему не относится.
-  const multiSheetImportAvailable = importMode === "file" && osvSheets.length > 0;
-  // Очистка склада несовместима ни с построчными участками, ни с импортом
-  // всех листов: она гасит остатки только одного склада (спека §9).
+  // Действие живёт только на ОСВ-листе: на ручном/неизвестном листе кнопки
+  // «все листы» нет — иначе она обещала бы не то, что делает.
+  const multiSheetImportAvailable =
+    importMode === "file" && osvSheets.length > 0 && selectedSheetKind === "1c_osv";
+  // Очистка склада несовместима ни с построчными участками, ни с мультилистом:
+  // она гасит остатки только одного склада, а «все листы ОСВ» заливают каждый
+  // лист на свой (спека §9). На ручном листе одного файла очистка разрешена.
+  const clearExistingBlockedByMultiSheet =
+    multiSheetImportAvailable && osvSheets.length > 1;
   const clearExistingBlocked =
-    Object.keys(targetSectionOverrides).length > 0 || multiSheetImportAvailable;
+    Object.keys(targetSectionOverrides).length > 0 || clearExistingBlockedByMultiSheet;
 
   const canApplyImport = useMemo(() => {
     if (previewLoading || importMutation.isPending) return false;
@@ -991,6 +1019,11 @@ export function ImportRemaindersDialog({
                 столбцы читаются в порядке шаблона. Загрузите Excel или нажмите{" "}
                 <kbd className="px-1 py-0.5 rounded-sm border border-border bg-muted text-[10px] font-mono">Ctrl+V</kbd>{" "}
                 — данные из буфера подхватятся сразу.
+              </p>
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                Поддерживаются выгрузка 1С (ОСВ) и ручной шаблон{" "}
+                <strong className="text-foreground">«Артикул | Кол-во»</strong>. После загрузки
+                тип каждого листа виден на вкладках — лист можно переключить.
               </p>
 
               <div className="grid grid-cols-[minmax(0,3fr)_minmax(160px,2fr)] gap-3 items-start">
@@ -1198,8 +1231,8 @@ export function ImportRemaindersDialog({
                           : "cursor-pointer"
                       }`}
                       title={
-                        multiSheetImportAvailable
-                          ? "Очистка одного склада не должна гасить остатки другого — при импорте всех листов ОСВ она недоступна"
+                        clearExistingBlockedByMultiSheet
+                          ? "Очистка одного склада не должна гасить остатки другого — при импорте нескольких листов ОСВ она недоступна"
                           : undefined
                       }
                     >
@@ -1212,10 +1245,10 @@ export function ImportRemaindersDialog({
                       />
                       <span className="text-destructive font-semibold">Очистить перед импортом</span>
                     </label>
-                    {multiSheetImportAvailable ? (
+                    {clearExistingBlockedByMultiSheet ? (
                       <span className="text-[10px] text-muted-foreground leading-snug max-w-[220px]">
-                        Очистка перед импортом недоступна для файла с листами ОСВ: каждый
-                        лист заливается на свой склад.
+                        Очистка перед импортом недоступна в мультилисте: каждый
+                        лист ОСВ заливается на свой склад.
                       </span>
                     ) : null}
                   </>
@@ -1515,11 +1548,11 @@ export function ImportRemaindersDialog({
                 <table className="w-full text-[11px] text-left border-collapse">
                   <thead>
                     <tr>
-                      <th className={headerCellClass}>Лист</th>
-                      <th className={headerCellClass}>Участок</th>
-                      <th className={headerCellClass}>Импортировано</th>
-                      <th className={headerCellClass}>Пропущено</th>
-                      <th className={headerCellClass}>Ошибки</th>
+                      <th className={summaryHeaderCellClass}>Лист</th>
+                      <th className={summaryHeaderCellClass}>Участок</th>
+                      <th className={summaryHeaderCellClass}>Импортировано</th>
+                      <th className={summaryHeaderCellClass}>Пропущено</th>
+                      <th className={summaryHeaderCellClass}>Ошибки</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1530,12 +1563,12 @@ export function ImportRemaindersDialog({
                           outcome.status === "failed" ? "bg-red-50/50 dark:bg-red-950/5" : ""
                         }`}
                       >
-                        <td className="px-1.5 py-1 font-medium">{outcome.sheetName}</td>
-                        <td className="px-1.5 py-1">{outcome.sectionName ?? "—"}</td>
-                        <td className="px-1.5 py-1 tabular-nums">{outcome.imported}</td>
-                        <td className="px-1.5 py-1 tabular-nums">{outcome.skipped}</td>
+                        <td className={`${summaryCellClass} font-medium`}>{outcome.sheetName}</td>
+                        <td className={summaryCellClass}>{outcome.sectionName ?? "—"}</td>
+                        <td className={`${summaryCellClass} tabular-nums`}>{outcome.imported}</td>
+                        <td className={`${summaryCellClass} tabular-nums`}>{outcome.skipped}</td>
                         <td
-                          className={`px-1.5 py-1 leading-snug ${
+                          className={`${summaryCellClass} leading-snug ${
                             outcome.status === "failed"
                               ? "text-destructive font-medium"
                               : "text-muted-foreground"
@@ -1605,6 +1638,7 @@ export function ImportRemaindersDialog({
                   setImportMode("file");
                   setFile(null);
                   setClipboardText("");
+                  previewSourceVersion.current += 1;
                   resetPreviewState();
                   setError(null);
                 }}
