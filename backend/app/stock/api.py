@@ -64,14 +64,21 @@ from app.services.product_alias_groups import (
     AliasGroups,
     load_alias_groups,
 )
+from app.stock.import_1c_osv import (
+    SOURCE_KIND_1C_OSV,
+    SOURCE_KIND_MANUAL_TEMPLATE,
+    ParsedRemainders,
+    _lookup_1c_products,
+    describe_remainder_sheets,
+    parse_remainders_sheet,
+    resolve_1c_osv_quantities,
+    resolve_1c_storage_section,
+)
 from app.stock.import_service import (
     ImportResult,
-    RemainderItem,
-    SheetSummary,
     apply_remainders_import,
     generate_remainders_template_for_location,
     parse_remainders_clipboard,
-    parse_remainders_excel,
     query_remainder_preview_items,
     resolve_completed_stages,
     resolve_operations_dictionary,
@@ -105,14 +112,20 @@ async def _load_template_column_mapping(
 
 
 async def _parse_remainder_import_source(
+    db: AsyncSession,
     *,
     file: UploadFile | None,
     clipboard_text: str | None,
     sheet_index: int,
     row_selection: str | None,
     column_mapping: dict | None = None,
-) -> tuple[str, int, list[RemainderItem], SheetSummary]:
-    """Parse remainder rows from an uploaded Excel file or clipboard text."""
+) -> ParsedRemainders:
+    """Разобрать остатки из файла или буфера и обогатить строки ОСВ.
+
+    Режим выбирается по заголовкам листа (#458, спека §6.1): ОСВ 1С сразу
+    приводит строки к артикулам, нормальной длине и штукам, ручной шаблон
+    идёт прежним путём (обогащение делает вызывающий).
+    """
     has_file = file is not None and file.filename
     has_clipboard = bool(clipboard_text and clipboard_text.strip())
 
@@ -129,15 +142,38 @@ async def _parse_remainder_import_source(
 
     try:
         if has_clipboard:
-            return await parse_remainders_clipboard(
+            sheet_name, total_rows, items, summary = await parse_remainders_clipboard(
                 clipboard_text or "", row_selection, column_mapping
             )
-        content = await file.read()  # type: ignore[union-attr]
-        return await parse_remainders_excel(
-            content, sheet_index, row_selection, column_mapping
-        )
+            parsed = ParsedRemainders(
+                sheet_name=sheet_name,
+                total_rows=total_rows,
+                items=items,
+                summary=summary,
+                source_kind=SOURCE_KIND_MANUAL_TEMPLATE,
+            )
+        else:
+            content = await file.read()  # type: ignore[union-attr]
+            parsed = await parse_remainders_sheet(
+                content, sheet_index, row_selection, column_mapping
+            )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if parsed.source_kind == SOURCE_KIND_1C_OSV:
+        await _lookup_1c_products(db, parsed.items)
+        await resolve_1c_osv_quantities(db, parsed.items)
+        section_id, section_name = await resolve_1c_storage_section(
+            db, parsed.header_rows
+        )
+        parsed.detected_section_id = section_id
+        parsed.detected_section_name = section_name
+        if section_id is not None:
+            for item in parsed.items:
+                if item.target_section_name is None:
+                    item.target_section_id = section_id
+                    item.target_section_name = section_name
+    return parsed
 
 
 # ─── Schemas ──────────────────────────────────────────────────────────────────
@@ -1424,6 +1460,39 @@ async def _load_section_names(
 
 
 @router.post(
+    "/import/remainders/sheets",
+    dependencies=[Depends(require_role(list(WRITER_ROLES)))],
+)
+async def list_remainder_sheets(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Тип каждого листа файла остатков и участок ОСВ-листов (#458, спека §5.1).
+
+    ``kind``: ``1c_osv`` (выгрузка 1С), ``manual_template`` (ручной шаблон
+    ``Артикул | Кол-во``) или ``unknown``. Строки не разбираются — только
+    шапка листа, чтобы вкладки диалога показали тип и склад.
+    """
+    try:
+        content = await file.read()
+        sheets = await describe_remainder_sheets(db, content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "sheets": [
+            {
+                "index": sheet.index,
+                "name": sheet.name,
+                "kind": sheet.kind,
+                "detected_section_id": sheet.detected_section_id,
+                "detected_section_name": sheet.detected_section_name,
+            }
+            for sheet in sheets
+        ]
+    }
+
+
+@router.post(
     "/import/remainders/preview",
     dependencies=[Depends(require_role(list(WRITER_ROLES)))],
 )
@@ -1460,11 +1529,17 @@ async def preview_remainders_excel(
       для UI-оверрайда участка.
     * ``clipboard_text`` — TSV из буфера (копия из Excel), альтернатива ``file``.
     * ``limit`` / ``offset`` / ``items_total`` — серверная пагинация по ``items``.
-    * ``search`` — поиск по SKU, product_name, номеру строки.
+    * ``search`` — поиск по SKU, product_name, коду 1С, номеру строки.
     * ``filter_status`` — ``all`` или ``invalid``.
     * ``sort`` — сортировка страницы preview, ``field:order`` через запятую.
     * ``row``, ``sku``, ``quantity``, ``length``, ``operations``, ``quality``,
       ``section``, ``errors`` — column filters (partial match).
+
+    Режим («1С ОСВ» или ручной шаблон) определяется по заголовкам листа.
+    Для ОСВ ответ дополняется ``source_kind``, ``detected_section_id`` и
+    ``detected_section_name``, а элементы — ``source_code``, ``source_name``,
+    ``source_unit``, ``source_quantity_m`` (метры). ``source_code`` участвует
+    в ``search``, но не в колоночных фильтрах (спека §5.2).
     """
     if location_id is not None:
         location = await db.get(Section, location_id)
@@ -1485,19 +1560,25 @@ async def preview_remainders_excel(
         value_parser=lambda value: QualityState(str(value).lower()),
     )
 
-    sheet_name, total_rows, items, _summary = await _parse_remainder_import_source(
+    parsed = await _parse_remainder_import_source(
+        db,
         file=file,
         clipboard_text=clipboard_text,
         sheet_index=sheet_index,
         row_selection=row_selection,
         column_mapping=await _load_template_column_mapping(db, template_id),
     )
+    sheet_name = parsed.sheet_name
+    total_rows = parsed.total_rows
+    items = parsed.items
 
-    # Enrich items with product info
-    await _lookup_remainder_products(db, items)
+    # ОСВ 1С уже обогащена разбором (артикул, длина, штуки, участок) — режим
+    # ручного шаблона идёт прежним путём (#458).
+    if parsed.source_kind != SOURCE_KIND_1C_OSV:
+        await _lookup_remainder_products(db, items)
 
-    # Габариты: явная длина / типовой размер / invalid (ADR-0003, п. 3)
-    await resolve_remainder_dimensions(db, items)
+        # Габариты: явная длина / типовой размер / invalid (ADR-0003, п. 3)
+        await resolve_remainder_dimensions(db, items)
 
     # Resolve completed stages and target sections
     ops_dict = await resolve_operations_dictionary(db)
@@ -1550,6 +1631,9 @@ async def preview_remainders_excel(
 
     return {
         "sheet_name": sheet_name,
+        "source_kind": parsed.source_kind,
+        "detected_section_id": parsed.detected_section_id,
+        "detected_section_name": parsed.detected_section_name,
         "total_rows": total_rows,
         "summary": {
             "total": len(items),
@@ -1647,13 +1731,16 @@ async def import_remainders_excel(
     if location is None:
         raise HTTPException(status_code=404, detail=f"Участок с id={location_id} не найден")
 
-    sheet_name, _total_rows, items, _summary = await _parse_remainder_import_source(
+    parsed = await _parse_remainder_import_source(
+        db,
         file=file,
         clipboard_text=clipboard_text,
         sheet_index=sheet_index,
         row_selection=row_selection,
         column_mapping=await _load_template_column_mapping(db, template_id),
     )
+    sheet_name = parsed.sheet_name
+    items = parsed.items
 
     # Исходник сохраняем ради кнопки «Скачать» и сверки «вот ты залил не то»
     # (ADR-0052 п.9). Тот же content-addressed путь, что у импорта плана: файл
