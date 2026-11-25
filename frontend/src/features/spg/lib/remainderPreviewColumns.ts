@@ -46,6 +46,14 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     sortValues: (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
   },
   {
+    // Источник из ОСВ 1С. Колоночного фильтра у него нет ни в контракте
+    // предпросмотра, ни в спеке §5.2: код участвует только в общем `search`.
+    // Сортировки тоже нет — бэкенд её не знает, а иконка без эффекта врёт.
+    id: "source_code",
+    label: "Код 1С",
+    headerClassName: "w-20",
+  },
+  {
     id: "sku",
     label: "Артикул",
     filterField: "sku",
@@ -54,12 +62,27 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
+    // Ячейка печатает `product_name`, а `source_name` уходит в подсказку:
+    // наименование 1С нужно для сверки, но фильтровать и сортировать по нему
+    // сервер не умеет.
+    id: "source_name",
+    label: "Наименование",
+    headerClassName: "min-w-[220px]",
+  },
+  {
     id: "quantity",
-    label: "Кол-во",
+    label: "Кол-во, шт",
     filterField: "quantity",
     sortField: "quantity",
-    headerClassName: "w-14 text-right",
+    headerClassName: "w-20 text-right",
     sortValues: (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
+  },
+  {
+    // Метры из «Конечное сальдо / Количество» ОСВ. Дробные, поэтому
+    // фильтра/сортировки нет: сервер их не фильтрует.
+    id: "meters",
+    label: "Метры",
+    headerClassName: "w-20 text-right",
   },
   {
     id: "length",
@@ -110,7 +133,11 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
   },
 ];
 
-/** Список полей для сбора значений: тот же, что и в шапке, а не свой. */
-export const remainderPreviewColumnFields = remainderPreviewColumns.map(
-  (column) => column.filterField!,
+/**
+ * Список полей для сбора значений: тот же, что и в шапке, а не свой.
+ * Колонки источника (`Код 1С`, `Наименование`, `Метры`) фильтра не имеют —
+ * undefined в списке полей означал бы поле, которого нет в контракте.
+ */
+export const remainderPreviewColumnFields = remainderPreviewColumns.flatMap(
+  (column) => (column.filterField ? [column.filterField] : []),
 );

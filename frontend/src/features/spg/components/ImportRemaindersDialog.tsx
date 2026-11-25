@@ -46,6 +46,7 @@ import {
   importRemaindersExcel,
   downloadRemaindersImportTemplate,
   getRemainderImportOperations,
+  getRemainderSheets,
   formatQualityStateLabel,
   formatDimensionsLabel,
   formatCompletedOperationsLabel,
@@ -57,17 +58,19 @@ import {
   type QualityState,
   type RemainderPreviewResponse,
   type RemainderImportSource,
+  type RemainderSheet,
+  type RemainderSheetKind,
   type ImportOperationStep,
 } from "@/shared/api/stock";
 import { getErrorMessage } from "@/shared/api/client";
 import { translateImportError } from "@/shared/api/errorMessages";
-import { getExcelSheetNames } from "@/shared/api/imports";
 import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
 import { listSections } from "@/shared/api/sections";
 import type { RemainderImportItem, RemainderSectionMeta } from "@/shared/api/stock";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
+import { fmtQty, fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import {
   buildRemainderPreviewSortParam,
   type RemainderPreviewSortField,
@@ -229,6 +232,53 @@ function qualityBadgeClass(state: QualityState): string {
   }
 }
 
+/** Пустые карты оверрайдов: стабильная ссылка, чтобы мемо не пересобиралось. */
+const EMPTY_SECTION_OVERRIDES: Record<number, number> = {};
+const EMPTY_QUALITY_OVERRIDES: Record<number, QualityState> = {};
+
+/** Подпись типа листа на вкладке (спека §9). */
+const SHEET_KIND_LABELS: Record<RemainderSheetKind, string> = {
+  "1c_osv": "ОСВ 1С",
+  manual_template: "шаблон",
+  unknown: "неизвестно",
+};
+
+function sheetTabLabel(sheet: RemainderSheet): string {
+  return `${sheet.name} · ${SHEET_KIND_LABELS[sheet.kind]}`;
+}
+
+/**
+ * Ключ кэша предпросмотра: лист и параметры страницы.
+ *
+ * `location_id` в ключ не входит: сервер проверяет только его существование,
+ * строки от него не зависят (спека §5.2), а участок как раз берётся из ответа
+ * предпросмотра — ключ с ним замкнулся бы сам на себя.
+ */
+function buildPreviewCacheKey(
+  sheetIndex: number,
+  params: Record<string, unknown>,
+): string {
+  const parts = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== "")
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, value]) => `${name}=${String(value)}`);
+  return `${sheetIndex}|${parts.join("&")}`;
+}
+
+/** Итог применения одного листа в режиме «все листы ОСВ» (спека §9). */
+type MultiSheetOutcome = {
+  sheetIndex: number;
+  sheetName: string;
+  sectionId: number | null;
+  sectionName: string | null;
+  status: "applied" | "failed";
+  imported: number;
+  skipped: number;
+  errors: string[];
+  /** Причина остановки: ошибка листа, а не ошибки отдельных строк. */
+  error: string | null;
+};
+
 interface ImportRemaindersDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -301,15 +351,34 @@ export function ImportRemaindersDialog({
   const [importMode, setImportMode] = useState<"file" | "clipboard">("file");
   const [file, setFile] = useState<File | null>(null);
   const [clipboardText, setClipboardText] = useState("");
-  const [sheets, setSheets] = useState<string[]>([]);
+  // Вкладки — листы файла с типом; `index` — настоящий индекс листа Excel,
+  // он же `sheet_index` запроса, поэтому позиция вкладки и индекс не путаются.
+  const [sheetTabs, setSheetTabs] = useState<RemainderSheet[]>([]);
   const [selectedSheet, setSelectedSheet] = useState(0);
+  // Кэш предпросмотра по листу и параметрам страницы — как в `ImportWizard`
+  // импорта плана: возврат на вкладку не повторяет запрос.
+  const [previewCache, setPreviewCache] = useState<Record<string, RemainderPreviewResponse>>({});
+  const [previewLoadingKeys, setPreviewLoadingKeys] = useState<Record<string, boolean>>({});
+  // Последнее показанное превью листа: пока грузится новый фильтр, таблица
+  // остаётся на экране вместе с полем поиска и его фокусом (ADR-0060 п.1).
+  const [lastPreviewBySheet, setLastPreviewBySheet] = useState<Record<number, RemainderPreviewResponse>>({});
+  const [sheetsLoading, setSheetsLoading] = useState(false);
   const [rowSelection, setRowSelection] = useState("");
   const [clearExisting, setClearExisting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebouncedValue(searchQuery);
   const [filterStatus, setFilterStatus] = useState<"all" | "invalid">("all");
-  const [targetSectionOverrides, setTargetSectionOverrides] = useState<Record<number, number>>({});
-  const [qualityStateOverrides, setQualityStateOverrides] = useState<Record<number, QualityState>>({});
+  // Оверрайды живут по листам: номер строки в разных листах — разные строки,
+  // и общая карта при переключении вкладки переписала бы чужой лист.
+  const [targetSectionOverridesBySheet, setTargetSectionOverridesBySheet] = useState<
+    Record<number, Record<number, number>>
+  >({});
+  const [qualityStateOverridesBySheet, setQualityStateOverridesBySheet] = useState<
+    Record<number, Record<number, QualityState>>
+  >({});
+  const targetSectionOverrides = targetSectionOverridesBySheet[selectedSheet] ?? EMPTY_SECTION_OVERRIDES;
+  const qualityStateOverrides =
+    qualityStateOverridesBySheet[selectedSheet] ?? EMPTY_QUALITY_OVERRIDES;
   const {
     bindColumn,
     columnFilters,
@@ -368,27 +437,79 @@ export function ImportRemaindersDialog({
     [applySort, resetPage],
   );
 
-  const [previewData, setPreviewData] = useState<RemainderPreviewResponse | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ imported_count: number; errors: string[] } | null>(null);
+  const [multiOutcomes, setMultiOutcomes] = useState<MultiSheetOutcome[] | null>(null);
+  const [multiRunning, setMultiRunning] = useState(false);
 
   const expansion = useImportRowExpansion();
   const { toggleRow, isRowExpanded, resetExpansion } = expansion;
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Preview request identity and per-sheet cache ──────────────────────
+  // Параметры без `location_id`: ключ кэша не должен зависеть от участка,
+  // который сам берётся из ответа предпросмотра.
+  const previewParams = useMemo(
+    () => ({
+      sheet_index: selectedSheet,
+      row_selection: rowSelection || undefined,
+      search: debouncedSearch.trim() || undefined,
+      filter_status: filterStatus,
+      sort,
+      limit,
+      offset,
+      ...columnApiParams,
+    }),
+    [
+      selectedSheet,
+      rowSelection,
+      debouncedSearch,
+      filterStatus,
+      sort,
+      limit,
+      offset,
+      columnApiParams,
+    ],
+  );
+
+  const previewKey = useMemo(
+    () => buildPreviewCacheKey(selectedSheet, previewParams),
+    [selectedSheet, previewParams],
+  );
+  const previewData = previewCache[previewKey] ?? null;
+  const previewLoading = Boolean(previewLoadingKeys[previewKey]);
+
+  // Пока грузится новый фильтр того же листа, на экране остаётся его прежнее
+  // превью: иначе поле поиска размонтировалось бы и потеряло фокус (ADR-0060).
+  const shownPreview = previewData ?? lastPreviewBySheet[selectedSheet] ?? null;
+
+  useEffect(() => {
+    if (!previewData) return;
+    setLastPreviewBySheet((prev) =>
+      prev[selectedSheet] === previewData ? prev : { ...prev, [selectedSheet]: previewData },
+    );
+  }, [previewData, selectedSheet]);
+
   // ── Resolve location id for API (из файла, per-row override или первая валидная строка) ──
   const resolveImportLocationId = useMemo((): number | null => {
-    if (!previewData?.section_meta) return null;
-    const firstResolved = previewData.section_meta.find(
+    if (!shownPreview?.section_meta) return null;
+    const firstResolved = shownPreview.section_meta.find(
       (row) =>
         row.status === "valid" &&
         getEffectiveSectionIdFromMeta(row, targetSectionOverrides) != null,
     );
     if (!firstResolved) return null;
     return getEffectiveSectionIdFromMeta(firstResolved, targetSectionOverrides);
-  }, [previewData?.section_meta, targetSectionOverrides]);
+  }, [shownPreview, targetSectionOverrides]);
+
+  const resetPreviewState = useCallback(() => {
+    setSheetTabs([]);
+    setSelectedSheet(0);
+    setPreviewCache({});
+    setPreviewLoadingKeys({});
+    setLastPreviewBySheet({});
+  }, []);
 
   // ── Reset state when dialog opens ─────────────────────────────────────
   useEffect(() => {
@@ -397,25 +518,23 @@ export function ImportRemaindersDialog({
       setImportMode("file");
       setFile(null);
       setClipboardText("");
-      setSheets([]);
-      setSelectedSheet(0);
+      resetPreviewState();
       setRowSelection("");
       setClearExisting(false);
       resetExpansion();
       setSearchQuery("");
       setFilterStatus("all");
       resetPage();
-      setTargetSectionOverrides({});
-      setQualityStateOverrides({});
+      setTargetSectionOverridesBySheet({});
+      setQualityStateOverridesBySheet({});
       setSortConfigs([]);
       resetColumnFilters();
-      setPreviewData(null);
       setError(null);
       setResult(null);
+      setMultiOutcomes(null);
+      setMultiRunning(false);
     }
-  }, [open, resetExpansion, resetColumnFilters, resetPage]);
-
-
+  }, [open, resetExpansion, resetColumnFilters, resetPage, resetPreviewState]);
 
   const getImportSource = (): RemainderImportSource | null => {
     if (importMode === "file" && file) {
@@ -429,27 +548,10 @@ export function ImportRemaindersDialog({
 
   const previewQueryOptions = useMemo(
     () => ({
+      ...previewParams,
       location_id: resolveImportLocationId ?? undefined,
-      sheet_index: selectedSheet,
-      row_selection: rowSelection || undefined,
-      search: debouncedSearch.trim() || undefined,
-      filter_status: filterStatus,
-      sort,
-      limit,
-      offset,
-      ...columnApiParams,
     }),
-    [
-      resolveImportLocationId,
-      selectedSheet,
-      rowSelection,
-      debouncedSearch,
-      filterStatus,
-      sort,
-      limit,
-      offset,
-      columnApiParams,
-    ],
+    [previewParams, resolveImportLocationId],
   );
 
   // ── Load preview when relevant params change ──────────────────────────
@@ -457,21 +559,22 @@ export function ImportRemaindersDialog({
     if (step !== "preview" || !getImportSource()) return;
     loadPreview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, importMode, file, clipboardText, previewQueryOptions]);
+  }, [step, importMode, file, clipboardText, previewKey, previewQueryOptions]);
 
   const loadPreview = async () => {
     const source = getImportSource();
     if (!source) return;
-    setPreviewLoading(true);
+    const key = buildPreviewCacheKey(selectedSheet, previewParams);
+    if (previewCache[key] || previewLoadingKeys[key]) return;
+    setPreviewLoadingKeys((prev) => ({ ...prev, [key]: true }));
     setError(null);
     try {
       const data = await previewRemaindersExcel(source, previewQueryOptions);
-      setPreviewData(data);
+      setPreviewCache((prev) => ({ ...prev, [key]: data }));
     } catch (err: unknown) {
       setError(getErrorMessage(err) || "Не удалось загрузить предварительный просмотр листа.");
-      setPreviewData(null);
     } finally {
-      setPreviewLoading(false);
+      setPreviewLoadingKeys((prev) => ({ ...prev, [key]: false }));
     }
   };
 
@@ -483,17 +586,25 @@ export function ImportRemaindersDialog({
       setClipboardText("");
       setFile(selectedFile);
       setError(null);
-      setPreviewLoading(true);
+      // Новый файл — новое решение об очистке: прежняя галочка относилась к
+      // другому складу и к другому набору листов.
+      setClearExisting(false);
+      resetPreviewState();
+      setSheetsLoading(true);
       try {
-        const sheetNames = await getExcelSheetNames(selectedFile);
-        setSheets(sheetNames);
-        setSelectedSheet(0);
+        const fileSheets = await getRemainderSheets(selectedFile);
+        setSheetTabs(fileSheets);
+        // По умолчанию — первый лист ОСВ: он и есть режим «Остатки из 1С»
+        // (спека §9). Если ОСВ в файле нет, показываем первый лист как есть.
+        const defaultSheet =
+          fileSheets.find((sheet) => sheet.kind === "1c_osv") ?? fileSheets[0] ?? null;
+        setSelectedSheet(defaultSheet?.index ?? 0);
         setStep("preview");
       } catch (err: unknown) {
         setError(getErrorMessage(err) || "Ошибка при чтении структуры Excel-файла");
         setFile(null);
       } finally {
-        setPreviewLoading(false);
+        setSheetsLoading(false);
       }
     }
   };
@@ -504,14 +615,24 @@ export function ImportRemaindersDialog({
     setImportMode("clipboard");
     setClipboardText(trimmed);
     setFile(null);
-    setSheets(["Буфер обмена"]);
+    setClearExisting(false);
+    resetPreviewState();
+    setSheetTabs([
+      {
+        index: 0,
+        name: "Буфер обмена",
+        kind: "manual_template",
+        detected_section_id: null,
+        detected_section_name: null,
+      },
+    ]);
     setSelectedSheet(0);
     setError(null);
     setFilterStatus("all");
     setSearchQuery("");
     resetPage();
     setStep("preview");
-  }, [resetPage]);
+  }, [resetPage, resetPreviewState]);
 
   useImportClipboardPaste({
     enabled: open && step === "upload",
@@ -604,43 +725,43 @@ export function ImportRemaindersDialog({
   };
 
   const handleRowSectionChange = (rowNumber: number, sectionId: number | null) => {
-    setTargetSectionOverrides((prev) => {
-      const next = { ...prev };
+    setTargetSectionOverridesBySheet((prev) => {
+      const current = prev[selectedSheet] ?? EMPTY_SECTION_OVERRIDES;
+      const next = { ...current };
       if (sectionId == null) {
         delete next[rowNumber];
       } else {
         next[rowNumber] = sectionId;
       }
-      return next;
+      return { ...prev, [selectedSheet]: next };
     });
   };
 
   const handleRowQualityChange = (rowNumber: number, state: QualityState) => {
-    setQualityStateOverrides((prev) => {
-      const next = { ...prev };
-      next[rowNumber] = state;
-      return next;
+    setQualityStateOverridesBySheet((prev) => {
+      const current = prev[selectedSheet] ?? EMPTY_QUALITY_OVERRIDES;
+      return { ...prev, [selectedSheet]: { ...current, [rowNumber]: state } };
     });
   };
 
   const rowsMissingSection = useMemo(() => {
-    if (!previewData?.section_meta) return [];
-    return previewData.section_meta.filter(
+    if (!shownPreview?.section_meta) return [];
+    return shownPreview.section_meta.filter(
       (row) =>
         row.status === "valid" &&
         getEffectiveSectionIdFromMeta(row, targetSectionOverrides) == null,
     );
-  }, [previewData?.section_meta, targetSectionOverrides]);
+  }, [shownPreview, targetSectionOverrides]);
 
-  const previewItems = previewData?.items ?? [];
-  const previewItemsTotal = previewData?.items_total ?? 0;
+  const previewItems = shownPreview?.items ?? [];
+  const previewItemsTotal = shownPreview?.items_total ?? 0;
   const previewTotalPages = getTotalPages(previewItemsTotal);
 
   // Читатели значения колонок зависят от состояния диалога (переопределения
   // участка и качества, справочник участков), поэтому описание колонок с
   // читателями собирается здесь, а список значений — общим сборщиком из
-  // описания. Перебора полей вручную нет: девятая колонка не потребует правки
-  // ни здесь, ни в шапке (#322).
+  // описания. Перебора полей вручную нет: новая колонка не потребует правки
+  // ни здесь, ни в шапке (#322). Колонки без `filterField` читателя не получают.
   const previewColumns = useMemo(
     () =>
       remainderPreviewColumns.map((column) => {
@@ -667,30 +788,147 @@ export function ImportRemaindersDialog({
   );
 
   const stats = useMemo(() => {
-    if (!previewData) return { total: 0, valid: 0, invalid: 0, qty: 0 };
+    if (!shownPreview) return { total: 0, valid: 0, invalid: 0, qty: 0 };
     return {
-      total: previewData.summary.total,
-      valid: previewData.summary.valid,
-      invalid: previewData.summary.invalid,
-      qty: previewData.summary.quantity_total,
+      total: shownPreview.summary.total,
+      valid: shownPreview.summary.valid,
+      invalid: shownPreview.summary.invalid,
+      qty: shownPreview.summary.quantity_total,
     };
-  }, [previewData]);
+  }, [shownPreview]);
+
+  // Листы ОСВ файла: только они участвуют в «импортировать все листы».
+  const osvSheets = useMemo(
+    () => sheetTabs.filter((sheet) => sheet.kind === "1c_osv"),
+    [sheetTabs],
+  );
+  // Буфер обмена — один лист: мультилистовое действие к нему не относится.
+  const multiSheetImportAvailable = importMode === "file" && osvSheets.length > 0;
+  // Очистка склада несовместима ни с построчными участками, ни с импортом
+  // всех листов: она гасит остатки только одного склада (спека §9).
+  const clearExistingBlocked =
+    Object.keys(targetSectionOverrides).length > 0 || multiSheetImportAvailable;
 
   const canApplyImport = useMemo(() => {
     if (previewLoading || importMutation.isPending) return false;
-    if (!previewData || stats.total === 0) return false;
+    if (!shownPreview || stats.total === 0) return false;
     if (rowsMissingSection.length > 0) return false;
     return resolveImportLocationId != null;
   }, [
     previewLoading,
     importMutation.isPending,
-    previewData,
+    shownPreview,
     stats.total,
     rowsMissingSection.length,
     resolveImportLocationId,
   ]);
 
-  const previewStatsBadges = previewData
+  /**
+   * Импорт всех листов ОСВ: предпросмотр листа → применение листа, по одному
+   * батчу истории на лист (спека §9).
+   *
+   * Останавливается на первом же ошибочном листе: применённые листы уже
+   * изменили остатки, и продолжать «через ошибку» значило бы оставить склад
+   * наполовину залитым без объяснения. `clear_existing` не отправляется
+   * никогда: очистка одного склада погасила бы остатки другого.
+   */
+  const handleApplyAllOsv = async () => {
+    const source = getImportSource();
+    if (!source || source.kind !== "file" || osvSheets.length === 0 || multiRunning) return;
+    setError(null);
+    setMultiOutcomes(null);
+    setMultiRunning(true);
+    const outcomes: MultiSheetOutcome[] = [];
+    for (const sheet of osvSheets) {
+      try {
+        const preview = await previewRemaindersExcel(source, {
+          sheet_index: sheet.index,
+          limit: 1,
+          offset: 0,
+        });
+        const sectionId = preview.detected_section_id ?? sheet.detected_section_id;
+        const sectionName = preview.detected_section_name ?? sheet.detected_section_name;
+        if (sectionId == null) {
+          outcomes.push({
+            sheetIndex: sheet.index,
+            sheetName: sheet.name,
+            sectionId: null,
+            sectionName,
+            status: "failed",
+            imported: 0,
+            skipped: preview.summary.total,
+            errors: [],
+            error: "Не удалось определить участок листа — импорт остановлен",
+          });
+          break;
+        }
+        const qualityOverrides = qualityStateOverridesBySheet[sheet.index];
+        const targetOverrides = targetSectionOverridesBySheet[sheet.index];
+        const response = await importRemaindersExcel(sectionId, source, {
+          sheet_index: sheet.index,
+          skip_invalid: true,
+          clear_existing: false,
+          target_section_overrides:
+            targetOverrides && Object.keys(targetOverrides).length > 0
+              ? targetOverrides
+              : undefined,
+          quality_state_overrides:
+            qualityOverrides && Object.keys(qualityOverrides).length > 0
+              ? qualityOverrides
+              : undefined,
+        });
+        if (!response.success) {
+          outcomes.push({
+            sheetIndex: sheet.index,
+            sheetName: sheet.name,
+            sectionId,
+            sectionName,
+            status: "failed",
+            imported: 0,
+            skipped: preview.summary.total,
+            errors: response.errors,
+            error: "Импорт листа отклонён сервером",
+          });
+          break;
+        }
+        outcomes.push({
+          sheetIndex: sheet.index,
+          sheetName: sheet.name,
+          sectionId,
+          sectionName,
+          status: "applied",
+          imported: response.imported_count,
+          // Пропущено = всё, что лист не залил: невалидные строки и всё, что
+          // сервер отклонил при `skip_invalid`.
+          skipped: Math.max(0, preview.summary.total - response.imported_count),
+          errors: response.errors,
+          error: null,
+        });
+      } catch (err: unknown) {
+        outcomes.push({
+          sheetIndex: sheet.index,
+          sheetName: sheet.name,
+          sectionId: sheet.detected_section_id,
+          sectionName: sheet.detected_section_name,
+          status: "failed",
+          imported: 0,
+          skipped: 0,
+          errors: [],
+          error: getErrorMessage(err) || "Не удалось применить лист",
+        });
+        break;
+      }
+    }
+    setMultiOutcomes(outcomes);
+    setMultiRunning(false);
+    if (outcomes.some((outcome) => outcome.status === "applied")) {
+      void invalidateAfter(queryClient, "stockChanged");
+      onSaved();
+    }
+    setStep("result");
+  };
+
+  const previewStatsBadges = shownPreview
     ? [
         { label: `Всего: ${stats.total}` },
         {
@@ -827,7 +1065,7 @@ export function ImportRemaindersDialog({
                     inputRef={fileInputRef}
                     onFileChange={handleFileChange}
                     accept=".xlsx,.xls"
-                    disabled={previewLoading}
+                    disabled={sheetsLoading}
                   />
                 </div>
 
@@ -932,9 +1170,15 @@ export function ImportRemaindersDialog({
                 left={
                   <>
                     <ImportPreview.SheetTabs
-                      sheets={sheets}
-                      selectedIndex={selectedSheet}
-                      onSelect={setSelectedSheet}
+                      sheets={sheetTabs.map(sheetTabLabel)}
+                      selectedIndex={Math.max(
+                        0,
+                        sheetTabs.findIndex((sheet) => sheet.index === selectedSheet),
+                      )}
+                      onSelect={(position) => {
+                        const sheet = sheetTabs[position];
+                        if (sheet) setSelectedSheet(sheet.index);
+                      }}
                       disabled={importMode === "clipboard"}
                       label={importMode === "clipboard" ? "Источник" : "Лист"}
                     />
@@ -949,24 +1193,35 @@ export function ImportRemaindersDialog({
                     </div>
                     <label
                       className={`flex items-center gap-1 font-medium select-none ${
-                        Object.keys(targetSectionOverrides).length > 0
+                        clearExistingBlocked
                           ? "cursor-not-allowed opacity-50"
                           : "cursor-pointer"
                       }`}
+                      title={
+                        multiSheetImportAvailable
+                          ? "Очистка одного склада не должна гасить остатки другого — при импорте всех листов ОСВ она недоступна"
+                          : undefined
+                      }
                     >
                       <input
                         type="checkbox"
                         checked={clearExisting}
-                        disabled={Object.keys(targetSectionOverrides).length > 0}
+                        disabled={clearExistingBlocked}
                         onChange={(e) => setClearExisting(e.target.checked)}
                         className="h-3 w-3 rounded-sm border-input text-primary focus:ring-primary"
                       />
                       <span className="text-destructive font-semibold">Очистить перед импортом</span>
                     </label>
+                    {multiSheetImportAvailable ? (
+                      <span className="text-[10px] text-muted-foreground leading-snug max-w-[220px]">
+                        Очистка перед импортом недоступна для файла с листами ОСВ: каждый
+                        лист заливается на свой склад.
+                      </span>
+                    ) : null}
                   </>
                 }
                 right={
-                  previewData ? (
+                  shownPreview ? (
                     <div className="flex flex-wrap items-center justify-end gap-1 text-[11px] font-semibold">
                       {previewStatsBadges.map((badge, idx) => (
                         <Badge
@@ -985,18 +1240,18 @@ export function ImportRemaindersDialog({
               {importMode === "clipboard" && clipboardText ? (
                 <ImportUpload.ClipboardBanner
                   text={clipboardText}
-                  invalidCount={previewData ? stats.invalid : 0}
-                  totalCount={previewData ? stats.total : 0}
+                  invalidCount={shownPreview ? stats.invalid : 0}
+                  totalCount={shownPreview ? stats.total : 0}
                 />
               ) : null}
 
-              {previewData ? (
+              {shownPreview ? (
                 <ImportPreview.FilterRow
                   className="shrink-0"
                   search={searchQuery}
                   onSearchChange={setSearchQuery}
-                  searchPlaceholder="Поиск по SKU..."
-                  searchClassName="h-6 pl-6 w-36 text-[11px]"
+                  searchPlaceholder="Код 1С, артикул или наименование…"
+                  searchClassName="h-6 pl-6 w-56 text-[11px]"
                   filterSlot={
                     <Select
                       value={filterStatus}
@@ -1029,10 +1284,10 @@ export function ImportRemaindersDialog({
                 // Спиннер — только пока предпросмотра на экране не было ни
                 // разу: перечитывание по фильтру не должно уносить таблицу
                 // вместе с открытым поповером и набранным текстом (ADR-0044).
-                loading={previewLoading && !previewData}
-                isEmpty={previewData !== null && previewItems.length === 0}
+                loading={previewLoading && !shownPreview}
+                isEmpty={shownPreview !== null && previewItems.length === 0}
                 emptyContent={
-                  previewData && previewItemsTotal > 0 ? (
+                  shownPreview && previewItemsTotal > 0 ? (
                     <span>Нет строк по текущему фильтру или поиску.</span>
                   ) : importMode === "clipboard" && clipboardText ? (
                     <span className="max-w-md leading-relaxed">
@@ -1091,6 +1346,9 @@ export function ImportRemaindersDialog({
                               <td className="px-1.5 py-0.5 text-left font-bold text-muted-foreground tabular-nums">
                                 {item.source_row_number}
                               </td>
+                              <td className="px-1.5 py-0.5 font-mono tabular-nums whitespace-nowrap">
+                                {item.source_code ?? "—"}
+                              </td>
                               <td
                                 className="px-1.5 py-0.5 font-mono font-semibold"
                                 title={item.matched_sku && item.matched_sku !== item.sku ? `Найден SKU: ${item.matched_sku}` : undefined}
@@ -1100,8 +1358,17 @@ export function ImportRemaindersDialog({
                                   <span className="ml-1 font-sans font-normal text-amber-700">→ {item.matched_sku}</span>
                                 ) : null}
                               </td>
-                              <td className="px-1.5 py-0.5 font-semibold text-foreground tabular-nums">
-                                {item.quantity != null ? item.quantity : "—"}
+                              <td
+                                className={`px-1.5 py-0.5 ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
+                                title={item.source_name ?? undefined}
+                              >
+                                {item.product_name ?? "—"}
+                              </td>
+                              <td className="px-1.5 py-0.5 font-semibold text-foreground tabular-nums text-right">
+                                {fmtQty(item.quantity)}
+                              </td>
+                              <td className="px-1.5 py-0.5 tabular-nums whitespace-nowrap text-right">
+                                {fmtQtyPrecise(item.source_quantity_m)}
                               </td>
                               <td
                                 className={`px-1.5 py-0.5 tabular-nums whitespace-nowrap ${
@@ -1187,7 +1454,12 @@ export function ImportRemaindersDialog({
                               <TableCornerResetCell />
                             </tr>
                             {isExpanded && hasRaw ? (
-                              <ImportRawRows.Detail colSpan={11} values={item.raw_values} />
+                              // Шеврон + все колонки + ячейка сброса фильтров:
+                              // детализация должна растягиваться на всю ширину.
+                              <ImportRawRows.Detail
+                                colSpan={remainderPreviewColumns.length + 2}
+                                values={item.raw_values}
+                              />
                             ) : null}
                           </Fragment>
                         );
@@ -1196,7 +1468,7 @@ export function ImportRemaindersDialog({
                   </table>
               </ImportPreview.TableFrame>
 
-              {previewData && previewItemsTotal > 0 ? (
+              {shownPreview && previewItemsTotal > 0 ? (
                 <TablePaginationFooter
                   page={page}
                   totalPages={previewTotalPages}
@@ -1212,7 +1484,73 @@ export function ImportRemaindersDialog({
           )}
 
           {/* ═══════════════════════ RESULT STEP ════════════════════════ */}
-          {step === "result" && result && (
+          {step === "result" && multiOutcomes && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="h-5 w-5 text-emerald-600" />
+                <h3 className="text-base font-semibold text-foreground">
+                  Импорт всех листов ОСВ
+                </h3>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Применено листов:{" "}
+                {multiOutcomes.filter((outcome) => outcome.status === "applied").length} из{" "}
+                {osvSheets.length}. Каждый лист — отдельный батч истории.
+              </p>
+
+              {multiOutcomes.some((outcome) => outcome.status === "failed") ? (
+                <p className="text-xs text-destructive">
+                  Импорт остановлен на листе «
+                  {multiOutcomes.find((outcome) => outcome.status === "failed")?.sheetName}».
+                  Следующие листы не применены.
+                </p>
+              ) : null}
+
+              <div className="border border-border rounded-lg overflow-x-auto">
+                <table className="w-full text-[11px] text-left border-collapse">
+                  <thead>
+                    <tr>
+                      <th className={headerCellClass}>Лист</th>
+                      <th className={headerCellClass}>Участок</th>
+                      <th className={headerCellClass}>Импортировано</th>
+                      <th className={headerCellClass}>Пропущено</th>
+                      <th className={headerCellClass}>Ошибки</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {multiOutcomes.map((outcome) => (
+                      <tr
+                        key={outcome.sheetIndex}
+                        className={`border-b last:border-0 ${
+                          outcome.status === "failed" ? "bg-red-50/50 dark:bg-red-950/5" : ""
+                        }`}
+                      >
+                        <td className="px-1.5 py-1 font-medium">{outcome.sheetName}</td>
+                        <td className="px-1.5 py-1">{outcome.sectionName ?? "—"}</td>
+                        <td className="px-1.5 py-1 tabular-nums">{outcome.imported}</td>
+                        <td className="px-1.5 py-1 tabular-nums">{outcome.skipped}</td>
+                        <td
+                          className={`px-1.5 py-1 leading-snug ${
+                            outcome.status === "failed"
+                              ? "text-destructive font-medium"
+                              : "text-muted-foreground"
+                          }`}
+                        >
+                          {outcome.error ??
+                            (outcome.errors.length > 0
+                              ? outcome.errors.map(translateImportError).join(", ")
+                              : "—")}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {step === "result" && !multiOutcomes && result && (
             <div className="text-center py-6 space-y-4">
               <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-950/30 text-emerald-600 mb-2">
                 <CheckCircle className="h-7 w-7" />
@@ -1263,21 +1601,38 @@ export function ImportRemaindersDialog({
                   setImportMode("file");
                   setFile(null);
                   setClipboardText("");
-                  setSheets([]);
-                  setPreviewData(null);
+                  resetPreviewState();
                   setError(null);
                 }}
-                disabled={previewLoading || importMutation.isPending}
+                disabled={previewLoading || importMutation.isPending || multiRunning}
               >
                 Назад
               </Button>
+
+              {multiSheetImportAvailable && !clearExisting ? (
+                <Button
+                  variant="outline"
+                  onClick={() => void handleApplyAllOsv()}
+                  disabled={previewLoading || importMutation.isPending || multiRunning}
+                  title="Применить каждый лист ОСВ на его склад, по одному батчу на лист"
+                >
+                  {multiRunning ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
+                      Импорт листов…
+                    </>
+                  ) : (
+                    `Импортировать все листы ОСВ (${osvSheets.length})`
+                  )}
+                </Button>
+              ) : null}
 
               {stats.invalid > 0 ? (
                 <>
                   <Button
                     variant="outline"
                     onClick={() => handleApply(false)}
-                    disabled={previewLoading || importMutation.isPending}
+                    disabled={previewLoading || importMutation.isPending || multiRunning}
                     className="border-destructive hover:bg-destructive/10 text-destructive"
                   >
                     {importMutation.isPending ? (

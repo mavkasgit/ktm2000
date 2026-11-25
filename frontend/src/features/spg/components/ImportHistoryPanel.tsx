@@ -47,7 +47,7 @@ import {
 } from "@/shared/api/stockImportHistory";
 import { saveBlobAsFile } from "@/shared/lib/downloadFile";
 import { usePermission } from "@/entities/auth";
-import { fmtQty } from "@/shared/lib/quantityFormat";
+import { fmtQty, fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import {
   formatCompletedOperationsLabel,
   getRemainderImportOperations,
@@ -464,8 +464,10 @@ function ImportBatchDetailDialog({
                 <thead>
                   <tr>
                     <th className={HEADER_CELL}>Строка</th>
+                    <th className={HEADER_CELL}>Код 1С</th>
                     <th className={HEADER_CELL}>Артикул</th>
                     <th className={HEADER_CELL}>Кол-во</th>
+                    <th className={HEADER_CELL}>Метры</th>
                     <th className={HEADER_CELL}>Размер</th>
                     <th className={HEADER_CELL}>Склад</th>
                     <th className={HEADER_CELL}>Операции</th>
@@ -483,6 +485,9 @@ function ImportBatchDetailDialog({
                       <td className={cn(CELL, "text-muted-foreground tabular-nums")}>
                         {row.source_row_number}
                       </td>
+                      <td className={cn(CELL, "font-mono tabular-nums whitespace-nowrap")}>
+                        {row.source_code ?? "—"}
+                      </td>
                       <td className={cn(CELL, "font-medium")}>
                         {row.product_sku ?? row.sku}
                         {row.matched_sku && row.matched_sku !== row.sku && (
@@ -492,6 +497,9 @@ function ImportBatchDetailDialog({
                         )}
                       </td>
                       <td className={cn(CELL, "tabular-nums")}>{fmtQty(row.quantity)}</td>
+                      <td className={cn(CELL, "tabular-nums whitespace-nowrap")}>
+                        {fmtQtyPrecise(row.source_quantity_m)}
+                      </td>
                       <td className={CELL}>{row.dimensions_label}</td>
                       <td className={CELL}>{row.target_section_name ?? "—"}</td>
                       <td className={cn(CELL, "text-muted-foreground")}>

@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import type { Section } from "@/shared/api/sections";
-import type { ImportOperationStep, RemainderImportItem } from "@/shared/api/stock";
+import type { ImportOperationStep } from "@/shared/api/stock";
 
 // Мокаем API-слой: диалог обязан брать участки и операции из справочников,
 // а не из литералов в коде.
@@ -18,13 +18,24 @@ vi.mock("@/shared/api/sections", async (importOriginal) => ({
 vi.mock("@/shared/api/stock", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/shared/api/stock")>()),
   getRemainderImportOperations: vi.fn(),
+  getRemainderSheets: vi.fn(),
+  previewRemaindersExcel: vi.fn(),
+  importRemaindersExcel: vi.fn(),
 }));
 
+import { fireEvent, screen, within } from "@testing-library/react";
 import { listSections } from "@/shared/api/sections";
 import {
   getRemainderImportOperations,
+  getRemainderSheets,
+  importRemaindersExcel,
+  previewRemaindersExcel,
   OPERATIONS_EMPTY_LABEL,
   OPERATIONS_NOT_RECORDED_LABEL,
+  type RemainderImportItem,
+  type RemainderImportResponse,
+  type RemainderPreviewResponse,
+  type RemainderSheet,
 } from "@/shared/api/stock";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import { remainderPreviewColumns } from "../lib/remainderPreviewColumns";
@@ -145,12 +156,92 @@ describe("ImportRemaindersDialog", () => {
   });
 });
 
+const makeSheet = (overrides: Partial<RemainderSheet>): RemainderSheet => ({
+  index: 0,
+  name: "Лист",
+  kind: "unknown",
+  detected_section_id: null,
+  detected_section_name: null,
+  ...overrides,
+});
+
+const makePreview = (
+  overrides: Partial<RemainderPreviewResponse> = {},
+): RemainderPreviewResponse => ({
+  sheet_name: "Лист",
+  source_kind: "manual_template",
+  detected_section_id: null,
+  detected_section_name: null,
+  total_rows: 0,
+  summary: { total: 0, valid: 0, invalid: 0, quantity_total: 0 },
+  section_meta: [],
+  items: [],
+  items_total: 0,
+  limit: 50,
+  offset: 0,
+  ...overrides,
+});
+
+const makeImportResponse = (
+  overrides: Partial<RemainderImportResponse> = {},
+): RemainderImportResponse => ({
+  success: true,
+  imported_count: 0,
+  errors: [],
+  transaction_ids: [],
+  ...overrides,
+});
+
+/** Выбрать файл в дропзоне — так же, как это делает оператор. */
+async function selectFile(name = "остатки.xlsx") {
+  // Дропзона появляется только после справочников участков и операций.
+  await vi.waitFor(() => {
+    expect(document.querySelector('input[type="file"]')).toBeTruthy();
+  });
+  const input = document.querySelector('input[type="file"]');
+  if (!(input instanceof HTMLInputElement)) throw new Error("В диалоге нет поля файла");
+  await act(async () => {
+    fireEvent.change(input, { target: { files: [new File(["x"], name)] } });
+  });
+}
+
+/**
+ * Предпросмотр листа, у которого есть участок в шапке: так отвечает сервер на
+ * ОСВ-лист (спека §5.2).
+ */
+function osvPreview(sheetIndex: number, sectionId: number, sectionName: string) {
+  const detection = {
+    source_kind: "1c_osv" as const,
+    detected_section_id: sectionId,
+    detected_section_name: sectionName,
+    summary: { total: 1, valid: 1, invalid: 0, quantity_total: 10 },
+    section_meta: [
+      { source_row_number: 2, status: "valid" as const, target_section_id: sectionId, target_section_name: sectionName },
+    ],
+    items: [
+      makeImportItem({
+        source_row_number: 2,
+        source_code: `код-${sheetIndex}`,
+        target_section_id: sectionId,
+        target_section_name: sectionName,
+      }),
+    ],
+    items_total: 1,
+    total_rows: 1,
+  };
+  return makePreview(detection);
+}
+
 const makeImportItem = (overrides: Partial<RemainderImportItem>): RemainderImportItem => ({
   source_row_number: 2,
   sku: "OPS-1",
   product_id: null,
   product_name: null,
   quantity: 10,
+  source_code: null,
+  source_name: null,
+  source_unit: null,
+  source_quantity_m: null,
   comment: null,
   status: "valid",
   errors: [],
@@ -237,5 +328,378 @@ describe("подпись «Операции» в предпросмотре им
         remainderPreviewColumns,
       ),
     ).toEqual({ operations: OPERATIONS_NOT_RECORDED_LABEL });
+  });
+});
+
+describe("вкладки листов файла остатков", () => {
+  it("показывает все листы с типом и выбирает первый лист ОСВ", async () => {
+    vi.mocked(listSections).mockResolvedValue([
+      makeSection({ id: 11, code: "RAW", name: "Зона Альфа", sort_order: 10 }),
+      makeSection({ id: 12, code: "PREP", name: "Зона Бета", sort_order: 20 }),
+    ]);
+    vi.mocked(getRemainderImportOperations).mockResolvedValue([]);
+    vi.mocked(getRemainderSheets).mockResolvedValue([
+      makeSheet({ index: 0, name: "Импорт остатков", kind: "manual_template" }),
+      makeSheet({
+        index: 1,
+        name: "Склад сырой",
+        kind: "1c_osv",
+        detected_section_id: 11,
+        detected_section_name: "Зона Альфа",
+      }),
+      makeSheet({
+        index: 2,
+        name: "Дробь",
+        kind: "1c_osv",
+        detected_section_id: 12,
+        detected_section_name: "Зона Бета",
+      }),
+      makeSheet({ index: 3, name: "Служебный", kind: "unknown" }),
+    ]);
+    vi.mocked(previewRemaindersExcel).mockResolvedValue(osvPreview(1, 11, "Зона Альфа"));
+
+    const { cleanup } = mountDialog();
+    try {
+      await selectFile();
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("Склад сырой · ОСВ 1С");
+      });
+      const text = document.body.textContent ?? "";
+
+      // Вкладки — все листы файла, подпись несёт тип листа (спека §9).
+      expect(text).toContain("Импорт остатков · шаблон");
+      expect(text).toContain("Дробь · ОСВ 1С");
+      expect(text).toContain("Служебный · неизвестно");
+      // Выбор по умолчанию — первый лист ОСВ, а не первый лист файла.
+      await vi.waitFor(() => {
+        expect(previewRemaindersExcel).toHaveBeenCalled();
+      });
+      expect(vi.mocked(previewRemaindersExcel).mock.calls.at(-1)?.[1]?.sheet_index).toBe(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("предпросмотр кэшируется по листу: возврат на вкладку не повторяет запрос", async () => {
+    vi.mocked(listSections).mockResolvedValue([
+      makeSection({ id: 11, code: "RAW", name: "Зона Альфа" }),
+    ]);
+    vi.mocked(getRemainderImportOperations).mockResolvedValue([]);
+    vi.mocked(getRemainderSheets).mockResolvedValue([
+      makeSheet({ index: 0, name: "Импорт остатков", kind: "manual_template" }),
+      makeSheet({ index: 1, name: "Склад сырой", kind: "1c_osv", detected_section_id: 11 }),
+    ]);
+    vi.mocked(previewRemaindersExcel).mockImplementation(async (_source, opts) =>
+      opts?.sheet_index === 1 ? osvPreview(1, 11, "Зона Альфа") : makePreview({ sheet_name: "Импорт остатков" }),
+    );
+
+    const { cleanup } = mountDialog();
+    try {
+      await selectFile();
+      await vi.waitFor(() => {
+        expect(screen.getByRole("button", { name: "Импорт остатков · шаблон" })).toBeTruthy();
+      });
+      await vi.waitFor(() => {
+        expect(previewRemaindersExcel).toHaveBeenCalledTimes(1);
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Импорт остатков · шаблон" }));
+      });
+      await vi.waitFor(() => {
+        expect(previewRemaindersExcel).toHaveBeenCalledTimes(2);
+      });
+
+      // Возврат на уже загруженный лист берёт кэш, а не новый запрос.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Склад сырой · ОСВ 1С" }));
+      });
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("Склад сырой");
+      });
+      expect(previewRemaindersExcel).toHaveBeenCalledTimes(2);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("колонки предпросмотра ОСВ", () => {
+  it("печатает код 1С, наименование и метры, а шапка совпадает с телом", async () => {
+    vi.mocked(listSections).mockResolvedValue([
+      makeSection({ id: 11, code: "RAW", name: "Зона Альфа" }),
+    ]);
+    vi.mocked(getRemainderImportOperations).mockResolvedValue([]);
+    vi.mocked(getRemainderSheets).mockResolvedValue([
+      makeSheet({ index: 0, name: "Склад сырой", kind: "1c_osv", detected_section_id: 11 }),
+    ]);
+    vi.mocked(previewRemaindersExcel).mockResolvedValue(
+      makePreview({
+        sheet_name: "Склад сырой",
+        source_kind: "1c_osv",
+        detected_section_id: 11,
+        detected_section_name: "Зона Альфа",
+        total_rows: 1,
+        summary: { total: 1, valid: 1, invalid: 0, quantity_total: 2367 },
+        items_total: 1,
+        items: [
+          makeImportItem({
+            source_row_number: 2,
+            source_code: "20933",
+            source_name: "Кант универсальный 26мм 2,70м (ЮП-2616) алюминий",
+            source_unit: "м",
+            source_quantity_m: 6391.5,
+            product_name: "Кант универсальный 26мм",
+            quantity: 2367,
+            dimensions: { length_mm: 2700 },
+            dimensions_label: "2,7 м",
+            target_section_id: 11,
+            target_section_name: "Зона Альфа",
+          }),
+        ],
+      }),
+    );
+
+    const { cleanup } = mountDialog();
+    try {
+      await selectFile();
+      await vi.waitFor(() => {
+        expect(screen.getAllByRole("columnheader").some((cell) => cell.textContent === "Код 1С")).toBe(true);
+      });
+
+      const headers = screen.getAllByRole("columnheader");
+      // Порядок спеки §10.1; пустые — шеврон строки и сброс фильтров.
+      const labels = headers.map((cell) => cell.textContent ?? "");
+      expect(labels.slice(1, -1)).toEqual([
+        "#",
+        "Код 1С",
+        "Артикул",
+        "Наименование",
+        "Кол-во, шт",
+        "Метры",
+        "Длина",
+        "Операции",
+        "Качество",
+        "Участок",
+        "Ошибки",
+      ]);
+
+      // Колонки источника не фильтруются и не сортируются: в шапке — подпись,
+      // а не кнопка попапера или сортировки (ADR-0038 §4).
+      for (const label of ["Код 1С", "Наименование", "Метры"]) {
+        const header = headers.find((cell) => cell.textContent === label);
+        expect(header, `шапка ${label}`).toBeTruthy();
+        expect(within(header!).queryByRole("button"), `кнопка в «${label}»`).toBeNull();
+      }
+
+      const bodyRow = screen.getAllByRole("row")[1];
+      const cells = within(bodyRow).getAllByRole("cell");
+      const byHeader = new Map(
+        labels.map((label, index) => [label, cells[index]?.textContent ?? ""]),
+      );
+      expect(byHeader.get("Код 1С")).toBe("20933");
+      expect(byHeader.get("Артикул")).toBe("OPS-1");
+      expect(byHeader.get("Наименование")).toBe("Кант универсальный 26мм");
+      // Штуки — fmtQty, метры — fmtQtyPrecise (дробь живая, спека §10.1).
+      expect(byHeader.get("Кол-во, шт")).toBe("2367");
+      expect(byHeader.get("Метры")).toBe("6391,5");
+      expect(byHeader.get("Длина")).toBe("2,7 м");
+
+      // Наименование 1С — в подсказке ячейки: в колонку оно не влезает.
+      const nameCell = cells[labels.indexOf("Наименование")];
+      expect(nameCell.getAttribute("title")).toBe(
+        "Кант универсальный 26мм 2,70м (ЮП-2616) алюминий",
+      );
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+/** Таблица результата как список строк по именам колонок. */
+function tableRowsByHeader(): Map<string, string>[] {
+  const rows = screen.getAllByRole("row");
+  const header = within(rows[0])
+    .getAllByRole("columnheader")
+    .map((cell) => cell.textContent ?? "");
+  return rows.slice(1).map(
+    (row) =>
+      new Map(
+        header.map((name, index) => [
+          name,
+          within(row).getAllByRole("cell")[index]?.textContent ?? "",
+        ]),
+      ),
+  );
+}
+
+describe("импорт всех листов ОСВ", () => {
+  const osvSheets = () => [
+    makeSheet({ index: 0, name: "Импорт остатков", kind: "manual_template" }),
+    makeSheet({
+      index: 1,
+      name: "Склад сырой",
+      kind: "1c_osv",
+      detected_section_id: 11,
+      detected_section_name: "Зона Альфа",
+    }),
+    makeSheet({
+      index: 2,
+      name: "Дробь",
+      kind: "1c_osv",
+      detected_section_id: 12,
+      detected_section_name: "Зона Бета",
+    }),
+  ];
+
+  const mockReferences = () => {
+    vi.mocked(listSections).mockResolvedValue([
+      makeSection({ id: 11, code: "RAW", name: "Зона Альфа", sort_order: 10 }),
+      makeSection({ id: 12, code: "PREP", name: "Зона Бета", sort_order: 20 }),
+    ]);
+    vi.mocked(getRemainderImportOperations).mockResolvedValue([]);
+  };
+
+  it("применяет листы последовательно и показывает сводку по листам", async () => {
+    mockReferences();
+    vi.mocked(getRemainderSheets).mockResolvedValue(osvSheets());
+    vi.mocked(previewRemaindersExcel).mockImplementation(async (_source, opts) =>
+      opts?.sheet_index === 2
+        ? makePreview({
+            sheet_name: "Дробь",
+            source_kind: "1c_osv",
+            detected_section_id: 12,
+            detected_section_name: "Зона Бета",
+            summary: { total: 4, valid: 3, invalid: 1, quantity_total: 3 },
+          })
+        : makePreview({
+            sheet_name: "Склад сырой",
+            source_kind: "1c_osv",
+            detected_section_id: 11,
+            detected_section_name: "Зона Альфа",
+            summary: { total: 6, valid: 5, invalid: 1, quantity_total: 5 },
+          }),
+    );
+    vi.mocked(importRemaindersExcel).mockImplementation(async (_locationId, _source, opts) =>
+      opts?.sheet_index === 1
+        ? makeImportResponse({ imported_count: 5 })
+        : makeImportResponse({
+            imported_count: 3,
+            errors: ["Строка 4: остаток меньше одной штуки"],
+          }),
+    );
+
+    const { cleanup } = mountDialog();
+    try {
+      await selectFile();
+      const button = await screen.findByRole("button", {
+        name: "Импортировать все листы ОСВ (2)",
+      });
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      await vi.waitFor(() => {
+        expect(screen.getAllByRole("columnheader").some((c) => c.textContent === "Импортировано")).toBe(true);
+      });
+
+      expect(importRemaindersExcel).toHaveBeenCalledTimes(2);
+      const calls = vi.mocked(importRemaindersExcel).mock.calls;
+      // Каждый лист — свой запрос: участок листа, его `sheet_index` и никогда
+      // не `clear_existing` (спека §9).
+      expect(calls[0][0]).toBe(11);
+      expect(calls[0][2]?.sheet_index).toBe(1);
+      expect(calls[1][0]).toBe(12);
+      expect(calls[1][2]?.sheet_index).toBe(2);
+      for (const call of calls) expect(call[2]?.clear_existing).not.toBe(true);
+      const order = vi.mocked(importRemaindersExcel).mock.invocationCallOrder;
+      expect(order[0]).toBeLessThan(order[1]);
+
+      const [first, second] = tableRowsByHeader();
+      expect(first.get("Лист")).toBe("Склад сырой");
+      expect(first.get("Участок")).toContain("Зона Альфа");
+      expect(first.get("Импортировано")).toBe("5");
+      expect(first.get("Пропущено")).toBe("1");
+      expect(second.get("Лист")).toBe("Дробь");
+      expect(second.get("Участок")).toContain("Зона Бета");
+      expect(second.get("Импортировано")).toBe("3");
+      expect(second.get("Ошибки")).toContain("остаток меньше одной штуки");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("останавливается на ошибочном листе и показывает уже применённые", async () => {
+    mockReferences();
+    vi.mocked(getRemainderSheets).mockResolvedValue([
+      ...osvSheets(),
+      makeSheet({
+        index: 3,
+        name: "Готовая продукция",
+        kind: "1c_osv",
+        detected_section_id: 13,
+        detected_section_name: "Зона Гамма",
+      }),
+    ]);
+    vi.mocked(previewRemaindersExcel).mockImplementation(async (_source, opts) =>
+      makePreview({
+        sheet_name: "Лист",
+        source_kind: "1c_osv",
+        detected_section_id: 11,
+        summary: { total: 4, valid: 4, invalid: 0, quantity_total: 4 },
+      }),
+    );
+    vi.mocked(importRemaindersExcel).mockImplementation(async (_locationId, _source, opts) => {
+      if (opts?.sheet_index === 2) throw new Error("Сервер недоступен");
+      return makeImportResponse({ imported_count: 4 });
+    });
+
+    const { cleanup } = mountDialog();
+    try {
+      await selectFile();
+      const button = await screen.findByRole("button", {
+        name: "Импортировать все листы ОСВ (3)",
+      });
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("Сервер недоступен");
+      });
+
+      // Третий лист не тронут: импорт остановился на ошибке второго.
+      expect(importRemaindersExcel).toHaveBeenCalledTimes(2);
+      const rows = tableRowsByHeader();
+      expect(rows).toHaveLength(2);
+      expect(rows[0].get("Лист")).toBe("Склад сырой");
+      expect(rows[0].get("Импортировано")).toBe("4");
+      expect(rows[1].get("Лист")).toBe("Дробь");
+      expect(rows[1].get("Импортировано")).toBe("0");
+      expect(rows[1].get("Ошибки")).toContain("Сервер недоступен");
+      expect(document.body.textContent).not.toContain("Готовая продукция");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("гасит clear_existing с видимым объяснением в мультилисте", async () => {
+    mockReferences();
+    vi.mocked(getRemainderSheets).mockResolvedValue(osvSheets());
+    vi.mocked(previewRemaindersExcel).mockResolvedValue(
+      makePreview({ source_kind: "1c_osv", detected_section_id: 11 }),
+    );
+
+    const { cleanup } = mountDialog();
+    try {
+      await selectFile();
+      const checkbox = await screen.findByRole("checkbox", {
+        name: /Очистить перед импортом/,
+      });
+      expect((checkbox as HTMLInputElement).disabled).toBe(true);
+      expect(document.body.textContent).toContain(
+        "Очистка перед импортом недоступна для файла с листами ОСВ",
+      );
+    } finally {
+      cleanup();
+    }
   });
 });

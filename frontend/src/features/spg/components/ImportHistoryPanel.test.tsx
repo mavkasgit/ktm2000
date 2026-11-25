@@ -78,6 +78,8 @@ const row = (overrides: Partial<StockImportRow> = {}): StockImportRow => ({
   product_sku: "OPS-460",
   product_name: "Профиль",
   quantity: "10",
+  source_code: null,
+  source_quantity_m: null,
   dimensions_label: "2,7 м",
   target_section_id: 1,
   target_section_name: "Склад сырья",
@@ -201,6 +203,49 @@ describe("ImportHistoryPanel — «посмотреть»", () => {
     expect(second.get("Склад")).toBe(first.get("Склад"));
     expect(second.get("Размер")).toBe(first.get("Размер"));
     expect(second.get("Операции")).not.toBe(first.get("Операции"));
+  });
+
+  it("показывает код 1С и метры, а у ручного шаблона — прочерк", async () => {
+    vi.mocked(getStockImportBatches).mockResolvedValue([batch()]);
+    vi.mocked(getStockImportBatch).mockResolvedValue({
+      batch: batch(),
+      rows: [
+        row({ row_id: 1, source_row_number: 2, source_code: "20933", source_quantity_m: "6391.0000" }),
+        row({
+          row_id: 2,
+          source_row_number: 3,
+          source_code: null,
+          source_quantity_m: null,
+          sku: "OPS-461",
+          product_sku: "OPS-461",
+        }),
+      ],
+    });
+
+    renderPanel();
+    const rows = await openDetail();
+
+    const headerNames = within(rows[0])
+      .getAllByRole("columnheader")
+      .map((cell) => cell.textContent ?? "");
+    expect(headerNames).toContain("Код 1С");
+    expect(headerNames).toContain("Метры");
+
+    const first = cellsByHeader(rows);
+    expect(first.get("Код 1С")).toBe("20933");
+    // Метры — дробное количество (fmtQtyPrecise): хвостовые нули срезаны,
+    // разделитель — запятая, как у остальных количеств.
+    expect(first.get("Метры")).toBe("6391");
+
+    const second = new Map(
+      headerNames.map((name, index) => [
+        name,
+        within(rows[2]).getAllByRole("cell")[index]?.textContent ?? "",
+      ]),
+    );
+    // Ручной шаблон метров и кода 1С не знает — «—», а не «0» (ADR-0040).
+    expect(second.get("Код 1С")).toBe("—");
+    expect(second.get("Метры")).toBe("—");
   });
 
   it("два пустых состояния оси печатают прочерк, но остаются двумя строками", async () => {

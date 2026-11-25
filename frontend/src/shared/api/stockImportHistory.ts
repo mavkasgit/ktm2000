@@ -58,6 +58,13 @@ export type StockImportRow = {
   product_sku: string | null;
   product_name: string | null;
   quantity: string | null;
+  /**
+   * Код номенклатуры 1С и метры из «Конечное сальдо / Количество» (спека §4.2).
+   * У ручного шаблона обоих нет — `null`, а не ноль: строка не теряет смысл,
+   * просто источник не ОСВ 1С.
+   */
+  source_code: string | null;
+  source_quantity_m: string | null;
   dimensions_label: string;
   target_section_id: number | null;
   target_section_name: string | null;
