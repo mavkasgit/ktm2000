@@ -25,6 +25,7 @@
 | [`plan-import-spec.md`](plan-import-spec.md) | **Импорт плана** | Спека ускорения/стабилизации импорта, коды строк, apply/rollback |
 | [`stock-import-history-spec.md`](stock-import-history-spec.md) | **Импорт остатков** | Реестр батчей, просмотр, откат, удаление из списка (#232) |
 | [`stock-import-1c-spec.md`](stock-import-1c-spec.md) | **Остатки из 1С (ОСВ)** | Разбор ОСВ, коды номенклатуры 1С, метры → штуки, мультилист (#455–#460) |
+| [`adr/0077-import-ostatkov-iz-1c-kody-nomenklatury.md`](adr/0077-import-ostatkov-iz-1c-kody-nomenklatury.md) | **Остатки из 1С: решения** | Код 1С как атрибут артикула, метры как аудит, нормальная и сырьевая длины (#457) |
 | [`equivalents-pool-spec.md`](equivalents-pool-spec.md) | **Эквивалентные артикулы** | Общий пул сырья: наличие, выдача, операторский слой (ADR-0073) |
 | [`../GLOSSARY.md`](../GLOSSARY.md) | **Глоссарий домена** | Термины: батч импорта, строка импорта, импорт остатков, действие |
 | [`quality/gates.md`](quality/gates.md) | **Карта гейтов** | Шаг → что ловит → где выполняется → чем доказан красный ход |
