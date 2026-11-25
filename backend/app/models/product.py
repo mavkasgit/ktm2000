@@ -1,5 +1,6 @@
 import enum
 import re
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -7,6 +8,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    DateTime,
     Enum,
     Float,
     ForeignKey,
@@ -15,6 +17,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    func,
     or_,
     select,
     text,
@@ -459,6 +462,32 @@ class Product(Base):
         cascade="all, delete-orphan",
         foreign_keys="ProductComposition.product_id",
         order_by="ProductComposition.id",
+    )
+
+
+class Product1CCode(Base):
+    """Код номенклатуры 1С для артикула (#455, спека ОСВ §4.1).
+
+    Код 1С не заменяет ``Product.code``: это отдельный справочник, потому что
+    у одного артикула бывает несколько кодов (``20933``, ``22069``, ``10926``).
+    Код уникален между артикулами — один код 1С не может указывать на два
+    артикула; удаление артикула уносит его коды каскадом.
+    """
+
+    __tablename__ = "product_1c_codes"
+    __table_args__ = (UniqueConstraint("code", name="uq_product_1c_codes_code"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'1c_osv'"), default="1c_osv"
+    )
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
 

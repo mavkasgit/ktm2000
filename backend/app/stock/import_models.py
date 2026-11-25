@@ -168,8 +168,15 @@ class StockImportRow(Base):
     # Что реально сопоставлено: частичное совпадение артикула допустимо
     # (ADR-0003, «Обновление 2026-09-24»), и исходная ячейка != sku.
     matched_sku: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
+    product_id: Mapped[int | None] = mapped_column(
+        ForeignKey("products.id", ondelete="SET NULL"), nullable=True
+    )
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    # Код номенклатуры 1С и метры источника (спека ОСВ §4.2, #455):
+    # ``quantity`` остаётся штуками, метры — отдельной колонкой. У строк
+    # обычного шаблона оба поля NULL.
+    source_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_quantity_m: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     dimensions: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     # Признак пройденных операций строки (ADR-0055): по нему остаток, созданный
     # этой строкой, отличается от остатка соседней строки того же артикула,
