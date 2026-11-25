@@ -18,6 +18,6 @@ python-calamine>=0.1.0
 pytest>=9.2.0
 pytest-asyncio>=1.4.0
 bcrypt<5
-email-validator>=2.0.0
+email-validator>=2.4.0
 pytest-xdist>=3.8.0
 pytest-testmon>=2.3.0
