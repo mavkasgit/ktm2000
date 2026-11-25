@@ -120,6 +120,13 @@ class RemainderItem:
     dimensions: dict | None = None
     # NEW: подпись габарита для предпросмотра («2,7 м» / «—»)
     dimensions_label: str = DIMENSIONLESS_LABEL
+    # ОСВ 1С (#458, спека §5.2): код номенклатуры, наименование и единица из
+    # выгрузки, метры из «Конечного сальдо / Количество». У ручного шаблона
+    # всё это ``None`` — источник в файле не фиксировался.
+    source_code: str | None = None
+    source_name: str | None = None
+    source_unit: str | None = None
+    source_quantity_m: float | None = None
 
 
 @dataclass
@@ -584,24 +591,12 @@ async def parse_remainders_excel(
     Raises:
         ValueError: If the sheet index is out of range or the sheet is empty.
     """
-    from python_calamine import load_workbook
+    from app.stock.import_1c_osv import parse_remainders_sheet
 
-    workbook = load_workbook(BytesIO(content))
-    if sheet_index < 0 or sheet_index >= len(workbook.sheet_names):
-        raise ValueError(
-            f"Sheet index {sheet_index} not found, "
-            f"available sheets: {len(workbook.sheet_names)}"
-        )
-
-    sheet = workbook.get_sheet_by_index(sheet_index)
-    rows = list(sheet.iter_rows())
-    if not rows:
-        raise ValueError("Workbook sheet is empty")
-
-    items, summary = _parse_remainders_grid(
-        rows, row_selection, column_mapping=column_mapping
+    parsed = await parse_remainders_sheet(
+        content, sheet_index, row_selection, column_mapping=column_mapping
     )
-    return sheet.name, len(rows), items, summary
+    return parsed.sheet_name, parsed.total_rows, parsed.items, parsed.summary
 
 
 def _product_sku_contained_in_input(input_sku: str) -> object:
@@ -1524,6 +1519,7 @@ def _preview_matches_search(item: RemainderItem, search: str | None) -> bool:
     haystacks = [
         item.sku,
         item.product_name or "",
+        item.source_code or "",
         str(item.source_row_number),
     ]
     return any(_matches_preview_partial(haystack, needle) for haystack in haystacks)
