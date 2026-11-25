@@ -1487,7 +1487,11 @@ export function ImportRemaindersDialog({
           {step === "result" && multiOutcomes && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                <CheckCircle className="h-5 w-5 text-emerald-600" />
+                {multiOutcomes.some((outcome) => outcome.status === "failed") ? (
+                  <AlertCircle className="h-5 w-5 text-destructive" />
+                ) : (
+                  <CheckCircle className="h-5 w-5 text-emerald-600" />
+                )}
                 <h3 className="text-base font-semibold text-foreground">
                   Импорт всех листов ОСВ
                 </h3>
