@@ -448,7 +448,43 @@ export async function getRemainderImportOperations(): Promise<ImportOperationSte
   return data;
 }
 
+/**
+ * Листы файла остатков и их тип (#458, спека §5.1).
+ *
+ * Читается один раз при выборе файла: строки не разбираются, поэтому вкладки
+ * диалога получают имя, тип и участок ОСВ-листа дешевле предпросмотра.
+ */
+export async function getRemainderSheets(file: File): Promise<RemainderSheet[]> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await apiClient.post<RemainderSheetsResponse>(
+    "/stock/import/remainders/sheets",
+    formData,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  );
+  return data.sheets;
+}
+
 // ─── Extended Remainder Types ──────────────────────────────────────────
+
+/**
+ * Тип листа файла остатков (спека §5.1):
+ * `1c_osv` — выгрузка ОСВ 1С, `manual_template` — ручной шаблон,
+ * `unknown` — ни то ни другое.
+ */
+export type RemainderSheetKind = "1c_osv" | "manual_template" | "unknown";
+
+export type RemainderSheet = {
+  index: number;
+  name: string;
+  kind: RemainderSheetKind;
+  detected_section_id: number | null;
+  detected_section_name: string | null;
+};
+
+type RemainderSheetsResponse = {
+  sheets: RemainderSheet[];
+};
 
 export type RemainderImportItem = {
   source_row_number: number;
@@ -456,6 +492,14 @@ export type RemainderImportItem = {
   product_id: number | null;
   product_name: string | null;
   quantity: number | null;
+  /** Код номенклатуры 1С — только у ОСВ-листов, у ручного шаблона `null`. */
+  source_code: string | null;
+  /** Наименование из 1С: для сверки, в колонку не печатается (спека §10.1). */
+  source_name: string | null;
+  /** Единица измерения в файле («м», «шт»); ручной шаблон её не несёт. */
+  source_unit: string | null;
+  /** Метры из «Конечное сальдо / Количество»; `quantity` остаётся штуками. */
+  source_quantity_m: number | null;
   comment: string | null;
   status: "valid" | "invalid";
   errors: string[];
@@ -510,6 +554,11 @@ export type RemainderSectionMeta = {
 
 export type RemainderPreviewResponse = {
   sheet_name: string;
+  /** Режим листа, определённый сервером (спека §5.2). */
+  source_kind: RemainderSheetKind;
+  /** Участок, определённый по шапке ОСВ; `null` — автоопределения нет. */
+  detected_section_id: number | null;
+  detected_section_name: string | null;
   total_rows: number;
   summary: RemainderImportSummary;
   section_meta: RemainderSectionMeta[];

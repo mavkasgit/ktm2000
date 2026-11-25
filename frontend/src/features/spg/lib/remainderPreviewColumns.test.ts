@@ -15,6 +15,37 @@ const build = (
   columnSearchQueries: Partial<Record<RemainderPreviewSortField, string>> = {},
 ) => buildColumnApiParams(columnFilters, columnSearchQueries, remainderPreviewColumns);
 
+describe("колонки предпросмотра остатков", () => {
+  it("идут в порядке спеки §10.1", () => {
+    expect(remainderPreviewColumns.map((column) => column.label)).toEqual([
+      "#",
+      "Код 1С",
+      "Артикул",
+      "Наименование",
+      "Кол-во, шт",
+      "Метры",
+      "Длина",
+      "Операции",
+      "Качество",
+      "Участок",
+      "Ошибки",
+    ]);
+  });
+
+  it("источник (код 1С, наименование, метры) — без фильтра и сортировки", () => {
+    // Сервер фильтрует `source_code` только общим поиском, а колонок
+    // «наименование» и «метры» в контракте предпросмотра нет вовсе:
+    // объявленный фильтр отправил бы параметр, которого никто не читает
+    // (спека §5.2, ADR-0038 §4).
+    for (const id of ["source_code", "source_name", "meters"]) {
+      const column = remainderPreviewColumns.find((candidate) => candidate.id === id);
+      expect(column, `колонка ${id}`).toBeDefined();
+      expect(column?.filterField).toBeUndefined();
+      expect(column?.sortField).toBeUndefined();
+    }
+  });
+});
+
 describe("параметры предпросмотра остатков", () => {
   it("значения колонок уезжают под своими именами", () => {
     expect(

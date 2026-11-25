@@ -161,7 +161,7 @@ def format_dimensions(dims: Mapping[str, Any] | None) -> str:
     if canonical is None:
         return DIMENSIONLESS_LABEL
     if set(canonical) == {LENGTH_MM}:
-        return f"{_format_mm_as_meters(canonical[LENGTH_MM])} м"
+        return f"{format_mm_as_meters(canonical[LENGTH_MM])} м"
     return ", ".join(f"{key}: {value}" for key, value in canonical.items())
 
 
@@ -247,7 +247,7 @@ def format_cut_layout(
         )
 
     output_parts = [
-        f"{_format_mm_as_meters(length)}×{format_quantity(merged[length])}"
+        f"{format_mm_as_meters(length)}×{format_quantity(merged[length])}"
         for length in sorted(merged)
     ]
     output_parts.extend(other_parts)
@@ -286,8 +286,12 @@ def _canonicalize_value(key: str, value: Any) -> Any:
     return value
 
 
-def _format_mm_as_meters(mm: float | Decimal) -> str:
-    """Миллиметры → строка в метрах без хвостовых нулей, с запятой: 2750 → «2,75»."""
+def format_mm_as_meters(mm: float | Decimal) -> str:
+    """Миллиметры → строка в метрах без хвостовых нулей, с запятой: 2750 → «2,75».
+
+    Публичная: ею же пользуются сообщения импорта остатков, чтобы метры в
+    предупреждениях форматировались так же, как габариты в UI.
+    """
     meters = (Decimal(str(mm)) / Decimal(1000)).normalize()
     return format(meters, "f").replace(".", ",")
 
@@ -303,7 +307,7 @@ def _format_dimensions_without_unit(dims: Mapping[str, Any] | None) -> str:
     if canonical is None:
         return DIMENSIONLESS_LABEL
     if set(canonical) == {LENGTH_MM}:
-        return _format_mm_as_meters(canonical[LENGTH_MM])
+        return format_mm_as_meters(canonical[LENGTH_MM])
     return ", ".join(f"{key}: {value}" for key, value in canonical.items())
 
 
