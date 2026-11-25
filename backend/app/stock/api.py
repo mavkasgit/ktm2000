@@ -1473,9 +1473,15 @@ async def list_remainder_sheets(
     ``Артикул | Кол-во``) или ``unknown``. Строки не разбираются — только
     шапка листа, чтобы вкладки диалога показали тип и склад.
     """
+    from python_calamine import CalamineError
+
     try:
         content = await file.read()
         sheets = await describe_remainder_sheets(db, content)
+    except CalamineError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Некорректный Excel-файл: {exc}"
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {

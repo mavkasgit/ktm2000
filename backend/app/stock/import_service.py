@@ -1056,7 +1056,9 @@ async def _resolve_1c_code_bindings(
     Код свободен → готовится ``product_1c_codes`` для артикула строки. Код уже
     привязан к артикулу той же группы алиасов → оставляем как есть (повторный
     импорт не плодит дублей). Код привязан к другой группе → строка становится
-    invalid с видимой причиной, молчаливой перепривязки нет.
+    invalid с видимой причиной, молчаливой перепривязки нет. Свободный код,
+    который в одном файле указывает на разные артикулы, — конфликт данных:
+    invalid становятся все его строки, код не изучается.
 
     Возвращает **ещё не добавленные в сессию** записи: их пишет вызывающий
     только после решения «импорт продолжается». Так отмена батча
@@ -1097,33 +1099,61 @@ async def _resolve_1c_code_bindings(
     }
 
     pending: list[Product1CCode] = []
+    free_rows: dict[str, list[RemainderItem]] = {}
     for item in rows:
         code = item.source_code
         product_id = item.product_id
         if code is None or product_id is None:  # отобрано выше; защита от мутации
             continue
         binding = bindings.get(code)
-        if binding is not None:
-            if group_key(binding.product_id) == group_key(product_id):
-                continue
-            bound_sku = skus.get(binding.product_id) or str(binding.product_id)
-            name_sku = skus.get(product_id) or str(product_id)
-            item.status = "invalid"
-            item.errors.append(
-                f"Код {code} привязан к {bound_sku}, в наименовании {name_sku}"
-            )
+        if binding is None:
+            free_rows.setdefault(code, []).append(item)
             continue
-        # Код свободен: изучение — часть успешного импорта строки. В ``bindings``
-        # кладём сразу, чтобы две строки одного файла с одним кодом не создали
-        # две записи (уникальный индекс кода упал бы на flush).
-        binding = Product1CCode(
-            code=code,
-            product_id=product_id,
-            source="1c_osv",
-            created_by=user.id if user else None,
+        if group_key(binding.product_id) == group_key(product_id):
+            continue
+        bound_sku = skus.get(binding.product_id) or str(binding.product_id)
+        name_sku = skus.get(product_id) or str(product_id)
+        item.status = "invalid"
+        item.errors.append(
+            f"Код {code} привязан к {bound_sku}, в наименовании {name_sku}"
         )
-        pending.append(binding)
-        bindings[code] = binding
+
+    # Свободный код, встретившийся у разных артикулов одного файла, — конфликт
+    # данных, а не повод выбрать «первую строку»: код не изучается, invalid
+    # становятся все строки с ним. Иначе код привязался бы к артикулу, которого
+    # нет в остальных строках, и проводка получила бы чужой код молча.
+    for code, code_rows in free_rows.items():
+        code_groups = {
+            group_key(item.product_id)
+            for item in code_rows
+            if item.product_id is not None
+        }
+        if len(code_groups) > 1:
+            code_skus = sorted(
+                {skus.get(item.product_id) or str(item.product_id) for item in code_rows}
+            )
+            message = (
+                f"Код {code} встречается у разных артикулов в файле: "
+                f"{', '.join(code_skus)}"
+            )
+            for item in code_rows:
+                item.status = "invalid"
+                item.errors.append(message)
+            continue
+        # Код свободен: изучение — часть успешного импорта строки. Одна запись
+        # на код, сколько бы строк файла его ни повторяло (уникальный индекс
+        # кода упал бы на flush).
+        product_id = code_rows[0].product_id
+        if product_id is None:  # pragma: no cover - отобрано выше
+            continue
+        pending.append(
+            Product1CCode(
+                code=code,
+                product_id=product_id,
+                source="1c_osv",
+                created_by=user.id if user else None,
+            )
+        )
     return pending
 
 

@@ -252,6 +252,21 @@ async def test_parse_osv_skips_totals_group_codes_and_empty_quantities() -> None
     assert items[0].product_id is None
 
 
+async def test_parse_osv_skips_numeric_group_code_without_name() -> None:
+    """Счёт/итог с числовым кодом и пустым наименованием — не позиция."""
+    rows = _osv_rows([
+        _osv_row("10", None, "м", 500),
+        _osv_row("20933", "Кант 26мм 2,70м (ЮП-2616)", "м", 100),
+    ])
+
+    _sheet, _total, items, summary = await parse_remainders_1c_osv(
+        _make_workbook_sheets([("Склад сырой", rows)]).getvalue()
+    )
+
+    assert [item.source_code for item in items] == ["20933"]
+    assert summary.total == 1
+
+
 async def test_parse_osv_takes_quantity_from_final_balance() -> None:
     """Количество — из «Конечного сальдо», а не из «Начального»."""
     rows = _osv_rows([
@@ -393,6 +408,14 @@ def test_resolve_normal_length_smaller_than_minimum_is_error() -> None:
 
     assert resolved.length_mm is None
     assert resolved.error == "Длина 2,0 меньше минимальной длины артикула (2,5)"
+
+
+def test_resolve_normal_length_without_product_lengths_is_error() -> None:
+    """У артикула нет ни одной длины: ошибка строки, а не ``IndexError``."""
+    resolved = resolve_normal_length(2700, [])
+
+    assert resolved.length_mm is None
+    assert resolved.error == "У артикула не указана длина"
 
 
 def test_resolve_normal_length_without_name_uses_primary() -> None:
@@ -538,6 +561,50 @@ async def test_lookup_1c_exact_name_warns(session: AsyncSession) -> None:
     assert items[0].warnings == ["Сопоставлено по наименованию"]
 
 
+async def test_lookup_1c_exact_name_ignores_nbsp_and_extra_spaces(
+    session: AsyncSession,
+) -> None:
+    """Точное имя: NBSP и двойные пробелы в БД не мешают нормализованному имени."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    product = await _make_product(
+        session, "KANT-NBSP", name="Кант\u00a0универсальный  26мм"
+    )
+    items = _items([
+        _osv_row("21007", "кант универсальный 26мм", "шт", 10),
+    ])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].product_id == product.id
+    assert items[0].status == "valid"
+    assert items[0].warnings == ["Сопоставлено по наименованию"]
+
+
+async def test_lookup_1c_code_conflict_lists_all_group_candidates(
+    session: AsyncSession,
+) -> None:
+    """Конфликт кода и группы перечисляет всех кандидатов, а не первого."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    bound = await _make_product(session, "ЮП-2616")
+    await _bind_1c_code(session, bound, "16944")
+    # Две карточки — одна группа эквивалентов, отличная от группы кода.
+    await _make_product(session, "ALS-1103", aliases=["ЮП-3773"])
+    await _make_product(session, "ЮП-3773")
+    items = _items([
+        _osv_row("16944", "Кант (ALS-1103 / ЮП-3773)", "м", 100),
+    ])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].product_id is None
+    assert items[0].status == "invalid"
+    assert items[0].errors == [
+        "Код 16944 привязан к ЮП-2616, в наименовании ALS-1103, ЮП-3773"
+    ]
+
+
 # ─── Длина и штуки ────────────────────────────────────────────────────────────
 
 
@@ -574,11 +641,11 @@ async def test_resolve_quantities_meters_to_pieces_by_normal_length(
 async def test_resolve_quantities_nearest_lower_length_warns(
     session: AsyncSession,
 ) -> None:
-    """Наибольшая нормальная ≤ написанной (2,55 → 2,5) — штуки и предупреждение."""
+    """Наибольшая нормальная ≤ написанной (2,61 → 2,5) — штуки и предупреждение."""
     product = await _make_product(session, "PLINTH-100", lengths=[(2500, None, True)])
     await _bind_1c_code(session, product, "22069")
     items = _items([
-        _osv_row("22069", "Плинтус 100 мм 2,55м", "м", 5084.1),
+        _osv_row("22069", "Плинтус 100 мм 2,61м", "м", 5084.1),
     ])
 
     await _resolve_quantities(session, items)
@@ -587,6 +654,7 @@ async def test_resolve_quantities_nearest_lower_length_warns(
     assert item.status == "valid"
     assert item.quantity == 2033
     assert item.dimensions == {"length_mm": 2500}
+    assert item.warnings == ["Длина 2,61 приведена к 2,5"]
 
 
 async def test_resolve_quantities_without_name_length_uses_primary(
@@ -622,6 +690,21 @@ async def test_resolve_quantities_without_name_length_and_primary_is_error(
     assert items[0].status == "invalid"
     assert items[0].quantity is None
     assert "В наименовании не указана длина, у артикула несколько длин" in items[0].errors
+
+
+async def test_resolve_quantities_product_without_lengths_is_error(
+    session: AsyncSession,
+) -> None:
+    """Артикул без ``ProductLength`` и метры в файле — ошибка строки, не 500."""
+    product = await _make_product(session, "KANT-NOLENGTHS")
+    await _bind_1c_code(session, product, "20933")
+    items = _items([_osv_row("20933", "Кант 2,70м", "м", 5400)])
+
+    await _resolve_quantities(session, items)
+
+    assert items[0].status == "invalid"
+    assert items[0].quantity is None
+    assert items[0].errors == ["У артикула не указана длина"]
 
 
 async def test_resolve_quantities_less_than_one_piece_is_error(
@@ -795,6 +878,17 @@ async def test_sheets_endpoint_reports_kinds_and_sections(
     assert sheets[1]["detected_section_name"] == "Склад сырья"
     assert sheets[0]["detected_section_id"] is None
     assert sheets[0]["detected_section_name"] is None
+
+
+async def test_sheets_endpoint_broken_xlsx_is_422(client: AsyncClient) -> None:
+    """Битый файл — 422 с понятным текстом, а не 500 из недр calamine."""
+    resp = await client.post(
+        "/api/stock/import/remainders/sheets",
+        files={"file": ("osv.xlsx", b"definitely not a workbook", XLSX_MIME)},
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert "Excel" in resp.json()["detail"]
 
 
 async def test_preview_osv_returns_source_fields_and_pieces(

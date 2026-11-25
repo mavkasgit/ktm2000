@@ -27,6 +27,7 @@ from app.domain.dimensions import (
     LENGTH_MM,
     canonicalize_dimensions,
     format_dimensions,
+    format_mm_as_meters,
 )
 from app.models.product import Product, Product1CCode, ProductLength
 from app.models.section import Section
@@ -37,6 +38,7 @@ from app.services.product_alias_groups import (
 )
 from app.services.route_storage_classifier import STOCK_TYPES
 from app.stock.import_service import (
+    _EMPTY_CELL_VALUES,
     RemainderItem,
     SheetSummary,
     _attach_remainder_product,
@@ -56,9 +58,6 @@ SOURCE_KIND_MANUAL_TEMPLATE = "manual_template"
 SOURCE_KIND_UNKNOWN = "unknown"
 
 SourceKind = Literal["1c_osv", "manual_template", "unknown"]
-
-# Значения ячейки, означающие «значения нет» (как в ручном шаблоне).
-_EMPTY_CELL_VALUES = ("", "—", "-")
 
 # Группы остатка в шапке, между которыми выбирается количество.
 _FINAL_BALANCE_MARKERS = ("конечное сальдо", "остаток на конец")
@@ -236,12 +235,16 @@ def parse_1c_osv_rows(
         if code is None:
             # Итоги, групповые счета и пустые строки — не позиции номенклатуры.
             continue
+        name = _cell(row, layout.name_index)
+        if not name:
+            # Групповой счёт/итог с числовым кодом (``10``) и без названия —
+            # не строка номенклатуры, в предпросмотр не попадает.
+            continue
         quantity_raw = _cell(row, layout.quantity_index)
         if not quantity_raw or quantity_raw in _EMPTY_CELL_VALUES:
             # Пустое количество — не остаток, но и не ошибка строки.
             continue
 
-        name = _cell(row, layout.name_index)
         unit_raw = _cell(row, layout.unit_index)
         unit_kind = _classify_unit(unit_raw)
 
@@ -385,12 +388,15 @@ def parse_length_from_name(name: str | None) -> int | None:
 # ─── Нормальная длина ─────────────────────────────────────────────────────────
 
 
-def format_mm_as_meters(length_mm: float) -> str:
-    """Миллиметры в метры с запятой и хотя бы одним знаком: 2500 → «2,5»."""
-    text = format((Decimal(str(length_mm)) / Decimal(1000)).normalize(), "f")
-    if "." not in text:
-        text += ".0"
-    return text.replace(".", ",")
+def _format_mm_as_meters(length_mm: float) -> str:
+    """Миллиметры в метры для сообщений: 2500 → «2,5», 3000 → «3,0».
+
+    Форматирование числа — общее с габаритами (``app.domain.dimensions``);
+    здесь только «хотя бы один знак после запятой», чтобы сообщение не читалось
+    как целое число метров.
+    """
+    text = format_mm_as_meters(length_mm)
+    return text if "," in text else f"{text},0"
 
 
 @dataclass(frozen=True)
@@ -432,6 +438,10 @@ def resolve_normal_length(
 
     if written_mm in normal:
         return NormalLength(written_mm)
+    if not normal:
+        # У артикула нет ни одной ``length_mm``: приводить не к чему, и
+        # сравнивать написанную длину не с чем (иначе ``normal[0]`` падал бы).
+        return NormalLength(None, error="У артикула не указана длина")
     for length in lengths:
         if length.raw_length_mm is None or not length.length_mm:
             continue
@@ -443,8 +453,8 @@ def resolve_normal_length(
         return NormalLength(
             None,
             error=(
-                f"Длина {format_mm_as_meters(written_mm)} меньше минимальной "
-                f"длины артикула ({format_mm_as_meters(normal[0])})"
+                f"Длина {_format_mm_as_meters(written_mm)} меньше минимальной "
+                f"длины артикула ({_format_mm_as_meters(normal[0])})"
             ),
         )
     chosen = max(candidates)
@@ -452,8 +462,8 @@ def resolve_normal_length(
         return NormalLength(
             chosen,
             warning=(
-                f"Длина {format_mm_as_meters(written_mm)} приведена к "
-                f"{format_mm_as_meters(chosen)}"
+                f"Длина {_format_mm_as_meters(written_mm)} приведена к "
+                f"{_format_mm_as_meters(chosen)}"
             ),
         )
     return NormalLength(chosen)
@@ -512,7 +522,7 @@ async def parse_remainders_sheet(
     if detect_1c_osv(rows) is not None:
         items, summary = parse_1c_osv_rows(rows, row_selection)
         source_kind: SourceKind = SOURCE_KIND_1C_OSV
-        header_rows = rows[:25]
+        header_rows = rows[:_SECTION_SCAN_ROWS]
     else:
         items, summary = _parse_remainders_grid(
             rows, row_selection, column_mapping=column_mapping
@@ -656,11 +666,6 @@ _HASH_CODE_RE = re.compile(r"#\s*(\d+)(?:-\d+)?")
 _CANDIDATE_SPLIT_RE = re.compile(r"[,/]")
 
 
-def _norm_name(value: str | None) -> str:
-    """Нормализация наименования для точного сравнения с ``Product.name``."""
-    return " ".join(str(value or "").replace("\xa0", " ").lower().split())
-
-
 def _extract_sku_candidates(name: str | None) -> list[str]:
     """Кандидаты-артикулы из наименования 1С (порядок: скобки, токены, ``#N``)."""
     if not name:
@@ -794,11 +799,13 @@ def _decide_code_match(
         return _ambiguous_decision(catalog, name)
     code_group = catalog.group_key(code_product_id)
     if name.found and name.group_keys != {code_group}:
-        name_sku = catalog.sku(name.product_ids[0])
+        # Все кандидаты группы, а не первый: иначе сообщение прячет, что
+        # наименование указывает на несколько карточек одной группы.
+        name_skus = sorted({catalog.sku(product_id) for product_id in name.product_ids})
         return _MatchDecision(
             errors=[
                 f"Код {item.source_code} привязан к {catalog.sku(code_product_id)}, "
-                f"в наименовании {name_sku}"
+                f"в наименовании {', '.join(name_skus)}"
             ]
         )
     return _MatchDecision(product_id=catalog.canonical_id(code_product_id))
@@ -820,20 +827,38 @@ def _decide_name_match(
     return None
 
 
+def _normalized_name_sql():
+    """``Product.name`` в том же виде, что :func:`_norm_cell`.
+
+    Сравнивать нормализованное в Python имя с сырым ``Product.name`` нельзя:
+    NBSP и двойные пробелы в БД дают «не найдено» на ровном месте. Поэтому та
+    же нормализация (lower, NBSP → пробел, схлопывание пробелов, trim)
+    выполняется в SQL — одна форма с обеих сторон.
+    """
+    return func.trim(
+        func.regexp_replace(
+            func.lower(func.replace(Product.name, "\xa0", " ")),
+            r"\s+",
+            " ",
+            "g",
+        )
+    )
+
+
 async def _load_exact_name_products(
     db: AsyncSession,
     items: Sequence[RemainderItem],
 ) -> dict[str, list[Product]]:
     """Артикулы с точным (нормализованным) наименованием, сгруппированные по нему."""
-    names = list({_norm_name(item.source_name) for item in items if item.source_name})
+    names = list({_norm_cell(item.source_name) for item in items if item.source_name})
     if not names:
         return {}
     rows = (
-        await db.execute(select(Product).where(func.lower(Product.name).in_(names)))
+        await db.execute(select(Product).where(_normalized_name_sql().in_(names)))
     ).scalars()
     by_name: dict[str, list[Product]] = {}
     for product in rows:
-        by_name.setdefault(_norm_name(product.name), []).append(product)
+        by_name.setdefault(_norm_cell(product.name), []).append(product)
     return by_name
 
 
@@ -886,7 +911,7 @@ async def _lookup_1c_products(
     if pending:
         by_name = await _load_exact_name_products(db, pending)
         for item in pending:
-            matches = by_name.get(_norm_name(item.source_name), [])
+            matches = by_name.get(_norm_cell(item.source_name), [])
             if not matches:
                 decisions[id(item)] = _MatchDecision(
                     errors=[

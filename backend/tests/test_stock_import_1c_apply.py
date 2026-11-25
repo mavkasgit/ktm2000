@@ -357,6 +357,47 @@ async def test_code_conflict_marks_row_invalid_and_never_rebinds(
     await assert_no_invariants_violations(session, context="osv-conflict")
 
 
+async def test_same_free_code_for_two_products_in_file_is_conflict(
+    session: AsyncSession,
+) -> None:
+    """Один свободный код у двух артикулов файла: обе строки invalid, код не создан."""
+    from app.stock.import_service import _resolve_1c_code_bindings
+
+    first = await _make_product(session, "OSV-DUP-A")
+    second = await _make_product(session, "OSV-DUP-B")
+
+    def _item(row: int, product: Product) -> RemainderItem:
+        return RemainderItem(
+            source_row_number=row,
+            sku=product.sku,
+            quantity=5.0,
+            comment=None,
+            product_id=product.id,
+            product_name=product.name,
+            status="valid",
+            errors=[],
+            raw_values=[],
+            source_code="24555",
+        )
+
+    items = [_item(10, first), _item(11, second)]
+
+    pending = await _resolve_1c_code_bindings(session, items, None)
+
+    assert pending == []
+    assert [item.status for item in items] == ["invalid", "invalid"]
+    for item in items:
+        assert item.errors == [
+            "Код 24555 встречается у разных артикулов в файле: OSV-DUP-A, OSV-DUP-B"
+        ]
+    assert (
+        await session.scalar(
+            select(Product1CCode).where(Product1CCode.code == "24555")
+        )
+        is None
+    )
+
+
 async def test_aborted_import_does_not_learn_codes(session: AsyncSession) -> None:
     """``skip_invalid=False`` с конфликтом кода отменяет батч — и изучение
     свободного кода отменённых строк тоже: иначе отклонённый импорт менял бы
