@@ -96,6 +96,11 @@ class RowView:
     product_sku: str | None
     product_name: str | None
     quantity: Decimal | None
+    # Код номенклатуры 1С и метры источника (спека §4.2, §5.4, #459): метры —
+    # история аудита, учёт остаётся в ``quantity`` (штуки). У ручного шаблона
+    # оба поля ``None``.
+    source_code: str | None
+    source_quantity_m: Decimal | None
     dimensions_label: str
     target_section_id: int | None
     target_section_name: str | None
@@ -329,6 +334,8 @@ async def get_batch_rows(
             product_sku=product.sku if product else None,
             product_name=product.name if product else None,
             quantity=row.quantity,
+            source_code=row.source_code,
+            source_quantity_m=row.source_quantity_m,
             dimensions_label=format_dimensions(row.dimensions),
             target_section_id=row.target_section_id,
             target_section_name=section.name if section else None,

@@ -65,6 +65,9 @@ class ImportRowOut(BaseModel):
     product_sku: str | None
     product_name: str | None
     quantity: str | None
+    #: Код номенклатуры 1С и метры источника (ОСВ); у ручного шаблона ``None``.
+    source_code: str | None
+    source_quantity_m: str | None
     dimensions_label: str
     target_section_id: int | None
     target_section_name: str | None
@@ -129,6 +132,12 @@ def _row_out(view: history.RowView) -> ImportRowOut:
         product_sku=view.product_sku,
         product_name=view.product_name,
         quantity=str(view.quantity) if view.quantity is not None else None,
+        source_code=view.source_code,
+        source_quantity_m=(
+            str(view.source_quantity_m)
+            if view.source_quantity_m is not None
+            else None
+        ),
         dimensions_label=view.dimensions_label,
         target_section_id=view.target_section_id,
         target_section_name=view.target_section_name,
