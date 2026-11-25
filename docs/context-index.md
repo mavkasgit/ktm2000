@@ -15,7 +15,7 @@
 | [`auth-oidc.md`](auth-oidc.md) | **Auth / OIDC** | Authentik bridge, link order, dual-run, logout, env |
 | [`GETTING_STARTED.md`](GETTING_STARTED.md) | Установка | Развёртывание с нуля, seed, troubleshooting |
 | [`testing-guide.md`](testing-guide.md) | Тестирование | Маршрутизатор → AGENTS.md в backend/frontend |
-| [`deployment.md`](deployment.md) | Деплой | Production, .env-файлы, бэкапы, хранение файлов и уборка сирот `imports/` (#288) |
+| [`deployment.md`](deployment.md) | Деплой | Production, .env-файлы, бэкапы, хранение файлов и уборка сирот `imports/` (#288); **версии до/после** для правок прод-данных и каталога (#462) |
 | [`agent-registry.md`](agent-registry.md) | ИИ-агенты | Порты и MCP-матрица скаутов |
 | [`bulk-operations-core-v1.md`](bulk-operations-core-v1.md) | Пакетные операции | Bulk approve/delete |
 | [`excel-import-10-unique-scenarios.md`](excel-import-10-unique-scenarios.md) | Импорт Excel | Сценарии и валидация |
@@ -25,12 +25,14 @@
 | [`plan-import-spec.md`](plan-import-spec.md) | **Импорт плана** | Спека ускорения/стабилизации импорта, коды строк, apply/rollback |
 | [`stock-import-history-spec.md`](stock-import-history-spec.md) | **Импорт остатков** | Реестр батчей, просмотр, откат, удаление из списка (#232) |
 | [`stock-import-1c-spec.md`](stock-import-1c-spec.md) | **Остатки из 1С (ОСВ)** | Разбор ОСВ, коды номенклатуры 1С, метры → штуки, мультилист (#455–#460) |
+| [`adr/0077-import-ostatkov-iz-1c-kody-nomenklatury.md`](adr/0077-import-ostatkov-iz-1c-kody-nomenklatury.md) | **Остатки из 1С: решения** | Код 1С как атрибут артикула, метры как аудит, нормальная и сырьевая длины (#457) |
 | [`equivalents-pool-spec.md`](equivalents-pool-spec.md) | **Эквивалентные артикулы** | Общий пул сырья: наличие, выдача, операторский слой (ADR-0073) |
 | [`../GLOSSARY.md`](../GLOSSARY.md) | **Глоссарий домена** | Термины: батч импорта, строка импорта, импорт остатков, действие |
 | [`quality/gates.md`](quality/gates.md) | **Карта гейтов** | Шаг → что ловит → где выполняется → чем доказан красный ход |
 | [`quality/criteria.md`](quality/criteria.md) | Приём инструментов | Восемь критериев; «новый инструмент не принимается потому, что он хороший» |
 | [`quality/not-adopted.md`](quality/not-adopted.md) | Отказы и незакрытые дыры | Почему не приняли, что изменит ответ, чего у нас нет вообще |
 | [`quality/hooks.md`](quality/hooks.md) | Хуки до коммита | lefthook: установка, скоупы, политика пропуска, запрет автоправок |
+| [`quality/changesets.md`](quality/changesets.md) | **До/после правок прод-данных** | Чек-лист приёмки и шаблон `meta.json`: label, артефакты, откат (#462) |
 | [`quality/adr-legacy.json`](quality/adr-legacy.json) | Датированное исключение ADR | Восемь решений до единого шаблона; новый файл туда не добавляется молча |
 | [`quality/proven-checks.json`](quality/proven-checks.json) | Доказанные красные ходы | Шаг → дата → чем сломано; `prove-coverage` требует запись на каждый шаг |
 | [`toolchain.md`](toolchain.md) | **Тулчейн (генерируемый)** | Инструменты из `tools.json`; расхождение ловит `npm run check:registry` |
