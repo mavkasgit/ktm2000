@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback, Fragment, memo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle, Download, Loader2 } from "lucide-react";
 
@@ -23,9 +23,12 @@ import {
   TableCornerResetHeader,
   DATA_TABLE_STYLES,
   TABLE_ROW_COMPACT,
+  FiltersPanel,
+  VirtualizedTableBody,
   toast,
   renderIcon,
 } from "@/shared/ui";
+import type { FiltersPanelField } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { getAriaSort } from "@/shared/lib/multiSort";
@@ -67,6 +70,7 @@ import { invalidateAfter } from "@/shared/api/cacheInvalidation";
 import { queryKeys } from "@/shared/api/queryKeys";
 import { RouteStepsDisplay } from "@/shared/ui/RouteStepsDisplay";
 import { listSections } from "@/shared/api/sections";
+import type { Section } from "@/shared/api/sections";
 import type { RemainderImportItem, RemainderSectionMeta } from "@/shared/api/stock";
 import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { fmtQty, fmtQtyPrecise } from "@/shared/lib/quantityFormat";
@@ -78,6 +82,14 @@ import {
 function hasSectionInFile(item: Pick<RemainderImportItem, "target_section_name">): boolean {
   const name = item.target_section_name?.trim();
   return Boolean(name && name !== "—" && name !== "-");
+}
+
+/**
+ * Истёк серверный токен источника (#472): сервер отвечает 410, и файл нужно
+ * отправить заново. Это не ошибка листа — повтор прозрачен для оператора.
+ */
+function isPreviewSourceGone(error: unknown): boolean {
+  return (error as { response?: { status?: number } } | null)?.response?.status === 410;
 }
 
 function getEffectiveSectionId(
@@ -252,6 +264,220 @@ function qualityBadgeClass(state: QualityState): string {
 const EMPTY_SECTION_OVERRIDES: Record<number, number> = {};
 const EMPTY_QUALITY_OVERRIDES: Record<number, QualityState> = {};
 
+/**
+ * Видимая категория строк предпросмотра (#472).
+ *
+ * ``default`` — то, что импортируется и требует внимания: годные и ошибочные
+ * строки. ``skipped`` (реестр исключений) по умолчанию скрыт: на листе
+ * заказчика его сотни, и оператор листал их, чтобы дойти до рабочих строк.
+ */
+type PreviewStatusFilter = "default" | "invalid" | "skipped";
+
+function qualityStateLabel(state: QualityState): string {
+  return (
+    IMPORT_QUALITY_OPTIONS.find((option) => option.value === state)?.label
+    ?? formatQualityStateLabel(state)
+  );
+}
+
+/** Участок строки, которую нельзя менять (skipped/invalid): только чтение. */
+function getStaticSectionLabel(
+  item: RemainderImportItem,
+  sections: { id: number; name: string }[],
+): string {
+  const name = item.target_section_name?.trim();
+  if (name && name !== "—" && name !== "-") return name;
+  if (item.target_section_id == null) return "—";
+  return sections.find((section) => section.id === item.target_section_id)?.name
+    ?? `#${item.target_section_id}`;
+}
+
+type PreviewRowProps = {
+  item: RemainderImportItem;
+  sections: Section[];
+  operations: ImportOperationStep[] | undefined;
+  expanded: boolean;
+  qualityOverride: QualityState | null;
+  sectionOverride: number | null;
+  onToggle: (rowNumber: number) => void;
+  onQualityChange: (rowNumber: number, state: QualityState) => void;
+  onSectionChange: (rowNumber: number, sectionId: number | null) => void;
+};
+
+/**
+ * Строка предпросмотра. Мемоизирована и получает оверрайды примитивами:
+ * переключение качества/участка в одной строке не перерисовывает соседние.
+ *
+ * Качество и участок интерактивны только у ``valid``: у пропущенной и
+ * ошибочной строки импорт их не применит, поэтому там статичный бейдж, а не
+ * ``Select`` (ADR-0030 — строка остаётся компактной).
+ */
+const PreviewRow = memo(function PreviewRow({
+  item,
+  sections,
+  operations,
+  expanded,
+  qualityOverride,
+  sectionOverride,
+  onToggle,
+  onQualityChange,
+  onSectionChange,
+}: PreviewRowProps) {
+  const rowKey = item.source_row_number;
+  const isSkipped = item.status === "skipped";
+  const isInvalid = item.status === "invalid";
+  const isInteractive = item.status === "valid";
+  const hasRaw = item.raw_values.length > 0;
+  const qualityState = qualityOverride ?? normalizeImportQualityState(item.quality_state);
+  const sectionLabel = getStaticSectionLabel(item, sections);
+
+  return (
+    <Fragment>
+      <tr
+        onClick={() => hasRaw && onToggle(rowKey)}
+        className={`border-b transition-colors cursor-pointer hover:bg-muted/30 ${
+          isInvalid
+            ? "bg-red-50/50 dark:bg-red-950/5"
+            : isSkipped
+              ? "bg-amber-50/40 dark:bg-amber-950/5"
+              : ""
+        }`}
+      >
+        <td className="px-1 py-0.5 text-left">
+          <ImportRawRows.Chevron expanded={expanded} hasContent={hasRaw} />
+        </td>
+        <td className="px-1.5 py-0.5 text-left font-bold text-muted-foreground tabular-nums">
+          {item.source_row_number}
+        </td>
+        <td className="px-1.5 py-0.5 font-mono tabular-nums whitespace-nowrap">
+          {item.source_code ?? "—"}
+        </td>
+        <td
+          className="px-1.5 py-0.5 font-mono font-semibold"
+          title={item.matched_sku && item.matched_sku !== item.sku ? `Найден SKU: ${item.matched_sku}` : undefined}
+        >
+          {item.sku}
+          {item.matched_sku && item.matched_sku !== item.sku ? (
+            <span className="ml-1 font-sans font-normal text-amber-700">→ {item.matched_sku}</span>
+          ) : null}
+        </td>
+        <td
+          className={`px-1.5 py-0.5 ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
+          title={item.source_name ?? undefined}
+        >
+          {item.product_name ?? item.source_name ?? "—"}
+        </td>
+        <td className="px-1.5 py-0.5 font-semibold text-foreground tabular-nums text-right">
+          {fmtQty(item.quantity)}
+        </td>
+        <td className="px-1.5 py-0.5 tabular-nums whitespace-nowrap text-right">
+          {fmtQtyPrecise(item.source_quantity_m)}
+        </td>
+        <td
+          className={`px-1.5 py-0.5 tabular-nums whitespace-nowrap ${
+            item.dimensions ? "font-medium text-foreground" : "text-muted-foreground"
+          }`}
+        >
+          {formatDimensionsLabel(item.dimensions, item.dimensions_label)}
+        </td>
+        <td className="px-1.5 py-0.5 min-w-[160px]">
+          {item.completed_stages && item.completed_stages.length > 0 ? (
+            <RouteStepsDisplay
+              steps={item.completed_stages}
+              referenceOps={operations}
+              compact
+              size="sm"
+            />
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              {getImportItemOperationsLabel(item)}
+            </span>
+          )}
+        </td>
+        <td
+          className="px-1.5 py-0.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {isInteractive ? (
+            <Select
+              value={qualityState}
+              onValueChange={(value) => onQualityChange(rowKey, value as QualityState)}
+            >
+              <SelectTrigger
+                className={`h-6 w-full min-w-[96px] text-[10px] font-semibold border px-2 ${qualityBadgeClass(
+                  qualityState,
+                )}`}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {IMPORT_QUALITY_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <span
+              className={`inline-flex h-6 w-full min-w-[96px] items-center justify-center rounded-md border px-2 text-[10px] font-semibold ${qualityBadgeClass(
+                qualityState,
+              )}`}
+            >
+              {qualityStateLabel(qualityState)}
+            </span>
+          )}
+        </td>
+        <td
+          className="px-1.5 py-0.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {hasSectionInFile(item) ? (
+            <SectionLocationBadge
+              sections={sections}
+              sectionId={item.target_section_id}
+              sectionName={item.target_section_name}
+              invalid={!item.target_section_id}
+              size="sm"
+            />
+          ) : isInteractive ? (
+            <SectionSelect
+              sections={sections}
+              value={sectionOverride ?? item.target_section_id ?? null}
+              onValueChange={(sectionId) => onSectionChange(rowKey, sectionId)}
+              placeholder="Выберите участок"
+              className="h-6 w-full min-w-[140px] text-[10px]"
+            />
+          ) : (
+            <span className="text-xs text-muted-foreground">{sectionLabel}</span>
+          )}
+        </td>
+        <td
+          className={`px-1.5 py-0.5 font-medium leading-snug ${
+            isSkipped
+              ? "whitespace-nowrap text-amber-700 dark:text-amber-400"
+              : "whitespace-pre-line text-destructive"
+          }`}
+        >
+          {isSkipped
+            ? getImportItemErrorsLabel(item)
+            : item.errors.map(translateImportError).join(", ") || "—"}
+        </td>
+        <TableCornerResetCell />
+      </tr>
+      {expanded && hasRaw ? (
+        // Шеврон + все колонки + ячейка сброса фильтров: детализация должна
+        // растягиваться на всю ширину.
+        <ImportRawRows.Detail
+          colSpan={remainderPreviewColumns.length + 2}
+          values={item.raw_values}
+        />
+      ) : null}
+    </Fragment>
+  );
+});
+
+
 /** Подпись типа листа на вкладке (спека §9). */
 const SHEET_KIND_LABELS: Record<RemainderSheetKind, string> = {
   "1c_osv": "ОСВ 1С",
@@ -395,7 +621,9 @@ export function ImportRemaindersDialog({
   const [clearExisting, setClearExisting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebouncedValue(searchQuery);
-  const [filterStatus, setFilterStatus] = useState<"all" | "invalid" | "skipped">("all");
+  // Категория строк — только представление: лист уже загружен целиком, и
+  // переключение чипа не ходит на сервер (#472).
+  const [filterStatus, setFilterStatus] = useState<PreviewStatusFilter>("default");
   // Оверрайды живут по листам: номер строки в разных листах — разные строки,
   // и общая карта при переключении вкладки переписала бы чужой лист.
   const [targetSectionOverridesBySheet, setTargetSectionOverridesBySheet] = useState<
@@ -407,6 +635,10 @@ export function ImportRemaindersDialog({
   const targetSectionOverrides = targetSectionOverridesBySheet[selectedSheet] ?? EMPTY_SECTION_OVERRIDES;
   const qualityStateOverrides =
     qualityStateOverridesBySheet[selectedSheet] ?? EMPTY_QUALITY_OVERRIDES;
+  const resetAllPreviewFilters = useCallback(() => {
+    setFilterStatus("default");
+    setSearchQuery("");
+  }, []);
   const {
     bindColumn,
     columnFilters,
@@ -419,11 +651,8 @@ export function ImportRemaindersDialog({
     resetAll: resetPreviewFilters,
     resetColumnFilters,
   } = useFilterableTable<RemainderPreviewSortField>({
-    extraHasActive: Boolean(searchQuery.trim() || filterStatus !== "all"),
-    onExtraReset: () => {
-      setFilterStatus("all");
-      setSearchQuery("");
-    },
+    extraHasActive: Boolean(searchQuery.trim() || filterStatus !== "default"),
+    onExtraReset: resetAllPreviewFilters,
   });
 
   const columnApiParams = useMemo(
@@ -453,21 +682,26 @@ export function ImportRemaindersDialog({
   // поднимают, и ответ прошлого источника не попадает в кэш нового (ключ
   // кэша — лист и параметры, файла в нём нет).
   const previewSourceVersion = useRef(0);
+  // Токен источника с сервера: после первого ответа файл больше не
+  // отправляется — только параметры фильтра/сортировки (#472).
+  const previewSourceToken = useRef<string | null>(null);
 
   // ── Preview request identity and per-sheet cache ──────────────────────
   // Параметры без `location_id`: ключ кэша не должен зависеть от участка,
   // который сам берётся из ответа предпросмотра.
   //
   // Клиентской пагинации нет: лист запрашивается целиком, чтобы оператор видел
-  // все строки (в т.ч. пропущенные) без переключения страниц. Сервер режет
-  // ответ потолком `PREVIEW_ITEMS_MAX_LIMIT` (5000); строки сверх него
-  // достаются поиском и фильтрами — они применяются до нарезки страницы.
+  // все строки без переключения страниц. Сервер режет ответ потолком
+  // `PREVIEW_ITEMS_MAX_LIMIT` (5000); строки сверх него достаются поиском и
+  // фильтрами — они применяются до нарезки страницы.
+  //
+  // Статуса в параметрах нет: лист приходит целиком (`all`), а категорию
+  // `valid/invalid/skipped` считает клиент — смена чипа не шлёт запрос (#472).
   const previewParams = useMemo(
     () => ({
       sheet_index: selectedSheet,
       row_selection: rowSelection || undefined,
       search: debouncedSearch.trim() || undefined,
-      filter_status: filterStatus,
       sort,
       limit: PREVIEW_ALL_ROWS_LIMIT,
       offset: 0,
@@ -477,7 +711,6 @@ export function ImportRemaindersDialog({
       selectedSheet,
       rowSelection,
       debouncedSearch,
-      filterStatus,
       sort,
       columnApiParams,
     ],
@@ -519,6 +752,7 @@ export function ImportRemaindersDialog({
     setPreviewCache({});
     setPreviewLoadingKeys({});
     setLastPreviewBySheet({});
+    previewSourceToken.current = null;
   }, []);
 
   // ── Reset state when dialog opens ─────────────────────────────────────
@@ -534,7 +768,7 @@ export function ImportRemaindersDialog({
       setClearExisting(false);
       resetExpansion();
       setSearchQuery("");
-      setFilterStatus("all");
+      setFilterStatus("default");
       setTargetSectionOverridesBySheet({});
       setQualityStateOverridesBySheet({});
       setSortConfigs([]);
@@ -580,8 +814,25 @@ export function ImportRemaindersDialog({
     setPreviewLoadingKeys((prev) => ({ ...prev, [key]: true }));
     setError(null);
     try {
-      const data = await previewRemaindersExcel(source, previewQueryOptions);
+      // Токен есть — файл уже на сервере: шлём только параметры (#472).
+      const token = previewSourceToken.current;
+      const request = (useToken: string | null) =>
+        previewRemaindersExcel(useToken ? null : source, {
+          ...previewQueryOptions,
+          source_token: useToken ?? undefined,
+        });
+      let data;
+      try {
+        data = await request(token);
+      } catch (err: unknown) {
+        // Серверный кэш живёт TTL: протухший токен — это не ошибка файла,
+        // а повод один раз переотправить его.
+        if (!token || !isPreviewSourceGone(err)) throw err;
+        previewSourceToken.current = null;
+        data = await request(null);
+      }
       if (previewSourceVersion.current !== sourceVersion) return;
+      if (data.source_token) previewSourceToken.current = data.source_token;
       setPreviewCache((prev) => ({ ...prev, [key]: data }));
     } catch (err: unknown) {
       if (previewSourceVersion.current !== sourceVersion) return;
@@ -645,7 +896,7 @@ export function ImportRemaindersDialog({
     ]);
     setSelectedSheet(0);
     setError(null);
-    setFilterStatus("all");
+    setFilterStatus("default");
     setSearchQuery("");
     setStep("preview");
   }, [resetPreviewState]);
@@ -744,7 +995,7 @@ export function ImportRemaindersDialog({
     onOpenChange(false);
   };
 
-  const handleRowSectionChange = (rowNumber: number, sectionId: number | null) => {
+  const handleRowSectionChange = useCallback((rowNumber: number, sectionId: number | null) => {
     setTargetSectionOverridesBySheet((prev) => {
       const current = prev[selectedSheet] ?? EMPTY_SECTION_OVERRIDES;
       const next = { ...current };
@@ -755,14 +1006,14 @@ export function ImportRemaindersDialog({
       }
       return { ...prev, [selectedSheet]: next };
     });
-  };
+  }, [selectedSheet]);
 
-  const handleRowQualityChange = (rowNumber: number, state: QualityState) => {
+  const handleRowQualityChange = useCallback((rowNumber: number, state: QualityState) => {
     setQualityStateOverridesBySheet((prev) => {
       const current = prev[selectedSheet] ?? EMPTY_QUALITY_OVERRIDES;
       return { ...prev, [selectedSheet]: { ...current, [rowNumber]: state } };
     });
-  };
+  }, [selectedSheet]);
 
   const rowsMissingSection = useMemo(() => {
     if (!shownPreview?.section_meta) return [];
@@ -773,38 +1024,8 @@ export function ImportRemaindersDialog({
     );
   }, [shownPreview, targetSectionOverrides]);
 
-  const previewItems = shownPreview?.items ?? [];
+  const previewItems = useMemo(() => shownPreview?.items ?? [], [shownPreview]);
   const previewItemsTotal = shownPreview?.items_total ?? 0;
-
-  // Читатели значения колонок зависят от состояния диалога (переопределения
-  // участка и качества, справочник участков), поэтому описание колонок с
-  // читателями собирается здесь, а список значений — общим сборщиком из
-  // описания. Перебора полей вручную нет: новая колонка не потребует правки
-  // ни здесь, ни в шапке (#322). Колонки без `filterField` читателя не получают.
-  const previewColumns = useMemo(
-    () =>
-      remainderPreviewColumns.map((column) => {
-        const field = column.filterField;
-        if (!field) return column;
-        return {
-          ...column,
-          cellValue: (item: RemainderImportItem) =>
-            getImportItemCellValue(
-              item,
-              field,
-              targetSectionOverrides,
-              qualityStateOverrides,
-              importableSections,
-            ),
-        };
-      }),
-    [targetSectionOverrides, qualityStateOverrides, importableSections],
-  );
-
-  const uniqueValues = useMemo(
-    () => buildColumnFilterValues(previewItems, previewColumns),
-    [previewItems, previewColumns],
-  );
 
   const stats = useMemo(() => {
     if (!shownPreview) return { total: 0, valid: 0, skipped: 0, invalid: 0, qty: 0 };
@@ -816,6 +1037,129 @@ export function ImportRemaindersDialog({
       qty: shownPreview.summary.quantity_total,
     };
   }, [shownPreview]);
+
+  // Категория — клиентская: лист уже на экране целиком, поэтому чип не шлёт
+  // запрос. По умолчанию видны годные и ошибочные, пропущенные скрыты (#472).
+  const visibleItems = useMemo(() => {
+    if (filterStatus === "skipped") return previewItems.filter((item) => item.status === "skipped");
+    if (filterStatus === "invalid") return previewItems.filter((item) => item.status === "invalid");
+    return previewItems.filter((item) => item.status !== "skipped");
+  }, [previewItems, filterStatus]);
+
+  // Читатели значения колонок не зависят от оверрайдов качества/участка:
+  // список значений фильтра от них не меняется, а пересборка описания колонок
+  // перебирала бы все строки на каждый выбор в строке таблицы (#472).
+  // Колонки без `filterField` читателя не получают (#322).
+  const previewValueColumns = useMemo(
+    () =>
+      remainderPreviewColumns.map((column) => {
+        const field = column.filterField;
+        if (!field) return column;
+        return {
+          ...column,
+          cellValue: (item: RemainderImportItem) =>
+            getImportItemCellValue(
+              item,
+              field,
+              EMPTY_SECTION_OVERRIDES,
+              EMPTY_QUALITY_OVERRIDES,
+              importableSections,
+            ),
+        };
+      }),
+    [importableSections],
+  );
+
+  const uniqueValues = useMemo(
+    () => buildColumnFilterValues(previewItems, previewValueColumns),
+    [previewItems, previewValueColumns],
+  );
+
+  // Чипы-переключатели как в импорте плана: включён один — другой выключен,
+  // повторный клик возвращает дефолт. Чип виден, если счётчик > 0 или
+  // категория активна.
+  const previewFilterFields = useMemo<FiltersPanelField[]>(() => {
+    const fields: FiltersPanelField[] = [
+      {
+        kind: "search",
+        key: "preview-search",
+        value: searchQuery,
+        onChange: setSearchQuery,
+        placeholder: "Код 1С, артикул или наименование…",
+        layoutSpan: "min-w-[240px]",
+      },
+    ];
+    if (stats.invalid > 0 || filterStatus === "invalid") {
+      fields.push({
+        kind: "toggle",
+        key: "preview-status-invalid",
+        label: "Ошибки",
+        tone: "red",
+        hideIcon: true,
+        checked: filterStatus === "invalid",
+        badgeCount: stats.invalid,
+        onChange: () => {
+          setFilterStatus((prev) => (prev === "invalid" ? "default" : "invalid"));
+        },
+        layoutSpan: "min-w-[0px]",
+      });
+    }
+    if (stats.skipped > 0 || filterStatus === "skipped") {
+      fields.push({
+        kind: "toggle",
+        key: "preview-status-skipped",
+        label: "Пропущенные",
+        tone: "amber",
+        hideIcon: true,
+        checked: filterStatus === "skipped",
+        badgeCount: stats.skipped,
+        onChange: () => {
+          setFilterStatus((prev) => (prev === "skipped" ? "default" : "skipped"));
+        },
+        layoutSpan: "min-w-[0px]",
+      });
+    }
+    return fields;
+  }, [filterStatus, searchQuery, stats.invalid, stats.skipped]);
+
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Развёрнутая сырая строка — переменной высоты; виртуализатор считает строки
+  // одинаковыми, поэтому на время разворота таблица рисуется обычным tbody.
+  const hasExpandedPreviewRow = useMemo(
+    () =>
+      visibleItems.some(
+        (item) => item.raw_values.length > 0 && isRowExpanded(item.source_row_number),
+      ),
+    [visibleItems, isRowExpanded],
+  );
+
+  const renderPreviewRow = useCallback(
+    (item: RemainderImportItem) => (
+      <PreviewRow
+        key={item.source_row_number}
+        item={item}
+        sections={importableSections}
+        operations={operations}
+        expanded={isRowExpanded(item.source_row_number)}
+        qualityOverride={qualityStateOverrides[item.source_row_number] ?? null}
+        sectionOverride={targetSectionOverrides[item.source_row_number] ?? null}
+        onToggle={toggleRow}
+        onQualityChange={handleRowQualityChange}
+        onSectionChange={handleRowSectionChange}
+      />
+    ),
+    [
+      importableSections,
+      operations,
+      isRowExpanded,
+      qualityStateOverrides,
+      targetSectionOverrides,
+      toggleRow,
+      handleRowQualityChange,
+      handleRowSectionChange,
+    ],
+  );
 
   // Листы ОСВ файла: только они участвуют в «импортировать все листы».
   const osvSheets = useMemo(
@@ -868,10 +1212,12 @@ export function ImportRemaindersDialog({
     const outcomes: MultiSheetOutcome[] = [];
     for (const sheet of osvSheets) {
       try {
-        const preview = await previewRemaindersExcel(source, {
+        const token = previewSourceToken.current;
+        const preview = await previewRemaindersExcel(token ? null : source, {
           sheet_index: sheet.index,
           limit: 1,
           offset: 0,
+          source_token: token ?? undefined,
         });
         const sectionId = preview.detected_section_id ?? sheet.detected_section_id;
         const sectionName = preview.detected_section_name ?? sheet.detected_section_name;
@@ -1294,30 +1640,16 @@ export function ImportRemaindersDialog({
               ) : null}
 
               {shownPreview ? (
-                <ImportPreview.FilterRow
-                  className="shrink-0"
-                  search={searchQuery}
-                  onSearchChange={setSearchQuery}
-                  searchPlaceholder="Код 1С, артикул или наименование…"
-                  searchClassName="h-6 pl-6 w-56 text-[11px]"
-                  filterSlot={
-                    <Select
-                      value={filterStatus}
-                      onValueChange={(value) => {
-                        setFilterStatus(value as "all" | "invalid" | "skipped");
-                      }}
-                    >
-                      <SelectTrigger className="h-6 text-[11px] w-[128px] font-medium bg-background">
-                        <SelectValue placeholder="Все строки" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Все строки</SelectItem>
-                        <SelectItem value="invalid">Только ошибки</SelectItem>
-                        <SelectItem value="skipped">Только пропущенные</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  }
-                  rightSlot={
+                // Ряд фильтров — общий `FiltersPanel` (compact), как в импорте
+                // плана: поиск, цветные чипы категорий, «Сбросить» и разворот
+                // сырых строк. Своего ряда вёрстки у диалога нет (#472).
+                <FiltersPanel
+                  compact
+                  className="shrink-0 p-1.5"
+                  fields={previewFilterFields}
+                  onReset={resetPreviewFilters}
+                  hasActiveFilters={hasPreviewFilters}
+                  actions={
                     <ImportRawRows.Toggle
                       active={expansion.expandAllRaw}
                       onToggle={() => expansion.setExpandAllRaw(!expansion.expandAllRaw)}
@@ -1329,11 +1661,12 @@ export function ImportRemaindersDialog({
 
               <ImportPreview.TableFrame
                 className={`${DATA_TABLE_STYLES.container} min-h-0`}
+                containerRef={scrollContainerRef}
                 // Спиннер — только пока предпросмотра на экране не было ни
                 // разу: перечитывание по фильтру не должно уносить таблицу
                 // вместе с открытым поповером и набранным текстом (ADR-0044).
                 loading={previewLoading && !shownPreview}
-                isEmpty={shownPreview !== null && previewItems.length === 0}
+                isEmpty={shownPreview !== null && visibleItems.length === 0}
                 emptyContent={
                   shownPreview && previewItemsTotal > 0 ? (
                     <span>Нет строк по текущему фильтру или поиску.</span>
@@ -1373,159 +1706,22 @@ export function ImportRemaindersDialog({
                         />
                       </tr>
                     </thead>
-                    <tbody>
-                      {previewItems.map((item) => {
-                        const rowKey = item.source_row_number;
-                        const isExpanded = isRowExpanded(rowKey);
-                        const hasErrors = item.status === "invalid";
-                        const isSkipped = item.status === "skipped";
-                        const hasRaw = item.raw_values.length > 0;
-
-                        return (
-                          <Fragment key={rowKey}>
-                            <tr
-                              onClick={() => hasRaw && toggleRow(rowKey)}
-                              className={`border-b transition-colors cursor-pointer hover:bg-muted/30 ${
-                                hasErrors
-                                  ? "bg-red-50/50 dark:bg-red-950/5"
-                                  : isSkipped
-                                    ? "bg-amber-50/40 dark:bg-amber-950/5"
-                                    : ""
-                              }`}
-                            >
-                              <td className="px-1 py-0.5 text-left">
-                                <ImportRawRows.Chevron expanded={isExpanded} hasContent={hasRaw} />
-                              </td>
-                              <td className="px-1.5 py-0.5 text-left font-bold text-muted-foreground tabular-nums">
-                                {item.source_row_number}
-                              </td>
-                              <td className="px-1.5 py-0.5 font-mono tabular-nums whitespace-nowrap">
-                                {item.source_code ?? "—"}
-                              </td>
-                              <td
-                                className="px-1.5 py-0.5 font-mono font-semibold"
-                                title={item.matched_sku && item.matched_sku !== item.sku ? `Найден SKU: ${item.matched_sku}` : undefined}
-                              >
-                                {item.sku}
-                                {item.matched_sku && item.matched_sku !== item.sku ? (
-                                  <span className="ml-1 font-sans font-normal text-amber-700">→ {item.matched_sku}</span>
-                                ) : null}
-                              </td>
-                              <td
-                                className={`px-1.5 py-0.5 ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
-                                title={item.source_name ?? undefined}
-                              >
-                                {item.product_name ?? item.source_name ?? "—"}
-                              </td>
-                              <td className="px-1.5 py-0.5 font-semibold text-foreground tabular-nums text-right">
-                                {fmtQty(item.quantity)}
-                              </td>
-                              <td className="px-1.5 py-0.5 tabular-nums whitespace-nowrap text-right">
-                                {fmtQtyPrecise(item.source_quantity_m)}
-                              </td>
-                              <td
-                                className={`px-1.5 py-0.5 tabular-nums whitespace-nowrap ${
-                                  item.dimensions ? "font-medium text-foreground" : "text-muted-foreground"
-                                }`}
-                              >
-                                {formatDimensionsLabel(item.dimensions, item.dimensions_label)}
-                              </td>
-                              <td className="px-1.5 py-0.5 min-w-[160px]">
-                                {item.completed_stages && item.completed_stages.length > 0 ? (
-                                  <RouteStepsDisplay
-                                    steps={item.completed_stages}
-                                    referenceOps={operations}
-                                    compact
-                                    size="sm"
-                                  />
-                                ) : (
-                                  <span className="text-xs text-muted-foreground">
-                                    {getImportItemOperationsLabel(item)}
-                                  </span>
-                                )}
-                              </td>
-                              <td
-                                className="px-1.5 py-0.5"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                <Select
-                                  value={getEffectiveQualityState(item, qualityStateOverrides)}
-                                  onValueChange={(value) =>
-                                    handleRowQualityChange(
-                                      item.source_row_number,
-                                      value as QualityState,
-                                    )
-                                  }
-                                >
-                                  <SelectTrigger
-                                    className={`h-6 w-full min-w-[96px] text-[10px] font-semibold border px-2 ${qualityBadgeClass(
-                                      getEffectiveQualityState(item, qualityStateOverrides),
-                                    )}`}
-                                  >
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {IMPORT_QUALITY_OPTIONS.map((option) => (
-                                      <SelectItem key={option.value} value={option.value}>
-                                        {option.label}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </td>
-                              <td
-                                className="px-1.5 py-0.5"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {hasSectionInFile(item) ? (
-                                  <SectionLocationBadge
-                                    sections={importableSections}
-                                    sectionId={item.target_section_id}
-                                    sectionName={item.target_section_name}
-                                    invalid={!item.target_section_id}
-                                    size="sm"
-                                  />
-                                ) : (
-                                  <SectionSelect
-                                    sections={importableSections}
-                                    value={
-                                      targetSectionOverrides[item.source_row_number] ??
-                                      item.target_section_id ??
-                                      null
-                                    }
-                                    onValueChange={(sectionId) =>
-                                      handleRowSectionChange(item.source_row_number, sectionId)
-                                    }
-                                    placeholder="Выберите участок"
-                                    className="h-6 w-full min-w-[140px] text-[10px]"
-                                  />
-                                )}
-                              </td>
-                              <td
-                                className={`px-1.5 py-0.5 font-medium leading-snug ${
-                                  isSkipped
-                                    ? "whitespace-nowrap text-amber-700 dark:text-amber-400"
-                                    : "whitespace-pre-line text-destructive"
-                                }`}
-                              >
-                                {isSkipped
-                                  ? getImportItemErrorsLabel(item)
-                                  : item.errors.map(translateImportError).join(", ") || "—"}
-                              </td>
-                              <TableCornerResetCell />
-                            </tr>
-                            {isExpanded && hasRaw ? (
-                              // Шеврон + все колонки + ячейка сброса фильтров:
-                              // детализация должна растягиваться на всю ширину.
-                              <ImportRawRows.Detail
-                                colSpan={remainderPreviewColumns.length + 2}
-                                values={item.raw_values}
-                              />
-                            ) : null}
-                          </Fragment>
-                        );
-                      })}
-                    </tbody>
+                    {hasExpandedPreviewRow ? (
+                      // Развёрнутая сырая строка выше компактной и переменной
+                      // высоты; виртуализатор считает строки одинаковыми,
+                      // поэтому на время разворота рисуем обычный tbody.
+                      <tbody>{visibleItems.map(renderPreviewRow)}</tbody>
+                    ) : (
+                      <VirtualizedTableBody
+                        rows={visibleItems}
+                        // Оценка из общего набора компактной строки (ADR-0030):
+                        // фактическую высоту виртуализатор измеряет сам.
+                        rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
+                        colSpan={remainderPreviewColumns.length + 2}
+                        scrollContainerRef={scrollContainerRef}
+                        renderRow={renderPreviewRow}
+                      />
+                    )}
                   </table>
               </ImportPreview.TableFrame>
             </ImportPreview.Layout>

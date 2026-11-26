@@ -52,6 +52,7 @@ function renderToggleField(field: Extract<FiltersPanelField, { kind: "toggle" }>
       className={cn("h-9 text-xs whitespace-nowrap", field.checked ? tone.checked : tone.unchecked, field.disabled && "cursor-not-allowed opacity-50")}
       onClick={() => field.onChange(!field.checked)}
       disabled={field.disabled}
+      aria-pressed={field.checked}
     >
       {!field.hideIcon &&
         (field.checked ? (

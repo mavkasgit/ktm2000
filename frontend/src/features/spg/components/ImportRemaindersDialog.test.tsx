@@ -187,6 +187,7 @@ const makePreview = (
 ): RemainderPreviewResponse => ({
   sheet_name: "Лист",
   source_kind: "manual_template",
+  source_token: "test-source-token",
   detected_section_id: null,
   detected_section_name: null,
   total_rows: 0,
@@ -488,7 +489,41 @@ describe("вкладки листов файла остатков", () => {
 });
 
 describe("пропущенные строки и лист целиком", () => {
-  it("показывает причину пропуска и счётчик, а лист запрашивает без пагинации", async () => {
+  const statusPreview = () =>
+    makePreview({
+      sheet_name: "Склад сырой",
+      source_kind: "1c_osv",
+      detected_section_id: 11,
+      detected_section_name: "Зона Альфа",
+      total_rows: 3,
+      summary: { total: 3, valid: 1, skipped: 1, invalid: 1, quantity_total: 5 },
+      items_total: 3,
+      offset: 0,
+      items: [
+        makeImportItem({ source_row_number: 2, sku: "RAW-001", quantity: 5, target_section_id: 11 }),
+        makeImportItem({
+          source_row_number: 3,
+          sku: "",
+          quantity: null,
+          status: "skipped",
+          skip_reason: "no_catalog",
+          skip_reason_label: "есть в исключениях",
+          skip_note: "Нет в каталоге, новые артикулы не заводим",
+          source_name: "Уголок 50*50 (нет в каталоге)",
+          target_section_id: 11,
+        }),
+        makeImportItem({
+          source_row_number: 4,
+          sku: "BAD-001",
+          quantity: null,
+          status: "invalid",
+          errors: ["Остаток меньше одной штуки"],
+          target_section_id: 11,
+        }),
+      ],
+    });
+
+  const mockPreviewReferences = () => {
     vi.mocked(listSections).mockResolvedValue([
       makeSection({ id: 11, code: "RAW", name: "Зона Альфа" }),
     ]);
@@ -496,70 +531,157 @@ describe("пропущенные строки и лист целиком", () =>
     vi.mocked(getRemainderSheets).mockResolvedValue([
       makeSheet({ index: 0, name: "Склад сырой", kind: "1c_osv", detected_section_id: 11 }),
     ]);
-    vi.mocked(previewRemaindersExcel).mockResolvedValue(
-      makePreview({
-        sheet_name: "Склад сырой",
-        source_kind: "1c_osv",
-        detected_section_id: 11,
-        detected_section_name: "Зона Альфа",
-        total_rows: 2,
-        summary: { total: 2, valid: 1, skipped: 1, invalid: 0, quantity_total: 5 },
-        items_total: 2,
-        offset: 0,
-        items: [
-          makeImportItem({ source_row_number: 2, sku: "RAW-001", quantity: 5, target_section_id: 11 }),
-          makeImportItem({
-            source_row_number: 3,
-            sku: "",
-            quantity: null,
-            status: "skipped",
-            skip_reason: "no_catalog",
-            skip_reason_label: "есть в исключениях",
-            skip_note: "Нет в каталоге, новые артикулы не заводим",
-            // Артикул в каталоге не найден: в колонке «Наименование» серым
-            // печатается строка из файла 1С, иначе пропуск не опознать.
-            source_name: "Уголок 50*50 (нет в каталоге)",
-            target_section_id: 11,
-          }),
-        ],
-      }),
-    );
+    vi.mocked(previewRemaindersExcel).mockResolvedValue(statusPreview());
+  };
 
-    const { cleanup } = mountDialog();
+  const previewChip = (name: RegExp) =>
+    screen.getByRole("button", { name });
+  const bodyRowTexts = () =>
+    screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => row.textContent ?? "");
+
+  const mountPreview = async () => {
+    const mounted = mountDialog();
+    await selectFile();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Всего: 3");
+    });
+    return mounted;
+  };
+
+  it("по умолчанию скрывает пропущенные, но показывает их счётчик", async () => {
+    mockPreviewReferences();
+    const { cleanup } = await mountPreview();
     try {
-      await selectFile();
-      await vi.waitFor(() => {
-        expect(document.body.textContent).toContain("Пропущено: есть в исключениях");
-      });
-      const text = document.body.textContent ?? "";
-
-      // Счётчик и подпись пропуска видны в списке, а не только в логах.
-      expect(text).toContain("Пропущено: 1");
-      // Заметка реестра не дублирует подпись второй строкой.
-      expect(text).not.toContain("Нет в каталоге, новые артикулы не заводим");
-      // Базовая подпись — одна строка: перенос поднимал высоту строки таблицы
-      // выше общего ритма TABLE_ROW_COMPACT (40px, ADR-0030).
-      const skipCell = screen
-        .getByText("Пропущено: есть в исключениях")
-        .closest("td");
-      expect(skipCell?.className).toContain("whitespace-nowrap");
-      // Наименование из файла видно там, где каталог артикул не нашёл.
-      expect(text).toContain("Уголок 50*50 (нет в каталоге)");
-      // Фильтр по статусу умеет показать только пропущенные.
-      const filterTrigger = screen.getAllByRole("combobox")[0];
-      await act(async () => {
-        fireEvent.click(filterTrigger);
-      });
-      await vi.waitFor(() => {
-        expect(screen.getByRole("option", { name: "Только пропущенные" })).toBeTruthy();
-      });
+      // Годная и ошибочная строки видны, пропущенная — нет.
+      expect(document.body.textContent).toContain("RAW-001");
+      expect(document.body.textContent).toContain("BAD-001");
+      expect(document.body.textContent).not.toContain("Уголок 50*50 (нет в каталоге)");
+      expect(document.body.textContent).not.toContain("Пропущено: есть в исключениях");
+      // Бейдж в шапке остался: счётчик пропущенных виден без раскрытия.
+      expect(document.body.textContent).toContain("Пропущено: 1");
+      // Статусного селекта больше нет — категория переключается чипами.
+      expect(screen.queryByRole("combobox", { name: "Все строки" })).toBeNull();
 
       // Пагинации в модалке нет: лист запрошен целиком, футера страниц нет.
       expect(previewRemaindersExcel).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ limit: 5000, offset: 0 }),
       );
-      expect(text).not.toContain("Страница ");
+      expect(document.body.textContent).not.toContain("Страница ");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("чипы изолируют категорию, повторный клик и сброс возвращают дефолт", async () => {
+    mockPreviewReferences();
+    const { cleanup } = await mountPreview();
+    try {
+      const allRows = bodyRowTexts().length;
+      const skippedChip = previewChip(/^Пропущенные \d+$/);
+      const errorsChip = previewChip(/^Ошибки \d+$/);
+      expect(skippedChip.getAttribute("aria-pressed")).toBe("false");
+      expect(errorsChip.getAttribute("aria-pressed")).toBe("false");
+
+      // «Пропущенные» — только skipped, чип включён.
+      await act(async () => {
+        fireEvent.click(skippedChip);
+      });
+      await vi.waitFor(() => {
+        expect(bodyRowTexts()).toHaveLength(1);
+      });
+      expect(document.body.textContent).toContain("Пропущено: есть в исключениях");
+      expect(document.body.textContent).not.toContain("RAW-001");
+      expect(previewChip(/^Пропущенные \d+$/).getAttribute("aria-pressed")).toBe("true");
+      expect(previewChip(/^Ошибки \d+$/).getAttribute("aria-pressed")).toBe("false");
+
+      // Повторный клик по активному — дефолт.
+      await act(async () => {
+        fireEvent.click(previewChip(/^Пропущенные \d+$/));
+      });
+      await vi.waitFor(() => {
+        expect(bodyRowTexts()).toHaveLength(allRows);
+      });
+      expect(previewChip(/^Пропущенные \d+$/).getAttribute("aria-pressed")).toBe("false");
+
+      // «Ошибки» взаимоисключающий: только invalid.
+      await act(async () => {
+        fireEvent.click(previewChip(/^Ошибки \d+$/));
+      });
+      await vi.waitFor(() => {
+        expect(bodyRowTexts()).toHaveLength(1);
+      });
+      expect(document.body.textContent).toContain("BAD-001");
+      expect(document.body.textContent).not.toContain("RAW-001");
+      expect(previewChip(/^Ошибки \d+$/).getAttribute("aria-pressed")).toBe("true");
+
+      // «Сбросить» возвращает дефолт.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
+      });
+      await vi.waitFor(() => {
+        expect(bodyRowTexts()).toHaveLength(allRows);
+      });
+      expect(previewChip(/^Ошибки \d+$/).getAttribute("aria-pressed")).toBe("false");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("подпись пропуска — одна строка, чипы не шлют сетевой запрос", async () => {
+    mockPreviewReferences();
+    const { cleanup } = await mountPreview();
+    try {
+      const initialCalls = vi.mocked(previewRemaindersExcel).mock.calls.length;
+
+      await act(async () => {
+        fireEvent.click(previewChip(/^Пропущенные \d+$/));
+      });
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("Пропущено: есть в исключениях");
+      });
+      // Переключение категории — клиентская фильтрация: лист уже на экране.
+      expect(previewRemaindersExcel).toHaveBeenCalledTimes(initialCalls);
+
+      // Базовая подпись — одна строка: перенос поднимал высоту строки таблицы
+      // выше общего ритма TABLE_ROW_COMPACT (40px, ADR-0030).
+      const skipCell = screen
+        .getByText("Пропущено: есть в исключениях")
+        .closest("td");
+      expect(skipCell?.className).toContain("whitespace-nowrap");
+      // Заметка реестра не дублирует подпись второй строкой.
+      expect(document.body.textContent).not.toContain(
+        "Нет в каталоге, новые артикулы не заводим",
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("смена сортировки не отправляет файл повторно, а идёт по токену", async () => {
+    mockPreviewReferences();
+    const { cleanup } = await mountPreview();
+    try {
+      expect(previewRemaindersExcel).toHaveBeenCalledTimes(1);
+      const firstSource = vi.mocked(previewRemaindersExcel).mock.calls[0][0];
+      expect(firstSource).not.toBeNull();
+
+      // Клик по шапке сортировки — новый запрос, но без файла: источник уже
+      // на сервере под токеном (#472).
+      const skuSort = screen.getByRole("button", { name: /^Артикул, сортировка/ });
+      expect(skuSort).toBeTruthy();
+      await act(async () => {
+        fireEvent.click(skuSort);
+      });
+      await vi.waitFor(() => {
+        expect(previewRemaindersExcel).toHaveBeenCalledTimes(2);
+      });
+      const secondCall = vi.mocked(previewRemaindersExcel).mock.calls[1];
+      expect(secondCall[0]).toBeNull();
+      expect(secondCall[1]?.source_token).toBe("test-source-token");
     } finally {
       cleanup();
     }

@@ -313,6 +313,20 @@ def db_mode() -> str:
     return _ensure_hybrid_mode()
 
 
+@pytest.fixture(autouse=True)
+def _reset_remainder_preview_cache() -> Iterator[None]:
+    """Кэш разбора остатков — процессный, поэтому чистится до и после теста.
+
+    Разбор держит ссылки на артикулы и участки из БД (#472): без сброса тест
+    с тем же содержимым xlsx увидел бы обогащение предыдущей схемы.
+    """
+    from app.stock.preview_cache import reset_remainder_preview_cache
+
+    reset_remainder_preview_cache()
+    yield
+    reset_remainder_preview_cache()
+
+
 @pytest.fixture(scope="session")
 def run_id(db_mode: str) -> str:
     _ = db_mode

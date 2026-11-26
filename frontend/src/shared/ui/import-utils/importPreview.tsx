@@ -177,6 +177,12 @@ export type ImportPreviewTableFrameProps = {
   onReset?: () => void;
   children: React.ReactNode;
   className?: string;
+  /**
+   * Ссылка на прокручиваемый контейнер: `VirtualizedTableBody` слушает его
+   * scroll. Ref на сам элемент, а не на обёртку — виртуализация без него
+   * не знает, что прокручивается.
+   */
+  containerRef?: React.Ref<HTMLDivElement>;
 };
 
 export function ImportPreviewTableFrame({
@@ -190,9 +196,13 @@ export function ImportPreviewTableFrame({
   onReset,
   children,
   className,
+  containerRef,
 }: ImportPreviewTableFrameProps) {
   return (
-    <div className={cn("flex-1 overflow-auto border rounded-xl bg-background", className)}>
+    <div
+      ref={containerRef}
+      className={cn("flex-1 overflow-auto border rounded-xl bg-background", className)}
+    >
       {loading ? (
         loadingContent ??
         (loadingVariant === "spinner" ? (

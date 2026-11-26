@@ -18,10 +18,13 @@ const OSV_XLS_PATH = path.resolve(__dirname, "testdata/ОСВ E2E.xlsx");
 /**
  * @ui — предпросмотр диалога «Импорт остатков» на листе 1С ОСВ.
  *
- * Проверяет то, ради чего диалог перестал листать страницы: лист приходит
- * целиком, поэтому оператор видит пропущенные строки вместе с причиной без
- * переключения страниц. Строка адресуется кодом 1С, а не точным текстом
- * причины: подпись приходит с сервера и может уточняться.
+ * Проверяет категории строк как в импорте плана: пропущенные скрыты по
+ * умолчанию, открываются чипом «Пропущенные», «Ошибки» изолирует ошибочные,
+ * повторный клик и «Сбросить» возвращают дефолт. Переключение чипа — клиентская
+ * фильтрация: запроса нет. Смена сортировки идёт по `source_token`, без файла.
+ *
+ * Строка адресуется кодом 1С, а не точным текстом причины: подпись приходит с
+ * сервера и может уточняться.
  *
  * Сетап данных — API: артикул ЮП-009, чтобы годная строка матчилась по
  * наименованию (привязка кода 1С не нужна). Реестр исключений ОСВ приходит
@@ -37,7 +40,13 @@ test.describe("@ui Предпросмотр импорта остатков из
     });
   });
 
-  test("лист целиком: причина пропуска, счётчики и фильтр без пагинации", async ({ page }) => {
+  test("категории строк: пропущенные скрыты, чипы, сортировка по токену", async ({ page }) => {
+    // Считаем запросы предпросмотра: чипы не должны ходить на сервер (#472).
+    let previewRequests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/stock/import/remainders/preview")) previewRequests += 1;
+    });
+
     await arriveAtRoute(page, "/spg");
 
     const importButton = page.getByRole("button", { name: "Импорт из Excel" });
@@ -54,34 +63,70 @@ test.describe("@ui Предпросмотр импорта остатков из
       timeout: 30_000,
     });
 
-    // Три строки листа на экране, без нарезки на страницы. Счётчики
-    // подтверждают, что годная строка действительно годная (матч по ЮП-009).
-    await expect(dialog.locator("tbody tr")).toHaveCount(3);
+    // Счётчики считают весь лист, даже когда категория скрыта из таблицы.
     await expect(dialog.getByText("OK: 1 (40)", { exact: true })).toBeVisible();
     await expect(dialog.getByText("Пропущено: 1", { exact: true })).toBeVisible();
     await expect(dialog.getByText("Ошибок: 1", { exact: true })).toBeVisible();
-    await expect(dialog.getByText(/Показаны первые/)).toHaveCount(0);
 
-    // Пропущенная строка — по коду 1С, в колонке «Ошибки» подпись начинается
-    // с «Пропущено:», а причина остаётся читаемой (конкретная категория
-    // приходит с сервера и в спеке не хардкодится).
+    // Дефолт — годные и ошибочные: пропущенная строка (11820) скрыта.
+    const rows = dialog.locator("tbody tr");
+    await expect(rows).toHaveCount(2);
+    await expect(dialog.getByRole("row").filter({ hasText: "11820" })).toHaveCount(0);
+    await expect(dialog.getByRole("row").filter({ hasText: "99999" })).toHaveCount(1);
+
+    const skippedChip = dialog.getByRole("button", { name: /^Пропущенные/ });
+    const errorsChip = dialog.getByRole("button", { name: /^Ошибки/ });
+    await expect(skippedChip).toHaveAttribute("aria-pressed", "false");
+    await expect(errorsChip).toHaveAttribute("aria-pressed", "false");
+
+    const requestsAfterPreview = previewRequests;
+
+    // «Пропущенные» показывает только skipped — без сетевого запроса.
+    await skippedChip.click();
+    await expect(rows).toHaveCount(1);
+    await expect(skippedChip).toHaveAttribute("aria-pressed", "true");
+    await expect(errorsChip).toHaveAttribute("aria-pressed", "false");
     const skippedRow = dialog.getByRole("row").filter({ hasText: "11820" });
     await expect(skippedRow).toHaveCount(1);
     await expect(skippedRow).toContainText("Шкала РТБ-1560.00.00.001");
-    const skippedErrors = skippedRow
-      .getByRole("cell")
-      .filter({ hasText: /Пропущено: / });
+    const skippedErrors = skippedRow.getByRole("cell").filter({ hasText: /Пропущено: / });
     await expect(skippedErrors).toHaveCount(1);
     await expect(skippedErrors).toContainText(/^Пропущено: /);
+    expect(previewRequests).toBe(requestsAfterPreview);
 
-    // Фильтр статуса умеет показать только пропущенные строки.
-    const statusFilter = dialog
-      .getByRole("combobox")
-      .filter({ hasText: "Все строки" });
-    await expect(statusFilter).toHaveCount(1);
-    await statusFilter.click();
-    await expect(page.getByRole("option", { name: "Только пропущенные" })).toBeVisible();
-    await page.keyboard.press("Escape");
+    // Повторный клик по активному чипу — снова дефолт.
+    await skippedChip.click();
+    await expect(rows).toHaveCount(2);
+    await expect(skippedChip).toHaveAttribute("aria-pressed", "false");
+
+    // «Ошибки» взаимоисключающий: остаётся только ошибочная строка.
+    await errorsChip.click();
+    await expect(rows).toHaveCount(1);
+    await expect(dialog.getByRole("row").filter({ hasText: "99999" })).toHaveCount(1);
+    await expect(dialog.getByRole("row").filter({ hasText: "11820" })).toHaveCount(0);
+    await expect(errorsChip).toHaveAttribute("aria-pressed", "true");
+    expect(previewRequests).toBe(requestsAfterPreview);
+
+    // «Сбросить» возвращает дефолт и снимает чип.
+    await dialog.getByRole("button", { name: "Сбросить" }).click();
+    await expect(rows).toHaveCount(2);
+    await expect(errorsChip).toHaveAttribute("aria-pressed", "false");
+    expect(previewRequests).toBe(requestsAfterPreview);
+
+    // Сортировка — новый запрос, но файл не отправляется: лист уже на сервере
+    // под `source_token` (#472).
+    const tokenRequest = page.waitForRequest(
+      (request) =>
+        request.url().includes("/stock/import/remainders/preview") &&
+        (request.postData() ?? "").includes("source_token"),
+    );
+    const sortButton = dialog
+      .getByRole("columnheader", { name: /Артикул/ })
+      .getByRole("button");
+    await sortButton.click();
+    const tokenPayload = (await tokenRequest).postDataBuffer()?.toString("utf8") ?? "";
+    expect(tokenPayload).toContain("source_token");
+    expect(tokenPayload).not.toContain('filename="');
 
     // Футера пагинации нет: диалог показывает лист целиком.
     await expect(dialog.getByText(/Страница \d+ из \d+/)).toHaveCount(0);

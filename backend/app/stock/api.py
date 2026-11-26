@@ -95,6 +95,14 @@ from app.stock.models import (
     StockBalance,
     StockTransaction,
 )
+from app.stock.preview_cache import (
+    SOURCE_KIND_CLIPBOARD,
+    SOURCE_KIND_FILE,
+    get_cached_remainder_parsed,
+    get_remainder_preview_source,
+    remember_remainder_preview_source,
+    store_remainder_parsed,
+)
 from app.stock.services import StockCommand, StockCommandService, StockValidationError
 
 router = APIRouter(prefix="/stock", tags=["stock-ledger"])
@@ -112,6 +120,61 @@ async def _load_template_column_mapping(
             status_code=404, detail=f"Шаблон импорта с id={template_id} не найден"
         )
     return dict(template.column_mapping or {})
+
+
+async def _parse_remainder_source_content(
+    db: AsyncSession,
+    *,
+    content: bytes,
+    source_kind: str,
+    sheet_index: int,
+    row_selection: str | None,
+    column_mapping: dict | None = None,
+) -> ParsedRemainders:
+    """Разобрать остатки из уже прочитанного содержимого и обогатить ОСВ.
+
+    ``source_kind`` — ``file`` (xlsx) или ``clipboard``. Выделено из
+    ``_parse_remainder_import_source``, чтобы предпросмотр мог разбирать
+    источник один раз и брать готовые строки из кэша (#472), а импорт — свой
+    свежий разбор.
+    """
+    try:
+        if source_kind == "clipboard":
+            sheet_name, total_rows, items, summary = await parse_remainders_clipboard(
+                content.decode("utf-8"), row_selection, column_mapping
+            )
+            parsed = ParsedRemainders(
+                sheet_name=sheet_name,
+                total_rows=total_rows,
+                items=items,
+                summary=summary,
+                source_kind=SOURCE_KIND_MANUAL_TEMPLATE,
+            )
+        else:
+            parsed = await parse_remainders_sheet(
+                content, sheet_index, row_selection, column_mapping
+            )
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if parsed.source_kind == SOURCE_KIND_1C_OSV:
+        await _lookup_1c_products(db, parsed.items)
+        await resolve_1c_osv_quantities(db, parsed.items)
+        # Ось выполненных операций — префикс маршрута по маркерам наименования
+        # (#468). Полуфабрикат получает свой участок (Склад ГП), поэтому
+        # участок листа ниже ставится только строкам без собственного.
+        await resolve_1c_osv_completed_operations(db, parsed.items)
+        section_id, section_name = await resolve_1c_storage_section(
+            db, parsed.header_rows
+        )
+        parsed.detected_section_id = section_id
+        parsed.detected_section_name = section_name
+        if section_id is not None:
+            for item in parsed.items:
+                if item.target_section_name is None:
+                    item.target_section_id = section_id
+                    item.target_section_name = section_name
+    return parsed
 
 
 async def _parse_remainder_import_source(
@@ -143,43 +206,128 @@ async def _parse_remainder_import_source(
             detail="Укажите файл или вставьте данные из буфера обмена",
         )
 
-    try:
-        if has_clipboard:
-            sheet_name, total_rows, items, summary = await parse_remainders_clipboard(
-                clipboard_text or "", row_selection, column_mapping
-            )
-            parsed = ParsedRemainders(
-                sheet_name=sheet_name,
-                total_rows=total_rows,
-                items=items,
-                summary=summary,
-                source_kind=SOURCE_KIND_MANUAL_TEMPLATE,
-            )
-        else:
-            content = await file.read()  # type: ignore[union-attr]
-            parsed = await parse_remainders_sheet(
-                content, sheet_index, row_selection, column_mapping
-            )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if has_clipboard:
+        content = (clipboard_text or "").encode("utf-8")
+        source_kind = "clipboard"
+    else:
+        content = await file.read()  # type: ignore[union-attr]
+        source_kind = "file"
 
-    if parsed.source_kind == SOURCE_KIND_1C_OSV:
-        await _lookup_1c_products(db, parsed.items)
-        await resolve_1c_osv_quantities(db, parsed.items)
-        # Ось выполненных операций — префикс маршрута по маркерам наименования
-        # (#468). Полуфабрикат получает свой участок (Склад ГП), поэтому
-        # участок листа ниже ставится только строкам без собственного.
-        await resolve_1c_osv_completed_operations(db, parsed.items)
-        section_id, section_name = await resolve_1c_storage_section(
-            db, parsed.header_rows
+    return await _parse_remainder_source_content(
+        db,
+        content=content,
+        source_kind=source_kind,
+        sheet_index=sheet_index,
+        row_selection=row_selection,
+        column_mapping=column_mapping,
+    )
+
+
+async def _resolve_remainder_preview_source(
+    *,
+    file: UploadFile | None,
+    clipboard_text: str | None,
+    source_token: str | None,
+) -> tuple[bytes, str, str]:
+    """Содержимое, род источника и токен для повторных запросов предпросмотра.
+
+    Источник приходит один раз (файл/буфер), дальше клиент шлёт только
+    ``source_token``: смена фильтра/сортировки/чипа не отправляет файл
+    повторно (#472). Токен — ``sha256`` содержимого, поэтому новый файл
+    естественно даёт новый ключ кэша.
+    """
+    has_file = file is not None and file.filename
+    has_clipboard = bool(clipboard_text and clipboard_text.strip())
+
+    if source_token:
+        if has_file or has_clipboard:
+            raise HTTPException(
+                status_code=422,
+                detail="Укажите либо файл/буфер обмена, либо source_token",
+            )
+        stored = get_remainder_preview_source(source_token)
+        if stored is None:
+            raise HTTPException(
+                status_code=410,
+                detail="Источник предпросмотра устарел — загрузите файл заново",
+            )
+        content, kind = stored
+        return content, kind, source_token
+
+    if has_file and has_clipboard:
+        raise HTTPException(
+            status_code=422,
+            detail="Укажите либо файл, либо данные из буфера обмена",
         )
-        parsed.detected_section_id = section_id
-        parsed.detected_section_name = section_name
-        if section_id is not None:
-            for item in parsed.items:
-                if item.target_section_name is None:
-                    item.target_section_id = section_id
-                    item.target_section_name = section_name
+    if not has_file and not has_clipboard:
+        raise HTTPException(
+            status_code=422,
+            detail="Укажите файл или вставьте данные из буфера обмена",
+        )
+
+    if has_clipboard:
+        content = (clipboard_text or "").encode("utf-8")
+        kind = SOURCE_KIND_CLIPBOARD
+    else:
+        content = await file.read()  # type: ignore[union-attr]
+        kind = SOURCE_KIND_FILE
+    token = remember_remainder_preview_source(content, kind)
+    return content, kind, token
+
+
+async def _load_remainder_preview_parsed(
+    db: AsyncSession,
+    *,
+    content: bytes,
+    source_kind: str,
+    source_token: str,
+    sheet_index: int,
+    row_selection: str | None,
+    template_id: int | None,
+    column_mapping: dict | None,
+) -> ParsedRemainders:
+    """Разобранный и обогащённый лист — из кэша или разбором источника.
+
+    Ключ — то, от чего зависит сам разбор: лист, выбор строк и шаблон. Фильтры,
+    сортировка и оверрайды качества/участка к разбору не относятся — они
+    применяются к готовым строкам ниже.
+    """
+    cache_key = (sheet_index, (row_selection or "").strip(), template_id or 0)
+    cached = get_cached_remainder_parsed(source_token, cache_key)
+    if cached is not None:
+        return cached
+
+    parsed = await _parse_remainder_source_content(
+        db,
+        content=content,
+        source_kind=source_kind,
+        sheet_index=sheet_index,
+        row_selection=row_selection,
+        column_mapping=column_mapping,
+    )
+
+    # Ручной шаблон обогащается здесь же: иначе повторный запрос предпросмотра
+    # с тем же токеном вернул бы строки без артикулов и габаритов.
+    if parsed.source_kind != SOURCE_KIND_1C_OSV:
+        await _lookup_remainder_products(db, parsed.items)
+        # Габариты: явная длина / типовой размер / invalid (ADR-0003, п. 3)
+        await resolve_remainder_dimensions(db, parsed.items)
+
+    # Resolve completed stages and target sections — тоже один раз на лист:
+    # повторные запросы предпросмотра берут готовые строки из кэша.
+    ops_dict = await resolve_operations_dictionary(db)
+    for item in parsed.items:
+        if item.completed_operations_raw and not item.completed_stages:
+            item.completed_stages = await resolve_completed_stages(
+                db, item.completed_operations_raw, ops_dict, item.errors,
+            )
+        if item.target_section_name:
+            sec_id, _ = await resolve_target_section(
+                db, item.target_section_name, item.errors,
+            )
+            item.target_section_id = sec_id
+
+    store_remainder_parsed(source_token, cache_key, parsed, len(parsed.items))
     return parsed
 
 
@@ -1566,6 +1714,8 @@ class RemainderPreviewOut(BaseModel):
 
     sheet_name: str
     source_kind: SourceKind
+    # Токен источника: следующие запросы предпросмотра идут без файла (#472).
+    source_token: str
     detected_section_id: int | None = None
     detected_section_name: str | None = None
     total_rows: int
@@ -1614,6 +1764,7 @@ async def preview_remainders_excel(
     quality: str | None = Form(None),
     section: str | None = Form(None),
     errors: str | None = Form(None),
+    source_token: str | None = Form(None),
     file: UploadFile | None = File(None),
     clipboard_text: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
@@ -1625,6 +1776,9 @@ async def preview_remainders_excel(
     * ``target_section_overrides`` — опциональный JSON ``{"row_num": sec_id, ...}``
       для UI-оверрайда участка.
     * ``clipboard_text`` — TSV из буфера (копия из Excel), альтернатива ``file``.
+    * ``source_token`` — токен уже загруженного источника: файл/буфер повторно
+      не отправляются, сервер разбирает лист один раз (#472). Неизвестный или
+      протухший токен — 410, клиент перезагружает файл.
     * ``limit`` / ``offset`` / ``items_total`` — серверная пагинация по ``items``.
     * ``search`` — поиск по SKU, product_name, коду 1С, номеру строки.
     * ``filter_status`` — ``all``, ``invalid`` или ``skipped``.
@@ -1665,38 +1819,25 @@ async def preview_remainders_excel(
         value_parser=lambda value: QualityState(str(value).lower()),
     )
 
-    parsed = await _parse_remainder_import_source(
-        db,
+    content, source_kind, preview_source_token = await _resolve_remainder_preview_source(
         file=file,
         clipboard_text=clipboard_text,
+        source_token=source_token,
+    )
+
+    parsed = await _load_remainder_preview_parsed(
+        db,
+        content=content,
+        source_kind=source_kind,
+        source_token=preview_source_token,
         sheet_index=sheet_index,
         row_selection=row_selection,
+        template_id=template_id,
         column_mapping=await _load_template_column_mapping(db, template_id),
     )
     sheet_name = parsed.sheet_name
     total_rows = parsed.total_rows
     items = parsed.items
-
-    # ОСВ 1С уже обогащена разбором (артикул, длина, штуки, участок) — режим
-    # ручного шаблона идёт прежним путём (#458).
-    if parsed.source_kind != SOURCE_KIND_1C_OSV:
-        await _lookup_remainder_products(db, items)
-
-        # Габариты: явная длина / типовой размер / invalid (ADR-0003, п. 3)
-        await resolve_remainder_dimensions(db, items)
-
-    # Resolve completed stages and target sections
-    ops_dict = await resolve_operations_dictionary(db)
-    for item in items:
-        if item.completed_operations_raw and not item.completed_stages:
-            item.completed_stages = await resolve_completed_stages(
-                db, item.completed_operations_raw, ops_dict, item.errors,
-            )
-        if item.target_section_name:
-            sec_id, _ = await resolve_target_section(
-                db, item.target_section_name, item.errors,
-            )
-            item.target_section_id = sec_id
 
     # Recalculate summary after product enrichment
     valid_count = sum(1 for it in items if it.status == "valid")
@@ -1738,6 +1879,7 @@ async def preview_remainders_excel(
     return {
         "sheet_name": sheet_name,
         "source_kind": parsed.source_kind,
+        "source_token": preview_source_token,
         "detected_section_id": parsed.detected_section_id,
         "detected_section_name": parsed.detected_section_name,
         "total_rows": total_rows,

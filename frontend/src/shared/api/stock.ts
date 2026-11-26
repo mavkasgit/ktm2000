@@ -565,6 +565,11 @@ export type RemainderPreviewResponse = {
   sheet_name: string;
   /** Режим листа, определённый сервером (спека §5.2). */
   source_kind: RemainderSheetKind;
+  /**
+   * Токен загруженного источника: следующие запросы предпросмотра идут с ним,
+   * без повторной отправки файла (#472).
+   */
+  source_token: string;
   /** Участок, определённый по шапке ОСВ; `null` — автоопределения нет. */
   detected_section_id: number | null;
   detected_section_name: string | null;
@@ -605,6 +610,8 @@ export type RemainderImportOptions = RemainderPreviewQueryParams & {
   location_id?: number;
   sheet_index?: number;
   row_selection?: string;
+  /** Токен источника предпросмотра: файл повторно не отправляется (#472). */
+  source_token?: string;
   quality_state?: QualityState;
   skip_invalid?: boolean;
   clear_existing?: boolean;
@@ -625,11 +632,19 @@ function appendRemainderImportSource(formData: FormData, source: RemainderImport
 }
 
 export async function previewRemaindersExcel(
-  source: RemainderImportSource,
+  source: RemainderImportSource | null,
   opts: RemainderImportOptions = {},
 ): Promise<RemainderPreviewResponse> {
   const formData = new FormData();
-  appendRemainderImportSource(formData, source);
+  if (opts.source_token) {
+    // Источник уже на сервере: повторная отправка файла — лишние байты и
+    // повторный разбор листа на каждую смену фильтра (#472).
+    formData.append("source_token", opts.source_token);
+  } else if (source) {
+    appendRemainderImportSource(formData, source);
+  } else {
+    throw new Error("Нет источника предпросмотра: укажите файл, буфер или source_token");
+  }
   if (opts.location_id != null) {
     formData.append("location_id", String(opts.location_id));
   }
