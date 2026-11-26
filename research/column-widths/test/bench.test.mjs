@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { aggregate, loadBrowserH4, parseSections, runConfig } from "../bench.mjs";
-import { CELL_PADDING_PX, buildColumns } from "../lib/columns.mjs";
+import {
+  aggregate,
+  clampColumns,
+  loadBrowserH4,
+  mainColumns,
+  parseSections,
+  runConfig,
+  runSweep,
+} from "../bench.mjs";
+import {
+  CELL_PADDING_PX,
+  LINE_HEIGHT_PX,
+  ROW_PADDING_PX,
+  buildColumns,
+} from "../lib/columns.mjs";
+import { generateSheet } from "../lib/generator.mjs";
+import { evaluate, prepareSheet } from "../lib/evaluate.mjs";
 import { createMeasurer } from "../lib/measurers.mjs";
 
 const OPTIONS = {
@@ -65,6 +80,75 @@ test("runConfig отдаёт ширины всех колонок и не вых
   }
 });
 
+test("основной режим: clamp=null, свип задаёт потолок", async () => {
+  const measurer = await createMeasurer("greedy");
+  for (const column of mainColumns(12)) {
+    if (column.wrap) assert.equal(column.clamp, null, column.id);
+  }
+  for (const column of clampColumns(12, 3)) {
+    if (column.wrap) assert.equal(column.clamp, 3, column.id);
+  }
+
+  const columns = mainColumns(11);
+  const sheet = generateSheet({
+    profile: "long-tail",
+    rows: 200,
+    columns,
+    seed: 1,
+  });
+  const free = prepareSheet(sheet, measurer);
+  const clamped = prepareSheet(
+    { ...sheet, columns: clampColumns(11, 3) },
+    measurer,
+  );
+  const widths = Object.fromEntries(
+    columns.map((column) => [column.id, column.minPx]),
+  );
+  const freeMetrics = evaluate(free, widths, { lambda: 0, collectRows: true });
+  const clampedMetrics = evaluate(clamped, widths, {
+    lambda: 0,
+    collectRows: true,
+  });
+  assert.ok(
+    freeMetrics.maxHeight > clampedMetrics.maxHeight,
+    `без clamp высота ${freeMetrics.maxHeight}, с clamp 3 — ${clampedMetrics.maxHeight}`,
+  );
+});
+
+test("свип: без потолка нет потери текста, clamp 2 держит высоту", async () => {
+  const measurer = await createMeasurer("greedy");
+  const cases = runSweep(measurer, {
+    profiles: ["long-tail"],
+    rows: 200,
+    widths: [1500],
+    seed: 1,
+    clamps: ["none", 2],
+    lambda: 20,
+  });
+  assert.equal(cases.length, 2);
+  const free = cases.find((item) => item.clamp === "none");
+  const capped = cases.find((item) => item.clamp === 2);
+  assert.equal(free.textTruncatedShare, 0);
+  assert.equal(free.textTruncatedCells, 0);
+  assert.ok(
+    capped.maxHeight <= 2 * LINE_HEIGHT_PX + ROW_PADDING_PX,
+    `clamp 2: maxHeight ${capped.maxHeight}`,
+  );
+  assert.ok(free.rows4PlusShare > 0, "long-tail без clamp должен давать 4+ строк");
+});
+
+test("продуктовый срез сравнивает политики и считает рост", async () => {
+  const measurer = await createMeasurer("greedy");
+  const config = runConfig({ ...OPTIONS, measurer, policies: true });
+  const policy = config.policies;
+  assert.ok(policy, "policies должны быть посчитаны");
+  assert.ok(policy.currentProduct.height > 0);
+  assert.ok(policy.noClampBaseline.height > 0);
+  assert.ok(policy.noClampBest.height > 0);
+  assert.equal(Number.isFinite(policy.growthPct.best), true);
+  assert.equal(Number.isFinite(policy.growthPct.baseline), true);
+});
+
 test("loadBrowserH4 без файла честно просит browser:test", () => {
   const result = loadBrowserH4("definitely-missing-browser.json");
   assert.equal(result.available, false);
@@ -74,11 +158,12 @@ test("loadBrowserH4 без файла честно просит browser:test", (
 test("--only парсит секции и all", () => {
   assert.deepEqual(parseSections("product"), ["product"]);
   assert.deepEqual(parseSections("product,oracle"), ["oracle", "product"]);
+  assert.deepEqual(parseSections("sensitivity"), ["sweep"]);
   assert.deepEqual(parseSections("all"), [
     "matrix",
     "oracle",
     "product",
-    "sensitivity",
+    "sweep",
   ]);
   assert.throws(() => parseSections("matrix,nope"), /неизвестная секция/);
 });
