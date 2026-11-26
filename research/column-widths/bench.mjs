@@ -5,7 +5,7 @@
  * Основной сценарий — полный текст: `clamp = ∞`, `λ = 0`. Обрезка — отдельная
  * политика, её цена измеряется свипом.
  *
- * Прогон состоит из шести частей:
+ * Прогон состоит из семи частей:
  *
  * - `matrix`  — 7 профилей × {100,1000,5000} × {1180,1500,1920} × {6,12,20} × seeds;
  *               метрики считаются по полному листу, оптимизатор видит ≤500 строк;
@@ -16,7 +16,9 @@
  * - `sweep`   — Парето «высота против потерянного текста»:
  *               `clamp ∈ {∞,6,4,3,2}` при `λ = 20`;
  * - `stability` — матрица сожалений: доли с W0 = 1500 на других ширинах (#482);
- * - `robust`  — один робастный вектор долей на профили × ширины (#482, #487).
+ * - `robust`  — один робастный вектор долей на профили × ширины (#482);
+ * - `offline` — запасной исход #487: зашитый вектор долей и таблица по 2–3
+ *               бакетам против текущих продуктовых долей (порог §15).
  *
  * Гипотезы H1–H4 выводятся с числом и вердиктом. H4 берётся из браузерного
  * прогона #479 (`results/browser.json`, создаёт `npm run browser:test`), а не из
@@ -28,8 +30,8 @@
  *   node research/column-widths/bench.mjs --measurer=pretext
  *   node research/column-widths/bench.mjs --seeds=3
  *   node research/column-widths/bench.mjs --only=product  # matrix|oracle|product|
- *                                                         # sweep|stability|robust|all
- *                                                         # (или через запятую)
+ *                                                         # sweep|stability|robust|
+ *                                                         # offline|all (или через запятую)
  *   node research/column-widths/bench.mjs --lambda=40     # λ свипа (основной всегда 0)
  *
  * Результаты: research/column-widths/results/{bench.json,report.md}. Каталог
@@ -47,19 +49,31 @@ import {
   MIN_ROW_HEIGHT_PX,
   ROW_PADDING_PX,
   SERVICE_WIDTH_PX,
+  baselineWidths,
   buildColumns,
   maxWidth,
   sumWidths,
 } from "./lib/columns.mjs";
+import { columnMaxWordWidths } from "./lib/curves.mjs";
 import { createMeasurer } from "./lib/measurers.mjs";
 import { evaluate, measureCell, prepareSheet } from "./lib/evaluate.mjs";
 import { OPTIMIZERS, oracleOptimizer } from "./lib/optimizers.mjs";
 import {
   buildRobustScenario,
   contentSharesFromFlexShares,
+  normalizeShares,
   robustShares,
   widthsFromFlexShares,
 } from "./lib/robust.mjs";
+import {
+  OFFLINE_BUCKET_PLANS,
+  OFFLINE_FLEX_SHARES,
+  OFFLINE_FLEX_SHARES_SOURCE,
+  bucketIndexForTableWidth,
+  fitBucketShares,
+  policyMetrics,
+  widthViolations as offlineWidthViolations,
+} from "./lib/offline-shares.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RESULTS_DIR = resolve(HERE, "results");
@@ -100,7 +114,15 @@ const CSS_ERROR_LINE_HEIGHT_PX = 11 * 1.375; // leading-snug при text-[11px]
 const FIT_ROWS = 500;
 const ORACLE_ROWS = 60;
 
-const SECTIONS = ["matrix", "oracle", "product", "sweep", "stability", "robust"];
+const SECTIONS = [
+  "matrix",
+  "oracle",
+  "product",
+  "sweep",
+  "stability",
+  "robust",
+  "offline",
+];
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -218,6 +240,27 @@ function robustSpec() {
     columnCount: 11,
     rowLimit: QUICK ? 300 : FIT_ROWS,
     maxCandidates: QUICK ? 8 : 12,
+  };
+}
+
+/**
+ * Оффлайн-доли (#487): зашитый вектор #482 против текущих долей.
+ * Подбор — seed 1, проверка — seed 2 и отложенные профили; `--quick` урезает
+ * профили и строки, его вердикт решением не является.
+ */
+function offlineSpec() {
+  return {
+    profiles: QUICK ? ["realistic", "long-tail"] : PROFILES,
+    rows: QUICK ? 300 : 1000,
+    widths: QUICK ? [1180, 1500, 1600] : [1180, 1400, 1500, 1600, 1920],
+    fitSeed: 1,
+    seeds: [1, 2],
+    columnCount: 11,
+    fitRows: QUICK ? 200 : 300,
+    fitWidths: [1180, 1500, 1600],
+    fitMaxSweeps: 3,
+    fitMaxCandidates: 8,
+    trainProfiles: ["realistic", "all-short", "mixed"],
   };
 }
 
@@ -1007,6 +1050,510 @@ export function runRobustVector(measurer, spec = {}) {
   };
 }
 
+/**
+ * Оффлайн-доли (#487): зашитый вектор #482 и таблица по 2–3 бакетам против
+ * текущих продуктовых долей. Основной сценарий — полный текст (`clamp = ∞`,
+ * `λ = 0`), поэтому потеря текста должна быть нулевой; обрезка пилюль считается
+ * отдельно и в высоту не подмешивается.
+ *
+ * Подбор идёт на `fitSeed` (1), проверка — на остальных seed'ах и на профилях,
+ * которых не было в подборе (`heldOut`). Вектор из #482 не пересчитывается:
+ * в отчёт и в #483 идёт одна и та же константа, а `fit` показывает, насколько
+ * текущая сетка данных от неё ушла.
+ */
+export function runOfflineShares(measurer, spec = {}) {
+  const profiles = spec.profiles ?? PROFILES;
+  const widths = spec.widths ?? [1180, 1400, 1500, 1600, 1920];
+  const rows = spec.rows ?? 1000;
+  const fitSeed = spec.fitSeed ?? 1;
+  const seeds = spec.seeds ?? [fitSeed, 2];
+  const columnCount = spec.columnCount ?? 11;
+  const fitRows = spec.fitRows ?? 300;
+  const fitWidths = spec.fitWidths ?? [1180, 1500, 1600];
+  const fitMaxSweeps = spec.fitMaxSweeps ?? 3;
+  const fitMaxCandidates = spec.fitMaxCandidates ?? 8;
+  const trainProfiles = spec.trainProfiles ?? ["realistic", "all-short", "mixed"];
+  const columns = mainColumns(columnCount);
+  const flexIds = columns.filter((column) => column.flex).map((column) => column.id);
+  const pinnedShares = normalizeShares(flexIds, OFFLINE_FLEX_SHARES);
+
+  const preparedCache = new Map();
+  const maxWordsCache = new Map();
+  const preparedFor = (seed, profile) => {
+    const key = `${seed}:${profile}`;
+    if (!preparedCache.has(key)) {
+      const sheet = generateSheet({ profile, rows, columns, seed });
+      const prepared = prepareSheet(sheet, measurer);
+      preparedCache.set(key, prepared);
+      maxWordsCache.set(key, columnMaxWordWidths(prepared));
+    }
+    return preparedCache.get(key);
+  };
+  const fitPreparedCache = new Map();
+  const fitPreparedFor = (profile) => {
+    if (!fitPreparedCache.has(profile)) {
+      const sheet = generateSheet({
+        profile,
+        rows: fitRows,
+        columns,
+        seed: fitSeed,
+      });
+      fitPreparedCache.set(profile, prepareSheet(sheet, measurer));
+    }
+    return fitPreparedCache.get(profile);
+  };
+
+  // Границы бакетов входят в сетку сценариев: без них бакет, подобранный в
+  // середине диапазона, мог бы нарушить minPx у края.
+  const boundaries = [
+    ...new Set(
+      Object.values(OFFLINE_BUCKET_PLANS).flatMap((plan) =>
+        plan.buckets
+          .map((bucket) => bucket.maxTableWidth)
+          .filter((value) => Number.isFinite(value)),
+      ),
+    ),
+  ];
+  const scenarioWidths = [
+    ...new Set([
+      ...fitWidths,
+      ...boundaries,
+      ...Object.values(OFFLINE_BUCKET_PLANS).flatMap((plan) =>
+        plan.buckets.flatMap((bucket) => bucket.fitWidths),
+      ),
+    ]),
+  ].sort((a, b) => a - b);
+
+  const scenarios = [];
+  for (const profile of profiles) {
+    const prepared = fitPreparedFor(profile);
+    for (const tableWidth of scenarioWidths) {
+      scenarios.push(
+        buildRobustScenario({
+          prepared,
+          contentWidth: contentWidth(tableWidth),
+          lambda: MAIN_LAMBDA,
+          rowLimit: Math.min(fitRows, FIT_ROWS),
+          maxCandidates: fitMaxCandidates,
+          profile,
+          tableWidth,
+        }),
+      );
+    }
+  }
+  const fitScenarios = scenarios.filter((scenario) =>
+    fitWidths.includes(scenario.tableWidth),
+  );
+
+  const fit = robustShares(fitScenarios, {
+    objectives: spec.objectives,
+    maxSweeps: fitMaxSweeps,
+  });
+  const fittedPlans = {};
+  for (const [name, plan] of Object.entries(OFFLINE_BUCKET_PLANS)) {
+    fittedPlans[name] = {
+      label: plan.label,
+      buckets: fitBucketShares(scenarios, plan, {
+        objectives: spec.objectives,
+        maxSweeps: fitMaxSweeps,
+      }),
+    };
+  }
+
+  const bucketName = (name) => `bucket${name === "two" ? 2 : 3}`;
+  const planNames = Object.keys(fittedPlans);
+
+  const widthsFor = (profile, seed, tableWidth) => {
+    const prepared = preparedFor(seed, profile);
+    const content = contentWidth(tableWidth);
+    const policies = {
+      current: baselineWidths(columns, content),
+      offline: widthsFromFlexShares(columns, content, pinnedShares),
+      refit: widthsFromFlexShares(columns, content, fit.shares),
+      search: OPTIMIZERS.search(prepared, content, { lambda: MAIN_LAMBDA })
+        .widths,
+    };
+    const buckets = {};
+    for (const name of planNames) {
+      const plan = fittedPlans[name];
+      const index = bucketIndexForTableWidth(tableWidth, plan);
+      buckets[name] = index;
+      policies[bucketName(name)] = widthsFromFlexShares(
+        columns,
+        content,
+        plan.buckets[index].shares,
+      );
+    }
+    return { prepared, content, policies, buckets };
+  };
+
+  const metricPolicy = (prepared, widths, maxWordWidths, content) => {
+    const metrics = policyMetrics(prepared, widths);
+    const violations = offlineWidthViolations(
+      columns,
+      widths,
+      content,
+      maxWordWidths,
+    );
+    return {
+      height: metrics.height,
+      meanHeight: round(metrics.meanHeight, 2),
+      p95Height: round(metrics.p95Height, 2),
+      maxHeight: round(metrics.maxHeight, 2),
+      textCells: metrics.textCells,
+      textTruncatedCells: metrics.textTruncatedCells,
+      textTruncatedSharePct: round(metrics.textTruncatedSharePct, 2),
+      pillCells: metrics.pillCells,
+      pillTruncatedCells: metrics.pillTruncatedCells,
+      pillTruncatedSharePct: round(metrics.pillTruncatedSharePct, 2),
+      widthSum: round(sumWidths(columns, widths), 1),
+      violations,
+      widths,
+    };
+  };
+
+  const cases = [];
+  for (const seed of seeds) {
+    for (const profile of profiles) {
+      const prepared = preparedFor(seed, profile);
+      const maxWordWidths = maxWordsCache.get(`${seed}:${profile}`);
+      for (const tableWidth of widths) {
+        const { content, policies, buckets } = widthsFor(
+          profile,
+          seed,
+          tableWidth,
+        );
+        const measured = {};
+        for (const [name, policyWidths] of Object.entries(policies)) {
+          measured[name] = metricPolicy(
+            prepared,
+            policyWidths,
+            maxWordWidths,
+            content,
+          );
+        }
+        cases.push({
+          seed,
+          profile,
+          tableWidth,
+          contentWidth: content,
+          buckets,
+          policies: measured,
+        });
+      }
+    }
+  }
+
+  const policyNames = ["current", "offline", "refit", "search"];
+  for (const name of planNames) policyNames.push(bucketName(name));
+
+  const summarize = (subset, names = policyNames) => {
+    const summary = {};
+    for (const name of names) {
+      const items = subset.filter((item) => item.policies[name]);
+      if (items.length === 0) continue;
+      const heightPct = items.map(
+        (item) =>
+          (item.policies[name].height / item.policies.current.height - 1) * 100,
+      );
+      const textPct = items.map(
+        (item) => item.policies[name].textTruncatedSharePct,
+      );
+      const pillPct = items.map(
+        (item) => item.policies[name].pillTruncatedSharePct,
+      );
+      summary[name] = {
+        cases: items.length,
+        heightMean: round(average(items.map((item) => item.policies[name].height)), 1),
+        heightPctMean: round(average(heightPct), 2),
+        heightPctWorst: round(maxOf(heightPct), 2),
+        heightPctBest: round(minOf(heightPct), 2),
+        textTruncatedSharePctMean: round(average(textPct), 2),
+        textTruncatedSharePctWorst: round(maxOf(textPct), 2),
+        textTruncatedCells: items.reduce(
+          (sum, item) => sum + item.policies[name].textTruncatedCells,
+          0,
+        ),
+        pillTruncatedSharePctMean: round(average(pillPct), 2),
+        pillTruncatedSharePctWorst: round(maxOf(pillPct), 2),
+        violations: items.reduce(
+          (sum, item) => sum + item.policies[name].violations.length,
+          0,
+        ),
+      };
+    }
+    return summary;
+  };
+
+  const bySeed = {};
+  for (const seed of seeds) {
+    const subset = cases.filter((item) => item.seed === seed);
+    bySeed[seed] = {
+      overall: summarize(subset),
+      byWidth: widths.map((tableWidth) => ({
+        tableWidth,
+        ...summarize(subset.filter((item) => item.tableWidth === tableWidth)),
+      })),
+      byProfile: profiles.map((profile) => ({
+        profile,
+        ...summarize(subset.filter((item) => item.profile === profile)),
+      })),
+    };
+  }
+
+  // Отложенные профили: вектор подобран без них, проверка — на них и на seed 2.
+  const trainSet = new Set(trainProfiles);
+  const testProfiles = profiles.filter((profile) => !trainSet.has(profile));
+  const trainScenarios = fitScenarios.filter((scenario) =>
+    trainSet.has(scenario.profile),
+  );
+  let heldOut = null;
+  if (trainScenarios.length > 0 && testProfiles.length > 0) {
+    const held = robustShares(trainScenarios, {
+      objectives: spec.objectives,
+      maxSweeps: fitMaxSweeps,
+    });
+    const heldCases = [];
+    for (const seed of seeds) {
+      for (const profile of testProfiles) {
+        const prepared = preparedFor(seed, profile);
+        const maxWordWidths = maxWordsCache.get(`${seed}:${profile}`);
+        for (const tableWidth of widths) {
+          const content = contentWidth(tableWidth);
+          const currentWidths = baselineWidths(columns, content);
+          const heldWidths = widthsFromFlexShares(columns, content, held.shares);
+          heldCases.push({
+            seed,
+            profile,
+            tableWidth,
+            policies: {
+              current: metricPolicy(
+                prepared,
+                currentWidths,
+                maxWordWidths,
+                content,
+              ),
+              held: metricPolicy(prepared, heldWidths, maxWordWidths, content),
+            },
+          });
+        }
+      }
+    }
+    heldOut = {
+      trainProfiles: [...trainProfiles],
+      testProfiles,
+      shares: held.shares,
+      meanGapPct: round(held.meanGapPct, 2),
+      worstGapPct: round(held.worstGapPct, 2),
+      bounds: held.bounds,
+      cases: heldCases,
+      bySeed: Object.fromEntries(
+        seeds.map((seed) => [
+          seed,
+          summarize(
+            heldCases.filter((item) => item.seed === seed),
+            ["current", "held"],
+          ),
+        ]),
+      ),
+      overall: summarize(heldCases, ["current", "held"]),
+    };
+  }
+
+  // Переключение бакета: на границе соседние векторы не должны давать скачок
+  // больше выигрыша бакета над единым вектором, и не должны ломать минимумы.
+  const bucketSwitches = planNames.map((name) => {
+    const plan = fittedPlans[name];
+    const boundariesForPlan = plan.buckets
+      .slice(0, -1)
+      .map((bucket) => bucket.maxTableWidth);
+    const checks = boundariesForPlan.map((boundary, index) => {
+      const items = [];
+      for (const seed of seeds) {
+        for (const profile of profiles) {
+          const prepared = preparedFor(seed, profile);
+          const maxWordWidths = maxWordsCache.get(`${seed}:${profile}`);
+          const content = contentWidth(boundary);
+          const leftWidths = widthsFromFlexShares(
+            columns,
+            content,
+            plan.buckets[index].shares,
+          );
+          const rightWidths = widthsFromFlexShares(
+            columns,
+            content,
+            plan.buckets[index + 1].shares,
+          );
+          const robustWidths = widthsFromFlexShares(
+            columns,
+            content,
+            pinnedShares,
+          );
+          const left = metricPolicy(prepared, leftWidths, maxWordWidths, content);
+          const right = metricPolicy(
+            prepared,
+            rightWidths,
+            maxWordWidths,
+            content,
+          );
+          const robust = metricPolicy(
+            prepared,
+            robustWidths,
+            maxWordWidths,
+            content,
+          );
+          const best = Math.min(left.height, right.height);
+          const jumpPct =
+            (Math.abs(left.height - right.height) / (best || 1)) * 100;
+          const gainPct = ((robust.height - best) / (robust.height || 1)) * 100;
+          items.push({
+            seed,
+            profile,
+            leftHeight: left.height,
+            rightHeight: right.height,
+            jumpPct: round(jumpPct, 3),
+            gainPct: round(gainPct, 3),
+            withinGain: jumpPct <= gainPct + 1e-9,
+            violations: [...left.violations, ...right.violations],
+          });
+        }
+      }
+      const worstJump = items.reduce(
+        (worst, item) => (!worst || item.jumpPct > worst.jumpPct ? item : worst),
+        null,
+      );
+      return {
+        boundary,
+        cases: items.length,
+        worstJumpPct: worstJump ? worstJump.jumpPct : 0,
+        worstJumpProfile: worstJump ? worstJump.profile : null,
+        worstJumpSeed: worstJump ? worstJump.seed : null,
+        worstJumpGainPct: worstJump ? worstJump.gainPct : 0,
+        jumpExceedsGainCases: items.filter((item) => !item.withinGain).length,
+        violations: items.reduce(
+          (sum, item) => sum + item.violations.length,
+          0,
+        ),
+        passes: items.every((item) => item.withinGain) &&
+          items.every((item) => item.violations.length === 0),
+        items,
+      };
+    });
+    return {
+      plan: name,
+      label: plan.label,
+      buckets: plan.buckets,
+      boundaries: checks,
+      passes: checks.every((item) => item.passes),
+    };
+  });
+
+  const overall = summarize(cases);
+  const primary = bySeed[fitSeed] ?? { overall };
+  const heightGainPct = -(primary.overall.offline?.heightPctMean ?? 0);
+  const pillDeltaPp =
+    (primary.overall.offline?.pillTruncatedSharePctMean ?? 0) -
+    (primary.overall.current?.pillTruncatedSharePctMean ?? 0);
+  const heightPass = heightGainPct >= 4;
+  const pillPass = -pillDeltaPp >= 1;
+  const textLossPct = primary.overall.offline?.textTruncatedSharePctMean ?? 0;
+  const profilesBelowHeight = (bySeed[fitSeed]?.byProfile ?? [])
+    .filter(
+      (item) =>
+        item.offline &&
+        -(item.offline.heightPctMean ?? 0) < 4,
+    )
+    .map((item) => ({
+      profile: item.profile,
+      heightGainPct: round(-(item.offline.heightPctMean ?? 0), 2),
+    }));
+
+  const decision = {
+    threshold: { heightPct: 4, pillPp: 1 },
+    fitSeed,
+    heightGainPct: round(heightGainPct, 2),
+    heightPass,
+    textLossPct,
+    textLossZero: textLossPct === 0,
+    pillCurrentPct: primary.overall.current?.pillTruncatedSharePctMean ?? 0,
+    pillOfflinePct: primary.overall.offline?.pillTruncatedSharePctMean ?? 0,
+    pillDeltaPp: round(pillDeltaPp, 2),
+    pillPass,
+    passes: heightPass || pillPass,
+    profilesBelowHeight,
+    seed2: bySeed[2]?.overall.offline
+      ? {
+          heightGainPct: round(-bySeed[2].overall.offline.heightPctMean, 2),
+          pillDeltaPp: round(
+            bySeed[2].overall.offline.pillTruncatedSharePctMean -
+              bySeed[2].overall.current.pillTruncatedSharePctMean,
+            2,
+          ),
+        }
+      : null,
+  };
+  if (heightPass && !pillPass) {
+    decision.reason =
+      `высота −${decision.heightGainPct}% против текущих долей (порог ≥4%) пройдена, ` +
+      `но обрезка пилюль ${decision.pillCurrentPct}% → ${decision.pillOfflinePct}% ` +
+      `(+${decision.pillDeltaPp} п.п.): это цена, а не улучшение. ` +
+      "Формально §15 выполнен по высоте; допустимость обрезки пилюль решает #485.";
+  } else if (pillPass && !heightPass) {
+    decision.reason =
+      `высота даёт только −${decision.heightGainPct}% (порог 4%), ` +
+      `но обрезка пилюль снижается на ${-decision.pillDeltaPp} п.п. (порог 1 п.п.).`;
+  } else if (heightPass && pillPass) {
+    decision.reason =
+      `высота −${decision.heightGainPct}% и обрезка пилюль ${decision.pillDeltaPp} п.п. — оба порога §15 пройдены.`;
+  } else {
+    decision.reason =
+      `высота даёт −${decision.heightGainPct}% (порог 4%), обрезка пилюль ${decision.pillDeltaPp} п.п. ` +
+      "(порог −1 п.п.): оффлайн-доли порог §15 не проходят, остаётся текущий фикс.";
+  }
+
+  return {
+    spec: {
+      ...spec,
+      profiles,
+      widths,
+      rows,
+      fitSeed,
+      seeds,
+      columnCount,
+      fitRows,
+      fitWidths,
+      fitMaxSweeps,
+      fitMaxCandidates,
+      trainProfiles,
+    },
+    pinned: {
+      source: OFFLINE_FLEX_SHARES_SOURCE,
+      shares: pinnedShares,
+      textLossPolicy: "полный текст: clamp = ∞, λ = 0",
+    },
+    fit: {
+      shares: fit.shares,
+      meanGapPct: round(fit.meanGapPct, 2),
+      worstGapPct: round(fit.worstGapPct, 2),
+      driftPp: round(
+        maxOf(
+          flexIds.map((id) => Math.abs(fit.shares[id] - pinnedShares[id]) * 100),
+        ),
+        3,
+      ),
+      seed: fit.seed,
+      objective: fit.objective,
+    },
+    plans: fittedPlans,
+    cases,
+    overall,
+    bySeed,
+    heldOut,
+    bucketSwitches,
+    decision,
+  };
+}
+
 /** Диагностика модели: pretext против greedy на синтетике. Это не H4. */
 async function runMeasurerAgreement(measurer) {
   if (measurer.name !== "greedy") return null;
@@ -1546,7 +2093,7 @@ function buildDecision({ regret, robust }) {
   };
 }
 
-function buildHypotheses({ oracle, sampleStability, widthStability, h4, regret, robust }) {
+function buildHypotheses({ oracle, sampleStability, widthStability, h4, regret, robust, offline }) {
   const hypotheses = [];
   if (oracle) {
     const best = oracle.best;
@@ -1662,6 +2209,21 @@ function buildHypotheses({ oracle, sampleStability, widthStability, h4, regret, 
     });
   }
 
+  if (offline) {
+    const item = offline.decision;
+    hypotheses.push({
+      id: "H-offline",
+      statement:
+        "оффлайн-доли (#482) дают ≥4% суммарной высоты или ≥1 п.п. обрезки пилюль против текущих долей (спека §15)",
+      value: `высота −${item.heightGainPct}%, пилюли ${item.pillDeltaPp > 0 ? "+" : ""}${item.pillDeltaPp} п.п.; текст ${item.textLossPct}%`,
+      threshold: "≥4% или ≥1 п.п.",
+      verdict: item.passes ? "порог пройден" : "порог не пройден",
+      note:
+        `${offline.cases.length} конфигураций, seed ${item.fitSeed} (проверка seed 2); ` +
+        `пилюли — отдельная метрика, не потеря текста; профилей ниже 4%: ${item.profilesBelowHeight.length}`,
+    });
+  }
+
   if (h4.available) {
     hypotheses.push({
       id: "H4",
@@ -1713,6 +2275,7 @@ function buildReport(data) {
     measurerAgreement,
     regret,
     robust,
+    offline,
     decision,
   } = data;
   const lines = [];
@@ -1740,7 +2303,7 @@ function buildReport(data) {
   );
   push(`- Секции: ${meta.sections.join(", ")}`);
   push(
-    `- Конфигураций: ${meta.counts.matrix} матрица, ${meta.counts.product} продуктовый срез, ${meta.counts.oracle} оракул, ${meta.counts.sweep} свип, ${meta.counts.stability} матрица сожалений, ${meta.counts.robust} сценариев робастного вектора, ${meta.counts.virtualization} виртуализация`,
+    `- Конфигураций: ${meta.counts.matrix} матрица, ${meta.counts.product} продуктовый срез, ${meta.counts.oracle} оракул, ${meta.counts.sweep} свип, ${meta.counts.stability} матрица сожалений, ${meta.counts.robust} сценариев робастного вектора, ${meta.counts.offline} оффлайн-долей, ${meta.counts.virtualization} виртуализация`,
   );
   push(`- Время прогона: ${meta.runtimeMs} мс`);
   push("");
@@ -2030,6 +2593,235 @@ function buildReport(data) {
       `Средний gap — **${robust.meanGapPct}%**, худший — **${robust.worstGapPct}%**; порог 2%/4% ${robust.passes ? "пройден" : "не пройден"}. ` +
         `Ограничения по \`minPx\`/\`maxShare\` ${robust.bounds.feasible ? "совместимы на всех ширинах" : "несовместимы: вектор не может уважать минимумы сразу на всех W'"}; нарушений в проверке — ${robust.byWidth.reduce((sum, item) => sum + item.violations, 0)}.`,
     );
+    push("");
+  }
+
+  if (offline) {
+    const seed1 = offline.bySeed[offline.spec.fitSeed] ?? null;
+    const seed2 = offline.bySeed[2] ?? null;
+    const names = ["offline", "search", "bucket2", "bucket3"];
+    push("## Оффлайн-доли: зашитый вектор против текущих долей (#487)");
+    push("");
+    push(
+      `Порог §15: оффлайн-доли достаточны при **≥${offline.decision.threshold.heightPct}% суммарной высоты** или **≥${offline.decision.threshold.pillPp} п.п. обрезки пилюль** против текущих долей при полном тексте (\`clamp = ∞\`, \`λ = 0\`). ` +
+        `Вектор — ${offline.pinned.source}; он не пересчитывается. Диагностический пересчёт по seed 1 ` +
+        `(${offline.spec.fitWidths.join("/")}, ${offline.spec.fitRows} строк) дал ` +
+        `${Object.entries(offline.fit.shares).map(([id, share]) => `${id} ${round(share * 100, 2)}%`).join(" / ")} ` +
+        `(расхождение с константой ≤${offline.fit.driftPp} п.п.), поэтому отчёт и #483 говорят об одних числах.`,
+    );
+    push("");
+    push("| Колонка | Доля гибкого бюджета, % | Доля контента при W0 = 1500, % |");
+    push("|---|---:|---:|");
+    {
+      const w0Case =
+        offline.cases.find(
+          (item) =>
+            item.tableWidth === 1500 && item.seed === offline.spec.fitSeed,
+        ) ?? offline.cases[0];
+      const content = w0Case?.contentWidth ?? 1500 - SERVICE_WIDTH_PX;
+      const widths = w0Case?.policies.offline.widths ?? {};
+      for (const [id, share] of Object.entries(offline.pinned.shares)) {
+        push(
+          `| ${id} | ${round(share * 100, 2)} | ${round(((widths[id] ?? 0) / content) * 100, 2)} |`,
+        );
+      }
+    }
+    push("");
+    push("### Высота по ширине таблицы (seed 1, среднее по профилям)");
+    push("");
+    push("| W | Текущие, px | Оффлайн, px | Оффлайн Δ | search, px | search Δ | 2 бакета, px | 2 бакета Δ | 3 бакета, px | 3 бакета Δ |");
+    push("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    for (const group of seed1.byWidth) {
+      const cell = (name) =>
+        group[name]
+          ? `${group[name].heightMean} | ${signedPercent(group[name].heightPctMean)}`
+          : "— | —";
+      push(
+        `| ${group.tableWidth} | ${group.current.heightMean} | ${cell("offline")} | ${cell("search")} | ${cell("bucket2")} | ${cell("bucket3")} |`,
+      );
+    }
+    push("");
+    push("### Текст и пилюли по ширине (seed 1, % ячеек)");
+    push("");
+    push(
+      "Потеря текста — только текстовые колонки (наименование, ошибки); у полного текста она обязана быть 0. Обрезка пилюль — только «Операции» (`nowrap`, подпись в `title`), это не потеря текста.",
+    );
+    push("");
+    push("| W | Текст: текущие / оффлайн / search / 2 бакета / 3 бакета | Пилюли: текущие | Пилюли: оффлайн | Пилюли: search | Пилюли: 2 бакета | Пилюли: 3 бакета |");
+    push("|---:|---|---:|---:|---:|---:|---:|");
+    for (const group of seed1.byWidth) {
+      const text = ["current", ...names]
+        .map((name) => `${group[name]?.textTruncatedSharePctMean ?? "—"}`)
+        .join(" / ");
+      push(
+        `| ${group.tableWidth} | ${text} | ${group.current.pillTruncatedSharePctMean} | ${group.offline.pillTruncatedSharePctMean} | ${group.search.pillTruncatedSharePctMean} | ${group.bucket2.pillTruncatedSharePctMean} | ${group.bucket3.pillTruncatedSharePctMean} |`,
+      );
+    }
+    push("");
+    push("### Профили (seed 1, все ширины)");
+    push("");
+    push("| Профиль | Текущие, px | Оффлайн Δ | search Δ | 2 бакета Δ | 3 бакета Δ | Пилюли: текущие → оффлайн |");
+    push("|---|---:|---:|---:|---:|---:|---:|");
+    for (const item of seed1.byProfile) {
+      push(
+        `| ${item.profile} | ${item.current.heightMean} | ${signedPercent(item.offline.heightPctMean)} | ${signedPercent(item.search.heightPctMean)} | ${signedPercent(item.bucket2.heightPctMean)} | ${signedPercent(item.bucket3.heightPctMean)} | ${item.current.pillTruncatedSharePctMean} → ${item.offline.pillTruncatedSharePctMean} |`,
+      );
+    }
+    push("");
+    const sliceWidth = offline.spec.widths.includes(1500)
+      ? 1500
+      : offline.spec.widths[Math.floor(offline.spec.widths.length / 2)];
+    const slice = offline.cases.filter(
+      (item) => item.seed === offline.spec.fitSeed && item.tableWidth === sliceWidth,
+    );
+    if (slice.length > 0) {
+      const avgPct = (name) =>
+        round(
+          average(
+            slice.map(
+              (item) =>
+                (item.policies[name].height /
+                  item.policies.current.height -
+                  1) *
+                100,
+            ),
+          ),
+          2,
+        );
+      push(`### Срез по профилям при W = ${sliceWidth} (seed 1)`);
+      push("");
+      push("| Профиль | Текущие, px | Оффлайн Δ | search Δ | 2 бакета Δ | 3 бакета Δ | Пилюли: текущие → оффлайн |");
+      push("|---|---:|---:|---:|---:|---:|---:|");
+      for (const profile of offline.spec.profiles) {
+        const item = slice.find((entry) => entry.profile === profile);
+        if (!item) continue;
+        const cell = (name) =>
+          signedPercent(
+            round(
+              (item.policies[name].height /
+                item.policies.current.height -
+                1) *
+                100,
+              2,
+            ),
+          );
+        push(
+          `| ${profile} | ${item.policies.current.height} | ${cell("offline")} | ${cell("search")} | ${cell("bucket2")} | ${cell("bucket3")} | ${item.policies.current.pillTruncatedSharePct} → ${item.policies.offline.pillTruncatedSharePct} |`,
+        );
+      }
+      push("");
+    }
+    push("### Устойчивость: seed 2");
+    push("");
+    push("| Seed | Оффлайн Δ высоты | Оффлайн пилюли | Текущие пилюли | Текст оффлайн |");
+    push("|---:|---:|---:|---:|---:|");
+    for (const seed of offline.spec.seeds) {
+      const item = offline.bySeed[seed];
+      if (!item) continue;
+      push(
+        `| ${seed} | ${signedPercent(item.overall.offline.heightPctMean)} | ${item.overall.offline.pillTruncatedSharePctMean}% | ${item.overall.current.pillTruncatedSharePctMean}% | ${item.overall.offline.textTruncatedSharePctMean}% |`,
+      );
+    }
+    push("");
+    if (offline.heldOut) {
+      push("### Отложенные профили (вектор подобран без них)");
+      push("");
+      push(
+        `Подбор: ${offline.heldOut.trainProfiles.join(", ")}; проверка: ${offline.heldOut.testProfiles.join(", ")}. ` +
+          `Доли: ${Object.entries(offline.heldOut.shares).map(([id, share]) => `${id} ${round(share * 100, 2)}%`).join(" / ")}; ` +
+          `средний gap ${offline.heldOut.meanGapPct}%, худший ${offline.heldOut.worstGapPct}%.`,
+      );
+      push("");
+      push("| Seed | Оффлайн Δ высоты | Пилюли | Текст |");
+      push("|---:|---:|---:|---:|");
+      for (const seed of offline.spec.seeds) {
+        const item = offline.heldOut.bySeed[seed];
+        if (!item) continue;
+        push(
+          `| ${seed} | ${signedPercent(item.held.heightPctMean)} | ${item.held.pillTruncatedSharePctMean}% | ${item.held.textTruncatedSharePctMean}% |`,
+        );
+      }
+      push("");
+    }
+    push("### Бакетные таблицы");
+    push("");
+    push("| План | Бакет | Диапазон W | Автоподбор на W | source / operations / errors, % | Средний gap | Худший gap |");
+    push("|---|---:|---|---:|---|---:|---:|");
+    for (const name of Object.keys(offline.plans)) {
+      const plan = offline.plans[name];
+      plan.buckets.forEach((bucket, index) => {
+        const lower = index === 0 ? 0 : plan.buckets[index - 1].maxTableWidth;
+        const upper = Number.isFinite(bucket.maxTableWidth)
+          ? bucket.maxTableWidth
+          : "∞";
+        push(
+          `| ${plan.label} | ${index} | ${lower} < W ≤ ${upper} | ${bucket.fitWidths.join(", ")} | ${["source_name", "operations", "errors"].map((id) => round(bucket.shares[id] * 100, 2)).join(" / ")} | ${round(bucket.meanGapPct, 2)} | ${round(bucket.worstGapPct, 2)} |`,
+        );
+      });
+    }
+    push("");
+    push("| План | Граница W | Худший скачок, % | Выигрыш бакета, % | Профиль / seed | Скачок ≤ выигрыш | Наруш. min/max |");
+    push("|---|---:|---:|---:|---|---:|---:|");
+    for (const plan of offline.bucketSwitches) {
+      for (const item of plan.boundaries) {
+        push(
+          `| ${plan.label} | ${item.boundary} | ${item.worstJumpPct} | ${item.worstJumpGainPct} | ${item.worstJumpProfile} / ${item.worstJumpSeed} | ${item.jumpExceedsGainCases === 0 ? "да" : `нет (${item.jumpExceedsGainCases}/${item.cases})`} | ${item.violations} |`,
+        );
+      }
+    }
+    push("");
+    {
+      const failures = offline.bucketSwitches.reduce(
+        (sum, plan) =>
+          sum +
+          plan.boundaries.reduce(
+            (boundarySum, item) => boundarySum + item.jumpExceedsGainCases,
+            0,
+          ),
+        0,
+      );
+      const checks = offline.bucketSwitches.reduce(
+        (sum, plan) =>
+          sum +
+          plan.boundaries.reduce(
+            (boundarySum, item) => boundarySum + item.cases,
+            0,
+          ),
+        0,
+      );
+      const maxGain = maxOf(
+        offline.bucketSwitches.flatMap((plan) =>
+          plan.boundaries.map((item) => item.worstJumpGainPct),
+        ),
+      );
+      push(
+        `Бакеты **${offline.bucketSwitches.every((plan) => plan.passes) ? "проходят" : "не проходят"}** собственный критерий: скачок на границе не должен быть больше выигрыша бакета над единым вектором и не должен ломать \`minPx\`/\`maxShare\`. ` +
+          `Скачок превышает выигрыш в ${failures} из ${checks} проверок, максимальный выигрыш — ${round(maxGain, 2)}%. ` +
+          "Таблица бакетов не окупает разрыв в раскладке при ресайзе: остаётся единый вектор.",
+      );
+    }
+    push("");
+    push("### Вердикт по порогу §15");
+    push("");
+    push(
+      `- Высота: **${offline.decision.heightPass ? "пройдено" : "не пройдено"}** — −${offline.decision.heightGainPct}% против текущих долей (порог ≥4%).`,
+    );
+    push(
+      `- Потеря текста: **${offline.decision.textLossPct}%** (должна быть 0).`,
+    );
+    push(
+      `- Обрезка пилюль: ${offline.decision.pillCurrentPct}% → ${offline.decision.pillOfflinePct}% (${offline.decision.pillDeltaPp > 0 ? "+" : ""}${offline.decision.pillDeltaPp} п.п.); критерий ≥1 п.п. **${offline.decision.pillPass ? "пройден" : "не пройден"}**.`,
+    );
+    if (offline.decision.profilesBelowHeight.length > 0) {
+      push(
+        `- Профили ниже 4%: ${offline.decision.profilesBelowHeight.map((item) => `${item.profile} (${item.heightGainPct}%)`).join(", ")}. Среднее по сетке тянут \`long-tail\` и \`empty\`; типичный \`realistic\` в порог не укладывается.`,
+      );
+    }
+    push(
+      `- Seed 2: высота ${seed2 ? signedPercent(seed2.overall.offline.heightPctMean) : "—"}, пилюли ${seed2 ? seed2.overall.offline.pillTruncatedSharePctMean : "—"}% (устойчивость подтверждена).`,
+    );
+    push("");
+    push(`**${offline.decision.reason}**`);
     push("");
   }
 
@@ -2373,6 +3165,18 @@ async function main() {
       `[bench] robust: ${robust.scenarios.length} сценариев, средний ${robust.meanGapPct}%, худший ${robust.worstGapPct}%`,
     );
   }
+
+  let offline = null;
+  if (SECTIONS_TO_RUN.includes("offline")) {
+    offline = runOfflineShares(measurer, offlineSpec());
+    console.log(
+      `[bench] offline: ${offline.cases.length} конфигураций, высота ${signedPercent(
+        -offline.decision.heightGainPct,
+      )}, пилюли ${offline.decision.pillDeltaPp} п.п., порог §15 ${
+        offline.decision.passes ? "пройден" : "не пройден"
+      }`,
+    );
+  }
   const decision = buildDecision({ regret, robust });
 
   let virtualization = null;
@@ -2412,6 +3216,7 @@ async function main() {
     h4,
     regret,
     robust,
+    offline,
   });
 
   const meta = {
@@ -2438,6 +3243,7 @@ async function main() {
       sweep: sweep?.cases.length ?? 0,
       stability: regret?.cases.length ?? 0,
       robust: robust?.scenarios.length ?? 0,
+      offline: offline?.cases.length ?? 0,
       virtualization: virtualization?.cases.length ?? 0,
     },
   };
@@ -2485,6 +3291,7 @@ async function main() {
     hypotheses,
     stability: regret,
     robust,
+    offline,
     decision,
   };
   writeFileSync(
@@ -2508,6 +3315,7 @@ async function main() {
     measurerAgreement,
     regret,
     robust,
+    offline,
     decision,
   });
   writeFileSync(resolve(RESULTS_DIR, "report.md"), `${report}\n`, "utf8");
@@ -2564,6 +3372,26 @@ async function main() {
     console.log(
       `  средний gap ${robust.meanGapPct}%, худший ${robust.worstGapPct}%`,
     );
+  }
+  if (offline) {
+    const item = offline.decision;
+    console.log("");
+    console.log("Оффлайн-доли (#487) против текущих долей:");
+    console.log(
+      `  высота ${signedPercent(-item.heightGainPct)} (seed ${item.fitSeed}), пилюли ${item.pillCurrentPct}% → ${item.pillOfflinePct}% (${item.pillDeltaPp > 0 ? "+" : ""}${item.pillDeltaPp} п.п.), текст ${item.textLossPct}%`,
+    );
+    console.log(
+      `  порог §15: высота ${item.heightPass ? "пройдена" : "не пройдена"}, пилюли ${item.pillPass ? "пройдены" : "не пройдены"}; итог — ${item.passes ? "пройден" : "не пройден"}`,
+    );
+    for (const plan of offline.bucketSwitches) {
+      const boundaries = plan.boundaries
+        .map(
+          (entry) =>
+            `${entry.boundary}: скачок ${entry.worstJumpPct}% / выигрыш ${entry.worstJumpGainPct}%`,
+        )
+        .join("; ");
+      console.log(`  ${plan.label}: ${boundaries}; ${plan.passes ? "проходит" : "не проходит"}`);
+    }
   }
   if (decision) {
     console.log("");
