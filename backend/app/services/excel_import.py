@@ -292,6 +292,7 @@ def _parse_rows(
 
     for row_number, row in enumerate(rows[header_index + 1 :], start=header_index + 2):
         raw = {key: _cell(row, index) for key, index in column_map.items()}
+        _fill_merged_name(raw, row_number, column_map, rows, merged_anchors)
         raw_columns = _raw_columns(headers, row)
         raw_columns_meta = _raw_columns_meta(headers, row)
         sku = _cell_text(raw.get("sku"))
@@ -386,6 +387,33 @@ def _merged_cell_anchors(sheet: Any) -> dict[tuple[int, int], int]:
             for col_idx in range(int(start_col), int(end_col) + 1):
                 anchors[(row_idx, col_idx)] = int(start_row)
     return anchors
+
+
+def _fill_merged_name(
+    raw: dict[str, Any],
+    row_number: int,
+    column_map: dict[str, int],
+    rows: list[list[Any]],
+    merged_anchors: dict[tuple[int, int], int],
+) -> None:
+    """Подставить «Наименование» из merged-ячейки, если строка — её продолжение.
+
+    Excel хранит значение объединённой ячейки только в левом верхнем углу, а
+    оператор видит его на всём диапазоне. В файле заказчика наименование пары
+    объединено на две строки (2616 подписана, 2604 — вторая): без подстановки
+    вторая строка получала ложный ``product_name_missing``, хотя имя у пары
+    общее и записано прямо в этом же объединении. Заполняем только имя:
+    входные ячейки merged-диапазона — признак группы (ADR-0003), и подстановка
+    их значений сломала бы сборку строк-продолжений.
+    """
+    column = column_map.get("product_name")
+    if column is None or _cell_text(raw.get("product_name")):
+        return
+    row0 = row_number - 1
+    anchor = merged_anchors.get((row0, column))
+    if anchor is None or anchor == row0:
+        return
+    raw["product_name"] = _cell(rows[anchor], column)
 
 
 def _has_own_input(raw: dict[str, Any]) -> bool:
