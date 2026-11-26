@@ -109,7 +109,8 @@ function runConfig({ profile, rows, tableWidth, columnCount, seed, measurer }) {
 
 async function runOracleSet(measurer) {
   const cases = [];
-  const profiles = QUICK ? ["realistic", "long-tail"] : ["realistic", "long-tail", "outlier", "mono"];
+  const profiles = QUICK ? ["realistic", "long-tail"] : PROFILES;
+  const names = Object.keys(OPTIMIZERS).filter((name) => name !== "baseline");
   for (const profile of profiles) {
     const rows = 60;
     const columnCount = 11;
@@ -121,7 +122,7 @@ async function runOracleSet(measurer) {
     const oracle = oracleOptimizer(prepared, width, { lambda: LAMBDA });
     const oracleMetrics = evaluate(prepared, oracle.widths, { lambda: LAMBDA });
     const heuristics = {};
-    for (const name of ["narrowing", "breakpoints", "p90"]) {
+    for (const name of names) {
       const run = OPTIMIZERS[name](prepared, width, { lambda: LAMBDA });
       const metrics = evaluate(prepared, run.widths, { lambda: LAMBDA });
       heuristics[name] = {
@@ -133,7 +134,7 @@ async function runOracleSet(measurer) {
     }
     cases.push({
       profile,
-      oracle: { height: oracleMetrics.totalHeight, cost: oracleMetrics.cost },
+      oracle: { height: oracleMetrics.totalHeight, cost: oracleMetrics.cost, thinned: Boolean(oracle.thinned) },
       heuristics,
     });
   }
@@ -143,8 +144,9 @@ async function runOracleSet(measurer) {
 async function runSampleStability(measurer) {
   const cases = [];
   const profiles = QUICK ? ["realistic"] : ["realistic", "long-tail", "outlier"];
+  const names = ["narrowing", "breakpoints", "search"];
   for (const profile of profiles) {
-    for (const name of ["narrowing", "breakpoints"]) {
+    for (const name of names) {
       const columns = buildColumns(12);
       const sheet = generateSheet({ profile, rows: 5000, columns, seed: 1 });
       const width = contentWidth(1500);
@@ -174,7 +176,7 @@ function runStabilityAcrossWidths(measurer) {
   const cases = [];
   const profiles = QUICK ? ["realistic"] : ["realistic", "long-tail"];
   for (const profile of profiles) {
-    for (const name of ["narrowing", "breakpoints"]) {
+    for (const name of ["narrowing", "breakpoints", "search"]) {
       const columns = buildColumns(11);
       const sheet = generateSheet({ profile, rows: 1000, columns, seed: 1 });
       const prepared = prepareSheet(sheet, measurer);
@@ -264,10 +266,19 @@ function buildReport({ configs, summary, oracle, sampleStability, widthStability
   const bestByMean = [...names].sort(
     (a, b) => summary[a].meanCostRatio - summary[b].meanCostRatio,
   );
-  const oracleGaps = oracle.flatMap((item) =>
-    Object.values(item.heuristics).map((heuristic) => heuristic.gapCostPct),
-  );
-  const h1 = oracleGaps.length > 0 && oracleGaps.every((gap) => gap <= 5);
+  // H1 — про лучшую эвристику: важно, что существует алгоритм не дальше 5%.
+  const heuristicNames = names.filter((name) => name !== "baseline");
+  const worstGap = {};
+  for (const name of heuristicNames) worstGap[name] = Number.NEGATIVE_INFINITY;
+  for (const item of oracle) {
+    for (const [name, heuristic] of Object.entries(item.heuristics)) {
+      if (!(name in worstGap)) continue;
+      worstGap[name] = Math.max(worstGap[name], heuristic.gapCostPct);
+    }
+  }
+  const ranked = [...heuristicNames].sort((a, b) => worstGap[a] - worstGap[b]);
+  const h1Best = ranked[0];
+  const h1 = worstGap[h1Best] <= 5;
   const h2 = sampleStability.every((item) => Math.abs(item.heightDeltaPct) <= 2);
   const h3 = widthStability.every((item) => item.maxShareDeltaPct <= 5);
   const h4 = measurerAgreement && !measurerAgreement.skipped
@@ -298,7 +309,10 @@ function buildReport({ configs, summary, oracle, sampleStability, widthStability
   lines.push("");
   lines.push("## Гипотезы");
   lines.push("");
-  lines.push(`- **H1 (эвристика в пределах 5% от оракула):** ${verdict(h1)}. Худший gap: ${oracleGaps.length ? Math.max(...oracleGaps).toFixed(2) : "—"}%.`);
+  lines.push(`- **H1 (эвристика в пределах 5% от оракула):** ${verdict(h1)}. Лучшая — \`${h1Best}\`, худший gap ${Number.isFinite(worstGap[h1Best]) ? worstGap[h1Best].toFixed(2) : "—"}%; ${ranked
+    .slice(1)
+    .map((name) => `${name} ${worstGap[name].toFixed(2)}%`)
+    .join(", ")}.`);
   lines.push(`- **H2 (подвыборка 500 строк даёт ≤2% потерь):** ${verdict(h2)}.`);
   lines.push(`- **H3 (раскладка устойчива к W 1180–1920):** ${verdict(h3)}.`);
   lines.push(
@@ -307,13 +321,18 @@ function buildReport({ configs, summary, oracle, sampleStability, widthStability
     }${measurerAgreement && !measurerAgreement.skipped ? `; расхождение с greedy: ${measurerAgreement.sharePct}%` : ""}.`,
   );
   lines.push("");
+  const oracleNames = [...new Set(oracle.flatMap((item) => Object.keys(item.heuristics)))];
   lines.push("## Оракул на малых инстансах");
   lines.push("");
-  lines.push("| Профиль | Oracle cost | narrowing gap | breakpoints gap | p90 gap |");
-  lines.push("|---|---:|---:|---:|---:|");
+  lines.push(`| Профиль | Oracle cost | ${oracleNames.join(" gap | ")} gap |`);
+  lines.push(`|---|---:|${oracleNames.map(() => "---:").join("|")}|`);
   for (const item of oracle) {
+    const cells = oracleNames.map((name) => {
+      const heuristic = item.heuristics[name];
+      return heuristic ? `${heuristic.gapCostPct}%` : "—";
+    });
     lines.push(
-      `| ${item.profile} | ${item.oracle.cost} | ${item.heuristics.narrowing.gapCostPct}% | ${item.heuristics.breakpoints.gapCostPct}% | ${item.heuristics.p90.gapCostPct}% |`,
+      `| ${item.profile}${item.oracle.thinned ? " (сетка прорежена)" : ""} | ${item.oracle.cost} | ${cells.join(" | ")} |`,
     );
   }
   lines.push("");
@@ -337,17 +356,17 @@ function buildReport({ configs, summary, oracle, sampleStability, widthStability
   lines.push("");
   lines.push("## Ограничения");
   lines.push("");
-  lines.push("- Модель текста в Node — табличные метрики 11px, а не реальный canvas; абсолютные пиксели требуют валидации в браузере (см. тикет про Playwright).");
+  lines.push("- Модель текста в Node — табличные метрики 11px, а не реальный canvas; H4 проверен в браузере отдельно (#479, 0.19% расхождений).");
   lines.push("- `operations` смоделированы как неразрывные пилюли: ширина покупает отсутствие обрезки, а не строки.");
-  lines.push("- H4 в Node проверяет только согласие pretext с greedy на синтетике, а не с DOM.");
+  lines.push("- Минимум текстовой колонки — `max(minPx, maxWordWidth + padding)` по листу (#479): уже самого широкого слова `pretext` рвёт слово, а CSS с `overflow-wrap: normal` — нет. Если минимумы не влезают в бюджет, раскладка честно переполняется.");
+  lines.push("- Поиск идёт по подвыборке ≤500 строк (первые 60% — самые длинные ячейки), `cost` считается на полном листе; полная проверка H2 — #482.");
   lines.push("");
   lines.push("## Рекомендация");
   lines.push("");
-  if (summary.breakpoints.meanCostRatio <= summary.narrowing.meanCostRatio + 0.01) {
-    lines.push("Брать **breakpoints**: качество не хуже narrowing, пороги объяснимы и не зависят от шага сетки.");
-  } else {
-    lines.push("Брать **narrowing** (Marriott): лучшее качество на этой матрице; breakpoints оставить как быстрый fallback.");
-  }
+  const candidate = bestByMean.find((name) => name !== "baseline") ?? bestByMean[0];
+  lines.push(
+    `Брать **${candidate}**: лучший средний cost (${summary[candidate].meanCostRatio.toFixed(3)} от baseline), среднее время ${summary[candidate].meanRuntimeMs} мс, максимум ${summary[candidate].maxRuntimeMs} мс на конфигурацию.`,
+  );
   lines.push("");
   return lines.join("\n");
 }

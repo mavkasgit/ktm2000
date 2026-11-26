@@ -50,6 +50,26 @@ export function prepareSheet(sheet, measurer) {
 }
 
 /**
+ * Число строк и признак обрезки одной ячейки при данной полезной ширине.
+ *
+ * Единственное место, где описана политика переполнения: этим же правилом
+ * пользуется кэш кривых (`lib/curves.mjs`), иначе оптимизатор и `evaluate`
+ * разошлись бы в трактовке `clamp`/пилюль/контролов.
+ */
+export function measureCell(measurer, cell, usable) {
+  if (cell.kind === "pills" || !cell.wrap) {
+    const truncatable = cell.kind !== "control" && cell.kind !== "numeric";
+    return { lines: 1, truncated: truncatable && cell.naturalWidth > usable };
+  }
+  const raw = measurer.lineCount(cell.prepared, usable);
+  const limit = cell.clamp ?? Number.POSITIVE_INFINITY;
+  return {
+    lines: Math.min(Number.isFinite(raw) ? raw : Number.MAX_SAFE_INTEGER, limit),
+    truncated: raw > limit,
+  };
+}
+
+/**
  * @param {{columns: any[], rows: any[][], measurer: any}} prepared
  * @param {Record<string, number>} widths
  * @param {{lambda?: number, collectRows?: boolean}} options
@@ -74,17 +94,9 @@ export function evaluate(prepared, widths, options = {}) {
       const column = columns[index];
       const cell = cells[index];
       const usable = widths[column.id] - CELL_PADDING_PX;
-      let lines;
-      if (cell.kind === "pills" || !cell.wrap) {
-        lines = 1;
-        const truncatable = cell.kind !== "control" && cell.kind !== "numeric";
-        if (truncatable && cell.naturalWidth > usable) truncatedInRow += 1;
-      } else {
-        const raw = measurer.lineCount(cell.prepared, usable);
-        const limit = cell.clamp ?? Number.POSITIVE_INFINITY;
-        lines = Math.min(Number.isFinite(raw) ? raw : Number.MAX_SAFE_INTEGER, limit);
-        if (raw > limit) truncatedInRow += 1;
-      }
+      const measured = measureCell(measurer, cell, usable);
+      const lines = measured.lines;
+      if (measured.truncated) truncatedInRow += 1;
       if (lines > maxLines) maxLines = lines;
     }
 

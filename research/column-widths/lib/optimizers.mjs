@@ -3,65 +3,40 @@
  * колонок, поэтому их высоты сравнимы напрямую.
  *
  * - `baseline`   — текущие доли из продуктовой таблицы;
- * - `auto`       — эмуляция браузерного auto layout (min/max-content);
+ * - `auto`       — эмуляция min/max-content для гибких колонок;
  * - `p90`        — пропорционально p90 натуральной ширины;
  * - `narrowing`  — Marriott et al.: от широкой раскладки сужаем колонку,
  *                  сужение которой меньше всего увеличивает высоту;
  * - `breakpoints`— рост от минимумов по порогам, где падает число строк;
+ * - `search`     — тот же рост, но по всей сетке порогов + локальный обмен
+ *                  бюджета между колонками (сильный эвристический поиск);
  * - `oracle`     — полный перебор порогов на малых инстансах (эталон).
+ *
+ * `narrowing`, `breakpoints`, `search` и `oracle` работают по кэшу кривых
+ * (`lib/curves.mjs`): число строк на каждом кандидате считается один раз,
+ * поэтому шаг поиска — чтение массива, а не пересчёт всех строк.
  */
 import {
   CELL_PADDING_PX,
-  baselineWidths,
+  LINE_HEIGHT_PX,
+  MIN_ROW_HEIGHT_PX,
+  ROW_PADDING_PX,
   maxWidth,
-  normalizeToBudget,
-  sumWidths,
 } from "./columns.mjs";
-import { evaluate } from "./evaluate.mjs";
-
-const STEP_PX = 8;
+import {
+  DEFAULT_MAX_CANDIDATES,
+  DEFAULT_SAMPLE_ROWS,
+  buildCostModel,
+  columnMaxWordWidths,
+  distributeLeftover,
+  effectiveMinWidth,
+  finalizeWidths,
+  fixedAssignments,
+  widthsFromIndices,
+} from "./curves.mjs";
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
-}
-
-function roundWidths(columns, widths) {
-  const out = {};
-  for (const column of columns) out[column.id] = Math.round(widths[column.id]);
-  return out;
-}
-
-function fillToBudget(columns, widths, budget) {
-  const rounded = roundWidths(columns, widths);
-  const flexible = columns.filter((column) => column.flex);
-  let total = sumWidths(columns, rounded);
-  if (total > budget) return normalizeToBudget(columns, rounded, budget);
-  if (total === budget || flexible.length === 0) return rounded;
-
-  const remaining = budget - total;
-  const weights = flexible.map((column) => Math.max(0, column.maxShare ?? 0.2));
-  const weightSum = weights.reduce((sum, weight) => sum + weight, 0) || 1;
-  flexible.forEach((column, index) => {
-    rounded[column.id] += (remaining * weights[index]) / weightSum;
-  });
-  return normalizeToBudget(columns, rounded, budget);
-}
-
-/** Фиксированные колонки остаются на текущих долях, гибкие получают остаток. */
-function fixedBudget(columns, contentWidth) {
-  const baseline = baselineWidths(columns, contentWidth);
-  const flex = columns.filter((column) => column.flex);
-  const fixed = { ...baseline };
-  let fixedTotal = 0;
-  for (const column of columns) {
-    if (column.flex) continue;
-    fixedTotal += fixed[column.id];
-  }
-  const flexBudget = Math.max(
-    flex.reduce((sum, column) => sum + column.minPx, 0),
-    contentWidth - fixedTotal,
-  );
-  return { baseline, fixed, flex, flexBudget };
 }
 
 function percentile(values, p) {
@@ -74,9 +49,22 @@ function cellsFor(prepared, columnIndex) {
   return prepared.rows.map((row) => row[columnIndex]);
 }
 
+/**
+ * Продуктовые доли. Фиксированные колонки берутся из той же базы, что и у
+ * остальных оптимизаторов (`fixedAssignments`), чтобы ±1 px округления не
+ * превращалось в разную ширину контролов и несравнимый `cost`.
+ */
 export function baselineOptimizer(prepared, contentWidth) {
   const { columns } = prepared;
-  return { widths: roundWidths(columns, baselineWidths(columns, contentWidth)) };
+  const { baseline, fixedWidths, flexBudget } = fixedAssignments(columns, contentWidth);
+  const flex = columns.filter((column) => column.flex);
+  const widths = { ...fixedWidths };
+  if (flex.length === 0) return { widths };
+  const flexTotal = flex.reduce((sum, column) => sum + baseline[column.id], 0) || 1;
+  for (const column of flex) {
+    widths[column.id] = (baseline[column.id] / flexTotal) * flexBudget;
+  }
+  return { widths: distributeLeftover(columns, widths, contentWidth) };
 }
 
 /** Натуральные ширины по колонкам: p50/p90/p99/max — основа остальных эвристик. */
@@ -95,244 +83,405 @@ export function widthStats(prepared) {
   return stats;
 }
 
+/**
+ * Min/max-content только для гибких колонок: фиксированные остаются на
+ * продуктовых долях, иначе `auto` получает лишние пиксели, отнимая ширину у
+ * контролов, и сравнение с остальными алгоритмами перестаёт быть честным.
+ */
 export function autoOptimizer(prepared, contentWidth) {
   const { columns } = prepared;
   const stats = widthStats(prepared);
+  const { fixedWidths, flexBudget } = fixedAssignments(columns, contentWidth);
+  const flex = columns.filter((column) => column.flex);
+  if (flex.length === 0) return { widths: { ...fixedWidths } };
+  const maxWords = columnMaxWordWidths(prepared);
+
   const minContent = {};
   const maxContent = {};
-  for (const column of columns) {
-    const columnStats = stats.get(column.id);
-    if (column.kind === "control" || column.kind === "numeric") {
-      minContent[column.id] = column.minPx;
-      maxContent[column.id] = column.minPx;
-      continue;
-    }
-    const preparedCells = prepared.rows.map(
-      (row) => row[columns.indexOf(column)],
-    );
-    const longestWord = preparedCells.reduce((max, cell) => {
-      if (!cell.prepared) return max;
-      return Math.max(max, prepared.measurer.maxWordWidth(cell.prepared));
-    }, 0);
+  for (const column of flex) {
     minContent[column.id] = Math.min(
       maxWidth(column, contentWidth),
-      Math.max(column.minPx, longestWord + CELL_PADDING_PX),
+      effectiveMinWidth(column, maxWords.get(column.id) ?? 0),
     );
     maxContent[column.id] = Math.min(
       maxWidth(column, contentWidth),
-      Math.max(minContent[column.id], columnStats.p99 + CELL_PADDING_PX),
+      Math.max(minContent[column.id], stats.get(column.id).p99 + CELL_PADDING_PX),
     );
   }
 
-  const minTotal = sumWidths(columns, minContent);
-  if (minTotal >= contentWidth) {
-    return { widths: roundWidths(columns, minContent) };
+  const minTotal = flex.reduce((sum, column) => sum + minContent[column.id], 0);
+  const widths = { ...fixedWidths };
+  if (minTotal >= flexBudget) {
+    for (const column of flex) widths[column.id] = minContent[column.id];
+    return { widths: distributeLeftover(columns, widths, contentWidth) };
   }
 
-  const maxTotal = sumWidths(columns, maxContent);
-  const spare = contentWidth - minTotal;
-  const wantedSpare = Math.max(0.001, maxTotal - minTotal);
-  const growth = Math.min(1, spare / wantedSpare);
-  const widths = {};
-  for (const column of columns) {
+  const maxTotal = flex.reduce((sum, column) => sum + maxContent[column.id], 0);
+  const wanted = Math.max(0.001, maxTotal - minTotal);
+  const growth = Math.min(1, (flexBudget - minTotal) / wanted);
+  for (const column of flex) {
     widths[column.id] =
       minContent[column.id] + (maxContent[column.id] - minContent[column.id]) * growth;
   }
-  return { widths: fillToBudget(columns, widths, contentWidth) };
+  return { widths: distributeLeftover(columns, widths, contentWidth) };
 }
 
 export function p90Optimizer(prepared, contentWidth) {
   const { columns } = prepared;
   const stats = widthStats(prepared);
-  const { fixed, flex, flexBudget } = fixedBudget(columns, contentWidth);
+  const { fixedWidths, flexBudget } = fixedAssignments(columns, contentWidth);
+  const flex = columns.filter((column) => column.flex);
+  if (flex.length === 0) return { widths: { ...fixedWidths } };
+  const maxWords = columnMaxWordWidths(prepared);
+
   const desired = flex.map((column) =>
     clamp(
       stats.get(column.id).p90 + CELL_PADDING_PX,
-      column.minPx,
+      Math.min(
+        maxWidth(column, contentWidth),
+        effectiveMinWidth(column, maxWords.get(column.id) ?? 0),
+      ),
       maxWidth(column, contentWidth),
     ),
   );
   const desiredSum = desired.reduce((sum, value) => sum + value, 0);
-  const widths = { ...fixed };
+  const widths = { ...fixedWidths };
   flex.forEach((column, index) => {
     widths[column.id] = (desired[index] * flexBudget) / Math.max(1, desiredSum);
   });
-  return { widths: fillToBudget(columns, widths, contentWidth) };
+  return { widths: distributeLeftover(columns, widths, contentWidth) };
 }
 
-export function narrowingOptimizer(prepared, contentWidth, options = {}) {
-  const { lambda = 20, step = STEP_PX } = options;
-  const { columns } = prepared;
-  const stats = widthStats(prepared);
-  const { fixed, flex, flexBudget } = fixedBudget(columns, contentWidth);
-  if (flex.length === 0) return { widths: roundWidths(columns, fixed) };
-
-  // «Самая широкая разумная» раскладка: p99, но не больше maxShare.
-  const widths = { ...fixed };
-  for (const column of flex) {
-    const p99 = stats.get(column.id).p99 + CELL_PADDING_PX;
-    widths[column.id] = Math.max(
-      column.minPx,
-      Math.min(maxWidth(column, contentWidth), Math.max(p99, column.minPx)),
-    );
-  }
-  let total = sumWidths(columns, widths);
-  // Если разумный максимум не заполняет бюджет — растягиваем гибкие до бюджета.
-  if (total < flexBudget) {
-    const spare = flexBudget - total;
-    const weight = flex.reduce((sum, column) => sum + (column.maxShare ?? 0.2), 0) || 1;
-    for (const column of flex) {
-      widths[column.id] += (spare * (column.maxShare ?? 0.2)) / weight;
-    }
-    return { widths: roundWidths(columns, widths) };
-  }
-
-  const score = (candidate) =>
-    evaluate(prepared, candidate, { lambda, collectRows: false }).cost;
-
-  while (total > flexBudget + 0.5) {
-    let best = null;
-    for (const column of flex) {
-      const current = widths[column.id];
-      if (current - step < column.minPx) continue;
-      const candidate = { ...widths, [column.id]: current - step };
-      const cost = score(candidate);
-      if (
-        best === null ||
-        cost < best.cost ||
-        (cost === best.cost && column.id < best.column.id)
-      ) {
-        best = { column, candidate, cost };
-      }
-    }
-    if (!best) break;
-    widths[best.column.id] = best.candidate[best.column.id];
-    total = sumWidths(columns, widths);
-  }
-
-  return { widths: fillToBudget(columns, widths, contentWidth) };
-}
-
-function candidateWidths(prepared, column, index, contentWidth, limit = 48) {
-  const max = maxWidth(column, contentWidth);
-  const candidates = new Set([column.minPx, Math.min(max, column.minPx + STEP_PX)]);
-  const values = cellsFor(prepared, index).map((cell) => cell.naturalWidth);
-  for (const value of values) {
-    const breakpoints = column.wrap ? (column.clamp ?? 1) : 1;
-    for (let lines = 1; lines <= breakpoints; lines += 1) {
-      const width = value / lines + CELL_PADDING_PX;
-      if (width > column.minPx && width <= max) candidates.add(width);
-    }
-  }
-  const sorted = [...candidates].sort((a, b) => a - b);
-  if (sorted.length <= limit) return sorted;
-  // Прореживаем равномерно, сохраняя min и max.
-  const out = [];
-  for (let i = 0; i < limit; i += 1) {
-    out.push(sorted[Math.round((i * (sorted.length - 1)) / (limit - 1))]);
-  }
-  return [...new Set(out)];
-}
-
-export function breakpointOptimizer(prepared, contentWidth, options = {}) {
-  const { lambda = 20 } = options;
-  const { columns } = prepared;
-  const { fixed, flex, flexBudget } = fixedBudget(columns, contentWidth);
-  if (flex.length === 0) return { widths: roundWidths(columns, fixed) };
-
-  const flexIndex = new Map(flex.map((column) => [column.id, columns.indexOf(column)]));
-  const candidates = new Map();
-  for (const column of flex) {
-    const list = candidateWidths(
-      prepared,
-      column,
-      flexIndex.get(column.id),
-      contentWidth,
-    ).filter((width) => width >= column.minPx && width <= flexBudget);
-    candidates.set(column.id, list);
-  }
-
-  const widths = { ...fixed };
-  for (const column of flex) widths[column.id] = column.minPx;
-  const score = (candidate) =>
-    evaluate(prepared, candidate, { lambda, collectRows: false }).cost;
-
-  let currentCost = score(widths);
-  let total = sumWidths(columns, widths);
-
-  // Жадно берём следующий порог с лучшим снижением cost на пиксель.
-  for (;;) {
-    let best = null;
-    for (const column of flex) {
-      const list = candidates.get(column.id);
-      const current = widths[column.id];
-      const next = list.find((width) => width > current + 0.5);
-      if (next === undefined) continue;
-      const delta = next - current;
-      if (total + delta > flexBudget) continue;
-      const candidate = { ...widths, [column.id]: next };
-      const cost = score(candidate);
-      const gain = (currentCost - cost) / delta;
-      if (
-        best === null ||
-        gain > best.gain ||
-        (gain === best.gain && delta < best.delta)
-      ) {
-        best = { column, width: next, delta, cost, gain };
-      }
-    }
-    if (best === null || best.gain <= 0) break;
-    widths[best.column.id] = best.width;
-    total += best.delta;
-    currentCost = best.cost;
-  }
-
-  return { widths: fillToBudget(columns, widths, contentWidth) };
+/** Индексы сетки в объект ширин; бюджет гибких не превышен по построению. */
+function solution(model, contentWidth, indices) {
+  const widths = finalizeWidths(
+    model,
+    widthsFromIndices(model, indices),
+    contentWidth,
+  );
+  return { widths, cost: model.costOf(indices) };
 }
 
 /**
- * Точный перебор порогов для гибких колонок на малом инстансе.
- * Возвращает лучший cost, который достижим при бюджете; нужен для gap-метрики.
+ * Сужает раскладку до бюджета: шаг — следующий нижний порог колонки, выбираем
+ * колонку с минимальным приростом `cost` на освобождённый пиксель
+ * (Marriott et al.). Возвращает гарантированно допустимое состояние.
  */
-export function oracleOptimizer(prepared, contentWidth, options = {}) {
-  const { lambda = 20, perColumnLimit = 32 } = options;
-  const { columns } = prepared;
-  const { fixed, flex, flexBudget } = fixedBudget(columns, contentWidth);
-  if (flex.length === 0) {
-    return { widths: roundWidths(columns, fixed), cost: 0 };
+export function narrowToBudget(model, start) {
+  const { curves, flexBudget } = model;
+  const indices = start.slice();
+  let widthSum = model.widthSumOf(indices);
+  let cost = model.costOf(indices);
+
+  while (widthSum > flexBudget) {
+    let best = null;
+    for (let c = 0; c < curves.length; c += 1) {
+      const from = indices[c];
+      if (from === 0) continue;
+      const curve = curves[c];
+      const next = from - 1;
+      const freed = curve.candidates[from] - curve.candidates[next];
+      const [trialCost] = model.costOfColumnCandidates(indices, c, [next]);
+      const ratio = (trialCost - cost) / freed;
+      if (
+        best === null ||
+        ratio < best.ratio - 1e-9 ||
+        (Math.abs(ratio - best.ratio) <= 1e-9 && freed > best.freed)
+      ) {
+        best = { column: c, index: next, freed, cost: trialCost, ratio };
+      }
+    }
+    if (best === null) break;
+    indices[best.column] = best.index;
+    widthSum -= best.freed;
+    cost = best.cost;
+  }
+  return { indices, cost, widthSum };
+}
+
+/**
+ * Жадный рост от текущих индексов: на каждом шаге берём кандидата с лучшим
+ * снижением `cost` на пиксель. Перебираются **все** кандидаты выше текущего,
+ * а не только следующий порог: иначе колонка застревает на ступени, где
+ * ближайший порог ничего не даёт.
+ */
+export function greedyGrowth(model, start, ceilings = null) {
+  const { curves, flexBudget } = model;
+  let indices = start.slice();
+  let cost = model.costOf(indices);
+  let widthSum = model.widthSumOf(indices);
+  if (widthSum > flexBudget) {
+    ({ indices, cost, widthSum } = narrowToBudget(model, indices));
   }
 
-  const lists = flex.map((column) => {
-    const list = candidateWidths(
-      prepared,
-      column,
-      columns.indexOf(column),
-      contentWidth,
-      perColumnLimit,
-    ).filter((width) => width >= column.minPx && width <= flexBudget);
-    return [...new Set([column.minPx, ...list])].sort((a, b) => a - b);
-  });
+  for (;;) {
+    let best = null;
+    for (let c = 0; c < curves.length; c += 1) {
+      const curve = curves[c];
+      const from = indices[c];
+      const fromWidth = curve.candidates[from];
+      const limit = ceilings ? Math.min(ceilings[c], curve.candidates.length - 1) : curve.candidates.length - 1;
+      const candidates = [];
+      for (let j = from + 1; j <= limit; j += 1) {
+        if (widthSum + (curve.candidates[j] - fromWidth) > flexBudget) break;
+        candidates.push(j);
+      }
+      if (candidates.length === 0) continue;
+      const costs = model.costOfColumnCandidates(indices, c, candidates);
+      for (let t = 0; t < candidates.length; t += 1) {
+        const j = candidates[t];
+        const deltaWidth = curve.candidates[j] - fromWidth;
+        const trialCost = costs[t];
+        const gain = cost - trialCost;
+        if (gain <= 0) continue;
+        const ratio = gain / deltaWidth;
+        if (
+          best === null ||
+          ratio > best.ratio + 1e-9 ||
+          (Math.abs(ratio - best.ratio) <= 1e-9 && gain > best.gain)
+        ) {
+          best = { column: c, index: j, deltaWidth, cost: trialCost, gain, ratio };
+        }
+      }
+    }
+    if (best === null) break;
+    indices[best.column] = best.index;
+    widthSum += best.deltaWidth;
+    cost = best.cost;
+    if (widthSum >= flexBudget) break;
+  }
+  return { indices, cost, widthSum };
+}
 
-  let best = null;
-  const widths = { ...fixed };
-  const recurse = (index, spent) => {
-    if (index === flex.length) {
-      const cost = evaluate(prepared, widths, { lambda, collectRows: false }).cost;
-      if (best === null || cost < best.cost) best = { cost, widths: { ...widths } };
+export function narrowingOptimizer(prepared, contentWidth, options = {}) {
+  const lambda = options.lambda ?? 20;
+  const model = buildCostModel(prepared, contentWidth, {
+    lambda,
+    rowLimit: options.rowLimit ?? DEFAULT_SAMPLE_ROWS,
+    maxCandidates: options.maxCandidates ?? DEFAULT_MAX_CANDIDATES,
+  });
+  const { curves } = model;
+  if (curves.length === 0) {
+    return { widths: distributeLeftover(model.columns, model.fixedWidths, contentWidth) };
+  }
+
+  // Старт — самая широкая разумная раскладка: последний порог каждой колонки.
+  const indices = curves.map((curve) => curve.candidates.length - 1);
+  const narrowed = narrowToBudget(model, indices);
+
+  // Освободившийся остаток тратим там, где он даёт снижение cost.
+  const grown = greedyGrowth(model, narrowed.indices);
+  return solution(model, contentWidth, grown.indices);
+}
+
+export function breakpointOptimizer(prepared, contentWidth, options = {}) {
+  const lambda = options.lambda ?? 20;
+  const model = buildCostModel(prepared, contentWidth, {
+    lambda,
+    rowLimit: options.rowLimit ?? DEFAULT_SAMPLE_ROWS,
+    maxCandidates: options.maxCandidates ?? DEFAULT_MAX_CANDIDATES,
+  });
+  const start = model.curves.map(() => 0);
+  const grown = greedyGrowth(model, start);
+  return solution(model, contentWidth, grown.indices);
+}
+
+/**
+ * Индексы, до которых сужаем колонку в локальном обмене: `from-1` (соседний
+ * порог), `0` (минимум) и равномерная сетка между ними. По умолчанию — все
+ * нижние пороги; `downgrades` ограничивает перебор, если инстанс большой.
+ */
+function downgradeTrials(from, limit) {
+  if (from <= 0) return [];
+  const wanted = Math.max(2, limit);
+  if (!Number.isFinite(wanted) || from <= wanted) {
+    return Array.from({ length: from }, (_, index) => index);
+  }
+  const out = new Set([0, from - 1]);
+  for (let i = 1; i < wanted - 1; i += 1) {
+    out.add(Math.round((i * (from - 1)) / (wanted - 1)));
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+/**
+ * Сильный поиск: жадный рост по всей сетке порогов, затем локальный обмен
+ * бюджета — пробуем отдать пиксели другой колонке, освободив их у одной, и
+ * снова растим. Это выводит из локального оптимума, в котором застревает
+ * чистый жадный рост (и `narrowing`, и `breakpoints`).
+ */
+export function searchOptimizer(prepared, contentWidth, options = {}) {
+  const lambda = options.lambda ?? 20;
+  const rounds = options.rounds ?? 4;
+  const downgradeLimit = options.downgrades ?? Number.POSITIVE_INFINITY;
+  const model = buildCostModel(prepared, contentWidth, {
+    lambda,
+    rowLimit: options.rowLimit ?? DEFAULT_SAMPLE_ROWS,
+    maxCandidates: options.maxCandidates ?? DEFAULT_MAX_CANDIDATES,
+  });
+  const { curves } = model;
+
+  let best = greedyGrowth(model, curves.map(() => 0));
+
+  for (let round = 0; round < rounds; round += 1) {
+    let improved = false;
+    for (let c = 0; c < curves.length; c += 1) {
+      // `best` мог измениться на прошлой итерации: берём только сужение
+      // относительно текущего состояния, иначе старт окажется вне бюджета.
+      const trials = downgradeTrials(best.indices[c], downgradeLimit);
+      for (const j of trials) {
+        const trial = best.indices.slice();
+        trial[c] = j;
+        // Запрещаем колонке вернуться на прежнюю ширину: освобождённые ею
+        // пиксели должны уйти другим колонкам, иначе поиск вернётся в ту же
+        // локальную точку.
+        const ceilings = curves.map((curve) => curve.candidates.length - 1);
+        ceilings[c] = j;
+        const grown = greedyGrowth(model, trial, ceilings);
+        if (grown.cost < best.cost) {
+          best = grown;
+          improved = true;
+        }
+      }
+    }
+    if (!improved) break;
+  }
+
+  return solution(model, contentWidth, best.indices);
+}
+
+/**
+ * Эталон на малых инстансах: полный перебор сетки порогов **гибких** колонок.
+ *
+ * Сетка после дедупликации доминируемых кандидатов эквивалентна всем порогам
+ * `lineCount`, поэтому перебор даёт точный оптимум в модели. Перебор
+ * ограничен числом комбинаций: при слишком большой сетке списки равномерно
+ * прореживаются (об этом сообщает `thinned`), чтобы эталон оставался
+ * вычислимым, а не молча врал.
+ */
+export function oracleOptimizer(prepared, contentWidth, options = {}) {
+  const lambda = options.lambda ?? 20;
+  const maxCombinations = options.maxCombinations ?? 2_000_000;
+  const model = buildCostModel(prepared, contentWidth, {
+    lambda,
+    rowLimit: options.rowLimit ?? 60,
+    maxCandidates: options.maxCandidates ?? Number.POSITIVE_INFINITY,
+  });
+  const { curves, flexBudget } = model;
+  if (curves.length === 0) {
+    return {
+      widths: distributeLeftover(model.columns, model.fixedWidths, contentWidth),
+      cost: model.costOf([]),
+    };
+  }
+
+  let combinations = 1;
+  for (const curve of curves) combinations *= curve.candidates.length;
+  let thinned = false;
+  let lists = curves.map((curve) => curve.candidates.map((_, index) => index));
+  while (combinations > maxCombinations) {
+    thinned = true;
+    const before = combinations;
+    lists = lists.map((list) => {
+      if (list.length <= 2) return list;
+      const target = Math.max(2, Math.ceil(list.length * 0.7));
+      const next = [];
+      for (let i = 0; i < target; i += 1) {
+        next.push(list[Math.round((i * (list.length - 1)) / (target - 1))]);
+      }
+      return [...new Set(next)];
+    });
+    combinations = lists.reduce((product, list) => product * list.length, 1);
+    if (combinations >= before) break;
+  }
+  if (combinations > maxCombinations) {
+    // Прореживание до двух кандидатов на колонку не помогло: инстанс не
+    // «малый», и выдавать частичный перебор за эталон нельзя.
+    throw new Error(
+      `oracle: ${combinations} комбинаций > ${maxCombinations}; нужен инстанс с меньшим числом гибких колонок`,
+    );
+  }
+
+  const count = curves.length;
+  const rowCount = model.rowCount;
+  const rowMax = new Int32Array(rowCount);
+  rowMax.set(model.fixedLines);
+  const best = { cost: Number.POSITIVE_INFINITY, indices: null };
+  const current = new Array(count).fill(0);
+  // Оптимистичная нижняя граница: оставшиеся колонки получают самый широкий
+  // кандидат (строк не больше, обрезки не больше), бюджет не проверяем.
+  const lowestTrunc = curves.map(
+    (curve) => curve.truncCounts[curve.truncCounts.length - 1],
+  );
+  const lowestLines = curves.map(
+    (curve) => curve.lines[curve.lines.length - 1],
+  );
+
+  // Нижняя граница: текущий rowMax + оставшиеся колонки на самых широких.
+  const lowerBound = (depth) => {
+    let trunc = model.fixedTruncTotal;
+    for (let c = 0; c < depth; c += 1) trunc += curves[c].truncCounts[current[c]];
+    for (let c = depth; c < count; c += 1) trunc += lowestTrunc[c];
+    let total = 0;
+    for (let row = 0; row < rowCount; row += 1) {
+      let lines = rowMax[row];
+      for (let c = depth; c < count; c += 1) {
+        const value = lowestLines[c][row];
+        if (value > lines) lines = value;
+      }
+      const height = lines * LINE_HEIGHT_PX + ROW_PADDING_PX;
+      total += height > MIN_ROW_HEIGHT_PX ? height : MIN_ROW_HEIGHT_PX;
+    }
+    return total + lambda * trunc;
+  };
+
+  const saved = Array.from({ length: count }, () => new Int32Array(rowCount));
+  const recurse = (depth, spent) => {
+    if (depth === count) {
+      let trunc = model.fixedTruncTotal;
+      for (let c = 0; c < count; c += 1) trunc += curves[c].truncCounts[current[c]];
+      let total = 0;
+      for (let row = 0; row < rowCount; row += 1) {
+        const height = rowMax[row] * LINE_HEIGHT_PX + ROW_PADDING_PX;
+        total += height > MIN_ROW_HEIGHT_PX ? height : MIN_ROW_HEIGHT_PX;
+      }
+      const cost = total + lambda * trunc;
+      if (cost < best.cost) {
+        best.cost = cost;
+        best.indices = current.slice();
+      }
       return;
     }
-    for (const width of lists[index]) {
+
+    const curve = curves[depth];
+    for (const index of lists[depth]) {
+      const width = curve.candidates[index];
       if (spent + width > flexBudget) continue;
-      widths[flex[index].id] = width;
-      recurse(index + 1, spent + width);
+      saved[depth].set(rowMax);
+      const lines = curve.lines[index];
+      for (let row = 0; row < rowCount; row += 1) {
+        if (lines[row] > rowMax[row]) rowMax[row] = lines[row];
+      }
+      current[depth] = index;
+      if (lowerBound(depth + 1) < best.cost) recurse(depth + 1, spent + width);
+      rowMax.set(saved[depth]);
     }
   };
   recurse(0, 0);
 
-  if (!best) return { widths: roundWidths(columns, fixed), cost: 0 };
+  if (best.indices === null) {
+    // Бюджет меньше суммы минимумов: честное переполнение по минимумам.
+    const widths = finalizeWidths(
+      model,
+      widthsFromIndices(model, curves.map(() => 0)),
+      contentWidth,
+    );
+    return { widths, cost: model.costOf(curves.map(() => 0)), thinned };
+  }
+
   return {
-    widths: fillToBudget(columns, best.widths, contentWidth),
-    cost: best.cost,
+    ...solution(model, contentWidth, best.indices),
+    thinned,
   };
 }
 
@@ -344,4 +493,5 @@ export const OPTIMIZERS = {
     narrowingOptimizer(prepared, width, options),
   breakpoints: (prepared, width, options) =>
     breakpointOptimizer(prepared, width, options),
+  search: (prepared, width, options) => searchOptimizer(prepared, width, options),
 };
