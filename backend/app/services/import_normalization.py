@@ -44,21 +44,33 @@ def sku_loose(value: str) -> str:
 _SQL_LOOSE_PATTERN = r"([a-zа-яё])-([0-9])"
 
 
+def normalize_sku_sql(column):
+    """SQL-аналог ``normalize_sku`` для колонки SKU (PostgreSQL).
+
+    Один SQL-клон правила на проект: по нему строятся и предфильтр остатков, и
+    ``sku_loose_sql``, иначе копии тихо расходятся в том, что считается одним
+    артикулом. Повторяет регистр, варианты тире и снятие пробелов/NBSP; дефис
+    не трогает — это отдельное правило ``sku_loose``.
+    """
+    dashed = func.translate(
+        func.lower(column), SKU_DASH_VARIANTS, "-" * len(SKU_DASH_VARIANTS)
+    )
+    return func.replace(func.replace(dashed, " ", ""), "\u00A0", "")
+
+
 def sku_loose_sql(column):
     """SQL-аналог ``sku_loose`` для колонки SKU (PostgreSQL).
 
     Предфильтр остатков и точный ``IN``-фолбэк пар выбирают кандидатов в SQL, а
     окончательное решение принимает Python. Без SQL-копии правила кандидат с
     другим написанием просто не доезжает — и ``sku_loose`` не срабатывает уже
-    никогда. Выражение повторяет ``normalize_sku`` (регистр, варианты тире,
-    пробелы) и снимает дефис только между буквой и цифрой — тем же шаблоном,
-    что и Python, без lookbehind (его нет в старых версиях PostgreSQL).
+    никогда. Выражение — надстройка над ``normalize_sku_sql``, снимает дефис
+    только между буквой и цифрой — тем же шаблоном, что и Python, без
+    lookbehind (его нет в старых версиях PostgreSQL).
     """
-    dashed = func.translate(
-        func.lower(column), SKU_DASH_VARIANTS, "-" * len(SKU_DASH_VARIANTS)
+    return func.regexp_replace(
+        normalize_sku_sql(column), _SQL_LOOSE_PATTERN, r"\1\2", "g"
     )
-    no_spaces = func.replace(func.replace(dashed, " ", ""), "\u00A0", "")
-    return func.regexp_replace(no_spaces, _SQL_LOOSE_PATTERN, r"\1\2", "g")
 
 
 def numeric_sku_key(value: str) -> str | None:

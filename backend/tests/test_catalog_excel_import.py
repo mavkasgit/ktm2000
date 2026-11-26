@@ -1242,3 +1242,60 @@ async def test_preview_excel_finds_product_by_dash_spelling(
     assert [row.sku for row in rows] == ["ALS1103"]
     await session.refresh(product)
     assert product.name == "Новое имя"
+
+
+async def test_apply_excel_ambiguous_dash_sku_creates_no_third_product(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Неоднозначный артикул не создаёт третий товар и не обновляет наугад.
+
+    В справочнике уже есть две карточки, отличающиеся только дефисом, а в файле
+    — третье написание (нижний регистр). Точного совпадения нет, ``sku_loose``
+    подходит к обеим: ``products`` не содержит строку, и раньше apply считал её
+    новой. Правильный исход — ошибка строки, число товаров не меняется.
+    """
+    await _make_product(session, sku="ALS1103", name="Слитный", lengths=[2500.0])
+    await _make_product(session, sku="ALS-1103", name="Дефисный", lengths=[2500.0])
+    await session.commit()
+
+    content = _xlsx_bytes([_row(sku="als-1103", name="Третий", lengths="2500")])
+
+    preview = await _upload(client, PREVIEW_URL, content)
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["stats"]["create"] == 0
+    assert body["stats"]["update"] == 0
+    assert not any(item["action"] in {"create", "update"} for item in body["items"])
+    assert any("дефис" in err["message"] for err in body["errors"]), body["errors"]
+
+    applied = await _upload(client, APPLY_URL, content)
+    assert applied.status_code == 200, applied.text
+    result = applied.json()
+    assert result["imported"] == 0 and result["updated"] == 0
+
+    products = (await session.scalars(select(Product))).all()
+    assert sorted(product.sku for product in products) == ["ALS-1103", "ALS1103"]
+
+
+async def test_ambiguous_pair_partner_reports_ambiguity_not_missing(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Неоднозначный партнёр — «неоднозначен», а не «не найден» (#474).
+
+    Партнёр приходит третьим написанием и подходит к двум карточкам. Раньше
+    такой SKU терялся в ``_ambiguous_partners``, и строка получала ложное
+    «не найден»; угадывать одну из карточек нельзя.
+    """
+    await _make_product(session, sku="ЮП-100", name="Основной", lengths=[2500.0])
+    await _make_product(session, sku="ЮП-1", name="Партнёр дефисный", lengths=[2500.0])
+    await _make_product(session, sku="ЮП1", name="Партнёр слитный", lengths=[2500.0])
+    await session.commit()
+
+    content = _xlsx_bytes([_row(sku="ЮП-100", partners="юп-1")])
+    resp = await _upload(client, PREVIEW_URL, content)
+    assert resp.status_code == 200, resp.text
+    messages = [err["message"] for err in resp.json()["errors"]]
+    assert any(
+        "Артикул партнёра юп-1 неоднозначен" in message for message in messages
+    ), messages
+    assert not any("не найден" in message for message in messages), messages

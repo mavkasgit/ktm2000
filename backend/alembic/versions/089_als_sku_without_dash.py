@@ -30,7 +30,15 @@
 
 Идемпотентность: после первого прохода ни ``sku``, ни ``aliases`` уже не
 удовлетворяют предикату, поэтому повторный upgrade ничего не меняет.
-``downgrade`` симметричен и защищён той же проверкой коллизий.
+``downgrade`` симметричен по форме и защищён той же проверкой коллизий.
+
+Граница ``downgrade``: журнала переименований у миграции нет, поэтому обратный
+проход возвращает дефис **всем** каноническим ALS-артикулам, включая те, что
+были в такой форме до upgrade (миграция их не трогала). По той же причине
+схлопнутый дубль алиаса не разворачивается. Идемпотентность здесь важнее
+побайтового провенанса: без журнала «вернуть ровно переименованное» неотличимо
+от «вернуть всё», а решение про данные не должно зависеть от того, кто первым
+положил артикул в базу.
 """
 
 from collections.abc import Sequence
@@ -87,14 +95,23 @@ WITH expanded AS (
     FROM products AS p
     CROSS JOIN LATERAL UNNEST(p.aliases) WITH ORDINALITY AS t(value, ord)
 ),
-deduped AS (
-    SELECT DISTINCT ON (product_id, normalized) product_id, ord, normalized
+numbered AS (
+    -- Дедуп только по целевой ALS-форме: два одинаковых не-ALS алиаса —
+    -- данные, которые миграция не заводила и не имеет права схлопывать.
+    SELECT product_id,
+           ord,
+           normalized,
+           CASE WHEN normalized ~ '{_CANON}'
+                THEN row_number() OVER (
+                    PARTITION BY product_id, normalized ORDER BY ord
+                )
+                ELSE 1 END AS keep_rank
     FROM expanded
-    ORDER BY product_id, normalized, ord
 ),
 rebuilt AS (
     SELECT product_id, array_agg(normalized ORDER BY ord)::varchar[] AS aliases
-    FROM deduped
+    FROM numbered
+    WHERE keep_rank = 1
     GROUP BY product_id
 )
 UPDATE products AS p
@@ -139,14 +156,23 @@ WITH expanded AS (
     FROM products AS p
     CROSS JOIN LATERAL UNNEST(p.aliases) WITH ORDINALITY AS t(value, ord)
 ),
-deduped AS (
-    SELECT DISTINCT ON (product_id, normalized) product_id, ord, normalized
+numbered AS (
+    -- Дедуп только по возвращаемой дефисной ALS-форме; повторы остальных
+    -- элементов — не наши данные и сохраняются как были.
+    SELECT product_id,
+           ord,
+           normalized,
+           CASE WHEN normalized ~ '{_LEGACY}'
+                THEN row_number() OVER (
+                    PARTITION BY product_id, normalized ORDER BY ord
+                )
+                ELSE 1 END AS keep_rank
     FROM expanded
-    ORDER BY product_id, normalized, ord
 ),
 rebuilt AS (
     SELECT product_id, array_agg(normalized ORDER BY ord)::varchar[] AS aliases
-    FROM deduped
+    FROM numbered
+    WHERE keep_rank = 1
     GROUP BY product_id
 )
 UPDATE products AS p

@@ -513,6 +513,12 @@ class _ImportBatch:
     partners_by_sku: dict[str, Product]
     existing_pairs: set[tuple[int, int]]
     total_data_rows: int
+    # Артикулы файла, которым соответствует несколько карточек, различающихся
+    # только дефисом: строку нельзя ни обновлять, ни создавать (#474).
+    ambiguous_skus: set[str]
+    # То же для колонки «Парный профиль»: потерять их значило бы соврать
+    # «не найден» вместо «неоднозначен».
+    ambiguous_partners: set[str]
     # Текущие значения полей размерности: product_id → {код: default_value} (#87).
     # Один запрос на весь файл — иначе diff считал бы каждую строку отдельно.
     dimension_values: dict[int, dict[str, float | None]]
@@ -777,6 +783,16 @@ def _pair_plan(
     errors: list[dict] = []
     partner_ids: dict[str, int | None] = {}
     for sku in wanted:
+        if sku in batch.ambiguous_partners:
+            errors.append({
+                "row": row.row,
+                "sku": row.sku,
+                "message": (
+                    f"Артикул партнёра {sku} неоднозначен — несколько карточек "
+                    "отличаются только дефисом"
+                ),
+            })
+            continue
         partner = batch.partners_by_sku.get(sku)
         if partner is not None:
             partner_ids[sku] = partner.id
@@ -884,7 +900,7 @@ async def _prepare_excel_import(file: UploadFile, db: AsyncSession) -> _ImportBa
         if row.sku in ambiguous_skus
     )
     partner_skus = sorted({sku for row in rows for sku in row.fields.get("pair_partners", [])})
-    partners_by_sku, _ambiguous_partners = await _load_products_by_sku(db, partner_skus)
+    partners_by_sku, ambiguous_partners = await _load_products_by_sku(db, partner_skus)
     involved_ids = sorted({p.id for p in list(products.values()) + list(partners_by_sku.values())})
     existing_pairs = await _existing_pair_keys(db, involved_ids)
     return _ImportBatch(
@@ -894,6 +910,8 @@ async def _prepare_excel_import(file: UploadFile, db: AsyncSession) -> _ImportBa
         partners_by_sku=partners_by_sku,
         existing_pairs=existing_pairs,
         total_data_rows=total_data_rows,
+        ambiguous_skus=ambiguous_skus,
+        ambiguous_partners=ambiguous_partners,
         dimension_values=await _load_dimension_values(
             db, [product.id for product in products.values()]
         ),
@@ -913,6 +931,11 @@ async def preview_catalog_from_excel(
     error_rows: set[int] = {err["row"] for err in errors}
 
     for row in rows:
+        if row.sku in batch.ambiguous_skus:
+            # Строка уже в списке ошибок. Карточку выбрать нельзя, поэтому в
+            # таблице не может быть ни «создать», ни «обновить»: иначе
+            # предпросмотр обещал бы запись, которую apply обязан отклонить.
+            continue
         product = batch.products.get(row.sku)
         is_new = product is None
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
@@ -999,6 +1022,12 @@ async def apply_catalog_from_excel(
 
     failed_rows: set[int] = set()
     for row in rows:
+        if row.sku in batch.ambiguous_skus:
+            # Ошибка строки уже лежит в ``errors`` (её добавил парсинг файла).
+            # Создавать третью карточку или обновлять одну из двух наугад
+            # нельзя (#474); пары для строки тоже не заводим.
+            failed_rows.add(row.row)
+            continue
         product = batch.products.get(row.sku)
 
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None

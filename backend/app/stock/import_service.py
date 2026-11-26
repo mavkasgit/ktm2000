@@ -41,10 +41,10 @@ from app.services.dimension_validation import (
 from app.services.excel_import import parse_row_selection
 from app.services.import_column_resolver import detect_header_row, resolve_columns
 from app.services.import_normalization import (
-    SKU_DASH_VARIANTS,
     SkuEntry,
     match_sku_cell,
     normalize_sku,
+    normalize_sku_sql,
     numeric_sku_key,
     sku_compound_parts,
     sku_entry,
@@ -652,19 +652,6 @@ def _like_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _normalized_catalog_sku() -> object:
-    """SQL-аналог ``normalize_sku`` для стороны справочника (#347).
-
-    Без этого артикул «ЮП–1875» (типографское тире) не был бы кандидатом ячейки
-    «ЮП-3658/1875»: предфильтр обязан быть надстройкой над тем же правилом
-    сравнения, по которому решение принимает Python.
-    """
-    dashed = func.translate(
-        func.lower(Product.sku), SKU_DASH_VARIANTS, "-" * len(SKU_DASH_VARIANTS)
-    )
-    return func.replace(func.replace(dashed, " ", ""), "\u00A0", "")
-
-
 def _sku_candidate_conditions(sku: str) -> list[object]:
     """Условия выборки кандидатов справочника для одной ячейки (#347, #444).
 
@@ -680,7 +667,7 @@ def _sku_candidate_conditions(sku: str) -> list[object]:
     справочник прислал бы только половину пары, и неоднозначность двух
     числовых кодов превратилась бы в молчаливый выбор того, что нашёл SQL.
     """
-    normalized_sku = _normalized_catalog_sku()
+    normalized_sku = normalize_sku_sql(Product.sku)
     conditions = [
         _product_sku_contained_in_input(sku),
         normalized_sku == normalize_sku(sku),

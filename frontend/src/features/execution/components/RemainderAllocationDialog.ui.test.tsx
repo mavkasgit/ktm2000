@@ -75,6 +75,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   vi.mocked(getProductStockBalances).mockResolvedValue(BALANCES);
+  vi.mocked(listProducts).mockResolvedValue([{ id: 1, sku: "SKU-1", name: "Тест" }] as never);
 });
 
 afterEach(() => {
@@ -181,5 +182,31 @@ describe("RemainderAllocationDialog: выбор источника (#314)", () =
     await mount(onConfirm, BALANCES, "ALS-1103");
 
     expect(getProductStockBalances).toHaveBeenCalledWith(7, undefined, "operations");
+  });
+
+  it("не угадывает первый из двух написаний одного артикула (#474)", async () => {
+    // Две карточки отличаются только дефисом — это неоднозначность, а не
+    // повод взять первую по порядку: бэкенд такую пару тоже не резолвит.
+    vi.mocked(listProducts).mockResolvedValue([
+      { id: 7, sku: "ALS-1103", name: "Плинтус дефисный" },
+      { id: 8, sku: "ALS1103", name: "Плинтус слитный" },
+    ] as never);
+    const onConfirm = vi.fn();
+    await mount(onConfirm, BALANCES, "ALS-1103");
+
+    expect(getProductStockBalances).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Артикул неоднозначен");
+  });
+
+  it("не запрашивает остатки, когда совпадений нет и результатов несколько", async () => {
+    vi.mocked(listProducts).mockResolvedValue([
+      { id: 7, sku: "ЮП-1", name: "Первый" },
+      { id: 8, sku: "ЮП-2", name: "Второй" },
+    ] as never);
+    const onConfirm = vi.fn();
+    await mount(onConfirm, BALANCES, "ЮП-999");
+
+    expect(getProductStockBalances).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("Артикул не найден");
   });
 });
