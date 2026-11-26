@@ -57,7 +57,7 @@
 3328,alias_of,ЮП-2083,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 3328,shared_cell_2024,3586,confirmed,poster2024,"ячейка 2024 1822,140,2094,515"
 3329,alias_of,ЮП-1807,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-335,alias_of,ALS-917,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+335,alias_of,ALS917,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 337,alias_of,ЮП-2077,confirmed,db:aliases,"Оба Y-профиля: 337 — 20,18×20/P=73,8 (2019), 2077 — 23,1×23,1/P=79,2 (2022). Алиас сохранён, размеры разные (издания)."
 3418,alias_of,ЮП-3019,confirmed,db:aliases,"Один угол 24×10; у 3418 нет оригинального чертежа — размеры и P=69,3 взяты из чертежа ЮП-3019 (24×9,8)."
 347,visual_similar,ЮП-2183,confirmed,manual:audit,"Похожи визуально, но разные: 347 — 18,5×8/P=53,4; 2183 — 20×10/P=61,7."
@@ -94,11 +94,11 @@
 80,shared_photo_thumb,031,confirmed,storage:sha256,f93870a718b4
 84,visual_similar,ЮП-045,confirmed,manual:audit,"Похожи визуально, но разные: 84 — 28,5×5,7/P=63,7; 045 — 31,5×7/P=68,6."
 973,alias_of,ЮП-2012,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ALS-1103,alias_of,ЮП-3773,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ALS-915,alias_of,ЮП-048,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ALS-915,shared_photo_full,ЮП-048,confirmed,storage:sha256,f2591994fa73
-ALS-915,shared_photo_thumb,ЮП-048,confirmed,storage:sha256,2143749a571d
-ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ALS1103,alias_of,ЮП-3773,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ALS915,alias_of,ЮП-048,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ALS915,shared_photo_full,ЮП-048,confirmed,storage:sha256,f2591994fa73
+ALS915,shared_photo_thumb,ЮП-048,confirmed,storage:sha256,2143749a571d
+ALS917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 АТ-4888,alias_of,ЮП-3094,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 АТ-4892,alias_of,ЮП-3077,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 АТ-4893,alias_of,ЮП-3485,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
@@ -253,9 +253,9 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ЮП-011,shared_photo_full,ЮП-1629,confirmed,storage:sha256,ae595c82f9a4
 ЮП-011,shared_photo_full,ЮП-2004,confirmed,storage:sha256,ae595c82f9a4
 ЮП-045,visual_similar,84,confirmed,manual:audit,"Похожи визуально, но разные: 84 — 28,5×5,7/P=63,7; 045 — 31,5×7/P=68,6."
-ЮП-048,alias_of,ALS-915,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-048,shared_photo_full,ALS-915,confirmed,storage:sha256,f2591994fa73
-ЮП-048,shared_photo_thumb,ALS-915,confirmed,storage:sha256,2143749a571d
+ЮП-048,alias_of,ALS915,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-048,shared_photo_full,ALS915,confirmed,storage:sha256,f2591994fa73
+ЮП-048,shared_photo_thumb,ALS915,confirmed,storage:sha256,2143749a571d
 ЮП-081,alias_of,324,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-081,alias_of,ЮП-3755,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-1053,alias_of,Кр.труба 25мм,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
@@ -346,4 +346,4 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ЮП-3658,shared_photo_thumb,ЮП-1875,confirmed,storage:sha256,47bf4e2dabed
 ЮП-3755,alias_of,324,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-3755,alias_of,ЮП-081,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
-ЮП-3773,alias_of,ALS-1103,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-3773,alias_of,ALS1103,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом

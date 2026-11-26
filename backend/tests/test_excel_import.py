@@ -2310,6 +2310,71 @@ async def test_preview_compound_sku_matches_catalog_typographic_dash(
     assert "sku_matched_by_part:1875" in item["warnings"]
 
 
+# ─── Канон ALS без дефиса (#474) ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preview_dash_spelling_binds_canonical_sku_and_warns(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Строка ``ALS-1103`` находит канонический ``ALS1103`` и предупреждает.
+
+    Дефис между буквой и цифрой — оформление: справочник хранит слитную форму,
+    1С и упаковочная карта пишут дефисную. Строка остаётся рабочей, но оператор
+    видит, что написание в файле отличается от справочника.
+    """
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    (product,) = await _seed_products(session, "ALS1103")
+    items = await _preview_compound_rows(
+        client, session, code="als-dash-variant", cells=["ALS-1103"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] == product.id
+    assert "sku_dash_variant:ALS1103" in item["warnings"]
+    assert "product_not_found" not in item["errors"]
+    # Привязка не по точному SKU: ложный product_inactive означал бы, что кэш
+    # активности не видит найденный артикул.
+    assert "product_inactive" not in item["errors"]
+
+
+@pytest.mark.asyncio
+async def test_preview_canonical_and_lowercase_spellings_are_exact(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """``ALS1103`` и ``als1103`` — точное совпадение: предупреждения нет."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    (product,) = await _seed_products(session, "ALS1103")
+    items = await _preview_compound_rows(
+        client, session, code="als-exact", cells=["ALS1103", "als1103"]
+    )
+
+    for item in items:
+        assert item["after_data"]["product_id"] == product.id
+        assert "product_not_found" not in item["errors"]
+        assert [w for w in item["warnings"] if w.startswith("sku_dash_variant")] == []
+
+
+@pytest.mark.asyncio
+async def test_preview_dash_only_duplicates_are_not_guessed(
+    client, session, tmp_path, monkeypatch
+) -> None:
+    """Две карточки отличаются только дефисом/пробелом: выбор не угадывается."""
+    monkeypatch.setattr(settings, "IMPORT_STORAGE_DIR", str(tmp_path))
+
+    await _seed_products(session, "ALS-1290", "ALS-1290 ")
+    items = await _preview_compound_rows(
+        client, session, code="als-dash-duplicates", cells=["ALS1290"]
+    )
+
+    item = items[0]
+    assert item["after_data"]["product_id"] is None
+    assert "product_not_found" in item["errors"]
+    assert [w for w in item["warnings"] if w.startswith("sku_dash_variant")] == []
+
+
 @pytest.mark.asyncio
 async def test_apply_compound_sku_position_points_at_part_bound_product(
     client, session, tmp_path, monkeypatch

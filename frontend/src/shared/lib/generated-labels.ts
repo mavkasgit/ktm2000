@@ -60,11 +60,13 @@ export const warningLabels: Record<string, string> = {
   "paired_hanger_adjusted": "Округлено до кратности подвеса",
   "paired_row_auto_included": "Автодобавлена парная строка",
   "period_not_detected": "не определен",
+  "plan_group_balance_mismatch": "Баланс раскроя не сходится",
   "product_name_missing": "Отсутствует наименование",
   "route_auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
   "row_selection_applied": "Применён фильтр строк",
   "row_selection_auto_included": "Автодобавлены парные строки",
   "sku_ambiguous_numeric": "Артикул неоднозначен — числовой код подходит нескольким продуктам",
+  "sku_dash_variant": "Написание артикула отличается дефисом — использован артикул из справочника",
   "sku_matched_by_alias": "Артикул не совпал полностью — использован сопоставленный",
   "sku_matched_by_part": "Артикул сопоставлен по части составного артикула — проверьте привязку",
 }

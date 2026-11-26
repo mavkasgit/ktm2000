@@ -29,6 +29,7 @@
 | [`stock-import-1c-spec.md`](stock-import-1c-spec.md) | **Остатки из 1С (ОСВ)** | Разбор ОСВ, коды номенклатуры 1С, метры → штуки, мультилист (#455–#460) |
 | [`adr/0077-import-ostatkov-iz-1c-kody-nomenklatury.md`](adr/0077-import-ostatkov-iz-1c-kody-nomenklatury.md) | **Остатки из 1С: решения** | Код 1С как атрибут артикула, метры как аудит, нормальная и сырьевая длины (#457) |
 | [`adr/0078-tri-izobrazheniya-chertezh-v-prioritete.md`](adr/0078-tri-izobrazheniya-chertezh-v-prioritete.md) | **Фото и чертёж артикула** | Три изображения на артикул, чертёж в приоритете показа, разметка и сверка размеров (#463) |
+| [`adr/0079-kanon-artikula-als-bez-defisa.md`](adr/0079-kanon-artikula-als-bez-defisa.md) | **Канон ALS без дефиса** | Слитная форма хранения, терпимое чтение дефисных написаний, миграция 083 отменена (#474) |
 | [`equivalents-pool-spec.md`](equivalents-pool-spec.md) | **Эквивалентные артикулы** | Общий пул сырья: наличие, выдача, операторский слой (ADR-0073) |
 | [`../GLOSSARY.md`](../GLOSSARY.md) | **Глоссарий домена** | Термины: батч импорта, строка импорта, импорт остатков, действие |
 | [`quality/gates.md`](quality/gates.md) | **Карта гейтов** | Шаг → что ловит → где выполняется → чем доказан красный ход |

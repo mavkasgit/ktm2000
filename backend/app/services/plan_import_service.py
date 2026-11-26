@@ -61,10 +61,12 @@ from app.services.excel_import import (
 from app.services.hanger_quantity import adjust_quantity_to_hanger
 from app.services.import_normalization import (
     SkuEntry,
+    match_sku_loose,
     match_sku_numeric,
     match_sku_parts,
     sku_compound_parts,
     sku_entry,
+    sku_loose,
 )
 from app.services.import_normalization import normalize_sku as _normalize_sku
 from app.services.plan_position_hanger import (
@@ -158,6 +160,9 @@ PLAN_IMPORT_WARNING_PREFIXES: tuple[str, ...] = (
     #: (``33`` и ``033``). Привязки нет — выбор по порядку справочника был бы
     #: подменой артикула; параметр — SKU всех кандидатов.
     "sku_ambiguous_numeric",
+    #: #474: строка нашлась только без учёта дефиса между буквой и цифрой
+    #: (``ALS-1103`` → ``ALS1103``). Параметр — канонический SKU справочника.
+    "sku_dash_variant",
 #: Баланс группы вход×длина = Σ(выход×длина) (excel_import._check_group_balances):
 #: фактический row-warning вне списка спеки §3, зафиксирован здесь же,
 #: чтобы сторож ловил действительно новые коды, а не этот известный.
@@ -871,6 +876,7 @@ async def _make_change_items(
         errors = list(row.errors)
         product = None
         numeric_ambiguous = False
+        dash_ambiguous = False
         for key in _sku_lookup_keys(row.source_sku):
             product = sku_index.by_sku.get(key)
             if product is not None:
@@ -893,6 +899,20 @@ async def _make_change_items(
                 warnings.append(f"sku_ambiguous_numeric:{candidates}")
 
         if product is None and not numeric_ambiguous:
+            # Дефис между буквой и цифрой — оформление (#474): канон хранится
+            # слитно (``ALS1103``), а 1С и упаковочная карта пишут ``ALS-1103``.
+            # Совпадение есть, но написание отличается — оператор видит, что
+            # использован артикул справочника. Две карточки, отличающиеся
+            # только дефисом, — неоднозначность: не угадываем, оставляем
+            # product_not_found.
+            loose_match = match_sku_loose(row.source_sku, sku_entries)
+            if loose_match.found:
+                product = sku_index.products[loose_match.index]
+                warnings.append(f"sku_dash_variant:{product.sku}")
+            elif loose_match.rejected:
+                dash_ambiguous = True
+
+        if product is None and not numeric_ambiguous and not dash_ambiguous:
             # Составной артикул вида «ЮП-3658/1875» привязывается по её части
             # (#347).
             match = match_sku_parts(row.source_sku, sku_entries)
@@ -1773,7 +1793,7 @@ def _sheet_rows_by_sku_length(rows: list[ParsedPlanRow]) -> dict[tuple[str, str 
     for row in rows:
         length_mm = position_length_mm(row)
         key = (
-            _normalize_sku(row.source_sku),
+            sku_loose(row.source_sku),
             _length_key(length_mm) if length_mm is not None else None,
         )
         index.setdefault(key, []).extend(row.source_row_numbers)
@@ -1797,7 +1817,7 @@ def _pair_partner_row_is_adjacent(
     """
     length_mm = position_length_mm(row)
     key = (
-        _normalize_sku(partner_sku),
+        sku_loose(partner_sku),
         _length_key(length_mm) if length_mm is not None else None,
     )
     partner_rows = sheet_rows.get(key) or []

@@ -68,6 +68,7 @@ SPEC_WARNING_BASES = frozenset(
         "sku_matched_by_part",  # #347: привязка по части составного артикула
         "sku_matched_by_alias",  # #347: части — дубли-алиасы одного артикула
         "sku_ambiguous_numeric",  # #444: числовой код подходит нескольким продуктам
+        "sku_dash_variant",  # #474: совпадение только без учёта дефиса
     }
 )
 
@@ -123,6 +124,7 @@ def test_classify_warnings_with_params():
         "sku_matched_by_part:1875",
         "sku_matched_by_alias:ЮП-3485",
         "sku_ambiguous_numeric:33, 033",
+        "sku_dash_variant:ALS1103",
     ]
     for code in samples:
         assert classify_plan_import_code(code) == "warning", code

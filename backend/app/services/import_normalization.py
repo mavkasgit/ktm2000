@@ -6,6 +6,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import func
+
 DEFAULT_IMPORT_NORMALIZATION_RULES: dict[str, Any] = {}
 
 #: Варианты написания тире (unicode-дефисы, минус, широкий дефис и т.п.),
@@ -37,6 +39,38 @@ def sku_loose(value: str) -> str:
     исходному SKU: это отдельные правила, не нормализация.
     """
     return _DASH_BETWEEN_LETTER_AND_DIGIT.sub("", normalize_sku(value))
+
+
+_SQL_LOOSE_PATTERN = r"([a-zа-яё])-([0-9])"
+
+
+def normalize_sku_sql(column):
+    """SQL-аналог ``normalize_sku`` для колонки SKU (PostgreSQL).
+
+    Один SQL-клон правила на проект: по нему строятся и предфильтр остатков, и
+    ``sku_loose_sql``, иначе копии тихо расходятся в том, что считается одним
+    артикулом. Повторяет регистр, варианты тире и снятие пробелов/NBSP; дефис
+    не трогает — это отдельное правило ``sku_loose``.
+    """
+    dashed = func.translate(
+        func.lower(column), SKU_DASH_VARIANTS, "-" * len(SKU_DASH_VARIANTS)
+    )
+    return func.replace(func.replace(dashed, " ", ""), "\u00A0", "")
+
+
+def sku_loose_sql(column):
+    """SQL-аналог ``sku_loose`` для колонки SKU (PostgreSQL).
+
+    Предфильтр остатков и точный ``IN``-фолбэк пар выбирают кандидатов в SQL, а
+    окончательное решение принимает Python. Без SQL-копии правила кандидат с
+    другим написанием просто не доезжает — и ``sku_loose`` не срабатывает уже
+    никогда. Выражение — надстройка над ``normalize_sku_sql``, снимает дефис
+    только между буквой и цифрой — тем же шаблоном, что и Python, без
+    lookbehind (его нет в старых версиях PostgreSQL).
+    """
+    return func.regexp_replace(
+        normalize_sku_sql(column), _SQL_LOOSE_PATTERN, r"\1\2", "g"
+    )
 
 
 def numeric_sku_key(value: str) -> str | None:
@@ -202,8 +236,13 @@ def match_sku_parts(cell: str, entries: Sequence[SkuEntry]) -> SkuMatch:
     return SkuMatch()
 
 
-def _match_sku_loose(cell: str, entries: Sequence[SkuEntry]) -> SkuMatch:
-    """Совпадение без дефиса между буквой и цифрой: ``ALS1291`` ↔ ``ALS-1291``."""
+def match_sku_loose(cell: str, entries: Sequence[SkuEntry]) -> SkuMatch:
+    """Совпадение без дефиса между буквой и цифрой: ``ALS1291`` ↔ ``ALS-1291``.
+
+    Отдельный шаг каскада, а не правило внутри точного совпадения: импорт плана
+    задаёт свой первый шаг (восстановление кодировки) и вызывает этот же шаг
+    между числовым кодом и частями. Правило одно — ``sku_loose``.
+    """
     loose = sku_loose(cell)
     if not loose:
         return SkuMatch()
@@ -234,7 +273,7 @@ def match_sku_cell(cell: str, entries: Sequence[SkuEntry]) -> SkuMatch:
     numeric_match = match_sku_numeric(normalized_cell, entries)
     if numeric_match.found or numeric_match.rejected:
         return numeric_match
-    loose_match = _match_sku_loose(normalized_cell, entries)
+    loose_match = match_sku_loose(normalized_cell, entries)
     if loose_match.found or loose_match.rejected:
         return loose_match
     return match_sku_parts(normalized_cell, entries)

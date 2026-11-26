@@ -218,3 +218,84 @@ async def test_patch_product_sku(client, session) -> None:
     assert alias_holder.aliases == ["NEW-SKU-001"]
 
 
+
+
+# ─── Канон ALS без дефиса (#474) ─────────────────────────────────────────────
+
+
+async def _product_row(session, sku: str, *, aliases: list[str] | None = None) -> Product:
+    product = Product(
+        sku=sku,
+        name=f"Артикул {sku}",
+        type=ProductType.component,
+        unit="pcs",
+        aliases=list(aliases or []),
+    )
+    session.add(product)
+    await session.flush()
+    return product
+
+
+@pytest.mark.asyncio
+async def test_create_product_rejects_dash_only_duplicate(client, session) -> None:
+    """Карточка, отличающаяся от существующей только дефисом, — 409."""
+    await _product_row(session, "ALS1103")
+    await session.commit()
+
+    resp = await client.post(
+        "/api/products",
+        json={"sku": "ALS-1103", "name": "Дубль", "type": "component"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "дефисом" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_rename_product_rejects_dash_only_duplicate(client, session) -> None:
+    """Переименование в написание, отличающееся только дефисом, — 409."""
+    existing = await _product_row(session, "ALS1103")
+    renamed = await _product_row(session, "OTHER-1")
+    await session.commit()
+
+    resp = await client.patch(
+        f"/api/products/{renamed.id}",
+        json={"sku": "ALS-1103"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    assert "дефисом" in resp.json()["detail"].lower()
+    await session.refresh(renamed)
+    assert renamed.sku == "OTHER-1"
+    assert existing.sku == "ALS1103"
+
+
+@pytest.mark.asyncio
+async def test_alias_linking_matches_sku_ignoring_dash(client, session) -> None:
+    """Алиас ``ALS-1103`` связывает карточку с каноническим ``ALS1103``."""
+    target = await _product_row(session, "ALS1103")
+    holder = await _product_row(session, "HOLDER-1")
+    await session.commit()
+
+    resp = await client.patch(
+        f"/api/products/{holder.id}",
+        json={"aliases": ["ALS-1103"]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    await session.refresh(target)
+    assert "HOLDER-1" in (target.aliases or [])
+
+
+@pytest.mark.asyncio
+async def test_delete_product_removes_dash_spelled_alias(client, session) -> None:
+    """Удаление артикула убирает его дефисное написание из чужих алиасов."""
+    target = await _product_row(session, "ALS1103")
+    holder = await _product_row(session, "HOLDER-2", aliases=["ALS-1103"])
+    await session.commit()
+
+    resp = await client.delete(f"/api/products/{target.id}")
+
+    assert resp.status_code == 204, resp.text
+    await session.refresh(holder)
+    assert holder.aliases == []

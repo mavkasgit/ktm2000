@@ -521,3 +521,69 @@ async def test_available_remainder_unresolvable_pair_still_consumes_line_product
     rows_by_id = {row["plan_position_id"]: row for row in rows_resp.json()["rows"]}
     assert rows_by_id[single_a.id]["available_remainder_quantity"] == 95.0
     assert rows_by_id[single_b.id]["available_remainder_quantity"] == 100.0
+
+# ─── Канон ALS без дефиса (#474) ─────────────────────────────────────────────
+
+
+async def test_wip_stats_single_finds_dash_spelling(client, session: AsyncSession) -> None:
+    """``ALS-1103`` находит канонический ``ALS1103``: история — снимок, чтение терпимо."""
+    product = Product(
+        sku="ALS1103", name="Плинтус", type=ProductType.finished_good, unit="pcs"
+    )
+    session.add(product)
+    await session.commit()
+
+    resp = await client.get("/api/production-planning/product-wip-stats/ALS-1103")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["sku"] == "ALS1103"
+    assert resp.json()["product_id"] == product.id
+
+
+async def test_wip_stats_pair_finds_position_with_dash_snapshot(
+    client, session: AsyncSession
+) -> None:
+    """Позиция хранит дефисный ``source_sku``, пара резолвится по канону.
+
+    Запрос канонического артикула обязан находить старую позицию: история не
+    переписывается, терпимым делается чтение.
+    """
+    product_a, _product_b = await _make_pair_products(
+        session, sku_a="ALS1103", sku_b="ALB1103", with_pair=True
+    )
+    _stock, prod, route, stages = await _make_route(session, prefix="ALSW")
+    plan = await _make_plan(session, prefix="ALSW")
+    await _add_position_with_task(
+        session,
+        plan=plan, route=route, stages=stages, prod_section=prod,
+        source_sku="ALS-1103+ALB-1103",
+        position_product_id=None,
+        effective_product_id=product_a.id,
+        source_payload=_pair_payload("ALS-1103", "ALB-1103"),
+        dimensions={"length_mm": 2500},
+        task_status=WorkTaskStatus.in_progress,
+    )
+
+    resp = await client.get("/api/production-planning/product-wip-stats/ALS1103+ALB1103")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["is_pair"] is True
+    assert [task["dimensions"]["length_mm"] for task in data["in_work"]] == [2500]
+
+
+async def test_wip_stats_pair_resolves_dash_spelling_components(
+    client, session: AsyncSession
+) -> None:
+    """Компоненты пары в запросе набраны с дефисом — пара находится."""
+    product_a, product_b = await _make_pair_products(
+        session, sku_a="ALS1103", sku_b="ALB1103", with_pair=True
+    )
+    await session.commit()
+
+    resp = await client.get("/api/production-planning/product-wip-stats/ALS-1103+ALB-1103")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["warning"] is None
+    assert [component["sku"] for component in data["components"]] == [
+        product_a.sku,
+        product_b.sku,
+    ]

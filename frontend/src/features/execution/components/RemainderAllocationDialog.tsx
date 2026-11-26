@@ -19,6 +19,7 @@ import {
 import type { StockBalanceEntry } from "@/shared/api/stock";
 import { listProducts } from "@/shared/api/products";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import { skuLoose } from "@/shared/lib/skuSpelling";
 import {
   AlertCircle,
   AlertTriangle,
@@ -175,11 +176,20 @@ export function RemainderAllocationDialog({
       setError(null);
       try {
         const products = await listProducts({ q: positionSku, limit: 20 });
-        const normalizedSku = positionSku.trim().toLowerCase();
-        const product =
-          products.find((p) => p.sku.trim().toLowerCase() === normalizedSku) ??
-          (products.length === 1 ? products[0] : undefined);
-        const productId = product?.id ?? 0;
+        const normalizedSku = skuLoose(positionSku);
+        // Один артикул может прийти в двух написаниях (`ALS-1103`/`ALS1103`).
+        // Это не повод взять первый: бэкенд такую пару не резолвит, и выдача
+        // остатков ушла бы не с той карточки. Единственное написание — оно;
+        // единственный результат поиска без совпадений — тоже он.
+        const matches = products.filter((p) => skuLoose(p.sku) === normalizedSku);
+        if (matches.length > 1) {
+          throw new Error("Артикул неоднозначен — несколько карточек отличаются только дефисом");
+        }
+        const product = matches[0] ?? (products.length === 1 ? products[0] : undefined);
+        if (!product) {
+          throw new Error("Артикул не найден в справочнике — остатки запросить не с чего");
+        }
+        const productId = product.id;
         // `order=operations` — тот же порядок, что предвыбор на бэкенде
         // (#314): больше пройденных операций = ближе к следующему этапу.
         const allBalances = await getProductStockBalances(productId, undefined, "operations");

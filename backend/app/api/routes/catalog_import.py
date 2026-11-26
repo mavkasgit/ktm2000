@@ -54,6 +54,7 @@ from app.services.hanger_quantity_calc import (
     HangerConfigError,
     compute_hanger_quantity,
 )
+from app.services.import_normalization import sku_loose, sku_loose_sql
 from app.services.photo_copy import copy_photo_if_changed
 
 router = APIRouter(prefix="/catalog-import", tags=["catalog-import"])
@@ -162,13 +163,13 @@ async def import_catalog_from_zip(
         for row in rows:
             sku, qty, length, notes, photo_thumb, photo_full = row
 
-            existing = await db.scalar(
-                select(Product)
-                .options(selectinload(Product.lengths))
-                .where(
-                    (Product.sku == sku) | (Product.aliases.op("@>")(cast([sku], ARRAY(String))))
+            existing, ambiguous = await _find_product_for_zip(db, sku)
+            if ambiguous:
+                errors.append(
+                    f"{sku}: артикул отличается только дефисом от нескольких карточек — уточните написание"
                 )
-            )
+                skipped += 1
+                continue
 
             # Prepare photo paths
             new_thumb = None
@@ -335,13 +336,20 @@ async def preview_catalog_from_zip(
             sku, qty, length, _notes, photo_thumb, photo_full = row
             stats["total"] += 1
 
-            existing = await db.scalar(
-                select(Product)
-                .options(selectinload(Product.lengths))
-                .where(
-                    (Product.sku == sku) | (Product.aliases.op("@>")(cast([sku], ARRAY(String))))
-                )
-            )
+            existing, ambiguous = await _find_product_for_zip(db, sku)
+            if ambiguous:
+                # Два товара отличаются только дефисом: не угадываем (#474).
+                stats["skip"] += 1
+                items.append({
+                    "sku": sku,
+                    "name": sku,
+                    "profile_type": _parse_profile_type(sku),
+                    "length_mm": length,
+                    "quantity_per_hanger": qty,
+                    "has_photo": False,
+                    "action": "skip",
+                })
+                continue
 
             # Check if photos exist in ZIP
             has_photo = False
@@ -385,16 +393,78 @@ async def preview_catalog_from_zip(
 # ─── Импорт справочника сырья из Excel (#63) ────────────────────────────────
 
 
-async def _load_products_by_sku(db: AsyncSession, skus: list[str]) -> dict[str, Product]:
+async def _find_product_for_zip(db: AsyncSession, sku: str) -> tuple[Product | None, bool]:
+    """Товар для профиля ZIP: точный SKU/алиас, иначе единственное дефисное совпадение.
+
+    Возвращает ``(product, ambiguous)``. Две карточки, отличающиеся только
+    дефисом, — неоднозначность: не угадываем, строка получает ошибку (#474).
+    """
+    existing = await db.scalar(
+        select(Product)
+        .options(selectinload(Product.lengths))
+        .where(
+            (Product.sku == sku) | (Product.aliases.op("@>")(cast([sku], ARRAY(String))))
+        )
+    )
+    if existing is not None:
+        return existing, False
+    candidates = (
+        await db.execute(
+            select(Product)
+            .options(selectinload(Product.lengths))
+            .where(sku_loose_sql(Product.sku) == sku_loose(sku))
+        )
+    ).scalars().all()
+    if len(candidates) == 1:
+        return candidates[0], False
+    return None, len(candidates) > 1
+
+
+async def _load_products_by_sku(
+    db: AsyncSession, skus: list[str]
+) -> tuple[dict[str, Product], set[str]]:
+    """Товары по артикулам файла: точный SKU, иначе единственное дефисное совпадение.
+
+    Ключ словаря — артикул из файла, чтобы вызывающий не зависел от написания
+    в справочнике. Возвращает ``(products, ambiguous_skus)``: несколько
+    карточек с тем же ``sku_loose`` — неоднозначность, строку нельзя ни
+    обновлять, ни создавать (#474).
+    """
     if not skus:
-        return {}
+        return {}, set()
+    unique_skus = list(dict.fromkeys(skus))
     stmt = (
         select(Product)
         .options(selectinload(Product.lengths), selectinload(Product.processing_flags))
-        .where(Product.sku.in_(skus))
+        .where(Product.sku.in_(unique_skus))
     )
     items = (await db.execute(stmt)).scalars().all()
-    return {product.sku: product for product in items}
+    by_sku: dict[str, Product] = {product.sku: product for product in items}
+
+    missing = [sku for sku in unique_skus if sku not in by_sku]
+    if not missing:
+        return by_sku, set()
+    loose_targets = {sku_loose(sku) for sku in missing}
+    loose_rows = (
+        await db.execute(
+            select(Product)
+            .options(selectinload(Product.lengths), selectinload(Product.processing_flags))
+            .where(sku_loose_sql(Product.sku).in_(loose_targets))
+        )
+    ).scalars().all()
+    by_loose: dict[str, list[Product]] = {}
+    for product in loose_rows:
+        if product.sku:
+            by_loose.setdefault(sku_loose(product.sku), []).append(product)
+
+    ambiguous: set[str] = set()
+    for sku in missing:
+        matches = by_loose.get(sku_loose(sku), [])
+        if len(matches) == 1:
+            by_sku[sku] = matches[0]
+        elif len(matches) > 1:
+            ambiguous.add(sku)
+    return by_sku, ambiguous
 
 
 def _row_count_errors(
@@ -443,6 +513,12 @@ class _ImportBatch:
     partners_by_sku: dict[str, Product]
     existing_pairs: set[tuple[int, int]]
     total_data_rows: int
+    # Артикулы файла, которым соответствует несколько карточек, различающихся
+    # только дефисом: строку нельзя ни обновлять, ни создавать (#474).
+    ambiguous_skus: set[str]
+    # То же для колонки «Парный профиль»: потерять их значило бы соврать
+    # «не найден» вместо «неоднозначен».
+    ambiguous_partners: set[str]
     # Текущие значения полей размерности: product_id → {код: default_value} (#87).
     # Один запрос на весь файл — иначе diff считал бы каждую строку отдельно.
     dimension_values: dict[int, dict[str, float | None]]
@@ -707,6 +783,16 @@ def _pair_plan(
     errors: list[dict] = []
     partner_ids: dict[str, int | None] = {}
     for sku in wanted:
+        if sku in batch.ambiguous_partners:
+            errors.append({
+                "row": row.row,
+                "sku": row.sku,
+                "message": (
+                    f"Артикул партнёра {sku} неоднозначен — несколько карточек "
+                    "отличаются только дефисом"
+                ),
+            })
+            continue
         partner = batch.partners_by_sku.get(sku)
         if partner is not None:
             partner_ids[sku] = partner.id
@@ -803,9 +889,18 @@ async def _prepare_excel_import(file: UploadFile, db: AsyncSession) -> _ImportBa
         rows, errors, total_data_rows = parse_catalog_excel(content, file.filename or "")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    products = await _load_products_by_sku(db, [row.sku for row in rows])
+    products, ambiguous_skus = await _load_products_by_sku(db, [row.sku for row in rows])
+    errors.extend(
+        {
+            "row": row.row,
+            "sku": row.sku,
+            "message": "Артикул отличается только дефисом от нескольких карточек — уточните написание",
+        }
+        for row in rows
+        if row.sku in ambiguous_skus
+    )
     partner_skus = sorted({sku for row in rows for sku in row.fields.get("pair_partners", [])})
-    partners_by_sku = await _load_products_by_sku(db, partner_skus)
+    partners_by_sku, ambiguous_partners = await _load_products_by_sku(db, partner_skus)
     involved_ids = sorted({p.id for p in list(products.values()) + list(partners_by_sku.values())})
     existing_pairs = await _existing_pair_keys(db, involved_ids)
     return _ImportBatch(
@@ -815,6 +910,8 @@ async def _prepare_excel_import(file: UploadFile, db: AsyncSession) -> _ImportBa
         partners_by_sku=partners_by_sku,
         existing_pairs=existing_pairs,
         total_data_rows=total_data_rows,
+        ambiguous_skus=ambiguous_skus,
+        ambiguous_partners=ambiguous_partners,
         dimension_values=await _load_dimension_values(
             db, [product.id for product in products.values()]
         ),
@@ -834,6 +931,11 @@ async def preview_catalog_from_excel(
     error_rows: set[int] = {err["row"] for err in errors}
 
     for row in rows:
+        if row.sku in batch.ambiguous_skus:
+            # Строка уже в списке ошибок. Карточку выбрать нельзя, поэтому в
+            # таблице не может быть ни «создать», ни «обновить»: иначе
+            # предпросмотр обещал бы запись, которую apply обязан отклонить.
+            continue
         product = batch.products.get(row.sku)
         is_new = product is None
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
@@ -920,6 +1022,12 @@ async def apply_catalog_from_excel(
 
     failed_rows: set[int] = set()
     for row in rows:
+        if row.sku in batch.ambiguous_skus:
+            # Ошибка строки уже лежит в ``errors`` (её добавил парсинг файла).
+            # Создавать третью карточку или обновлять одну из двух наугад
+            # нельзя (#474); пары для строки тоже не заводим.
+            failed_rows.add(row.row)
+            continue
         product = batch.products.get(row.sku)
 
         existing_lengths = sorted(length.length_mm for length in product.lengths) if product else None
@@ -955,7 +1063,7 @@ async def apply_catalog_from_excel(
             skipped += 1
 
     # Фаза 2: пары — продукты уже записаны и видны в сессии.
-    products_by_sku = await _load_products_by_sku(
+    products_by_sku, _ambiguous_after_apply = await _load_products_by_sku(
         db,
         [row.sku for row in rows]
         + [sku for row in rows for sku in row.fields.get("pair_partners", [])],

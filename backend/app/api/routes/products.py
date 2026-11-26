@@ -58,6 +58,7 @@ from app.services.hanger_quantity_calc import (
     compute_hanger_quantity,
     compute_sheet_hanger_quantity,
 )
+from app.services.import_normalization import normalize_sku, sku_loose, sku_loose_sql
 from app.services.product_photo_version import (
     PhotoVersions,
     photo_file_versions,
@@ -854,6 +855,39 @@ def _to_product_out(
     )
 
 
+async def _product_with_dash_only_spelling(
+    db: AsyncSession, sku: str, *, exclude_id: int | None = None
+) -> Product | None:
+    """Продукт, артикул которого отличается от ``sku`` только дефисом (#474).
+
+    Канон серии ALS — без дефиса: ``ALS-1103`` — написание того же артикула, а
+    не второй артикул. Отличие в регистре или пробелах дефисным не считается —
+    у него своё (прежнее) поведение, и подменять его этим сообщением нельзя.
+    """
+    statement = select(Product).where(sku_loose_sql(Product.sku) == sku_loose(sku))
+    if exclude_id is not None:
+        statement = statement.where(Product.id != exclude_id)
+    candidates = (await db.execute(statement)).scalars().all()
+    normalized = normalize_sku(sku)
+    for candidate in candidates:
+        if candidate.sku and normalize_sku(candidate.sku) != normalized:
+            return candidate
+    return None
+
+
+async def _resolve_product_by_sku(db: AsyncSession, sku: str) -> Product | None:
+    """Товар по точному SKU, иначе по единственному совпадению без дефиса."""
+    product = await db.scalar(select(Product).where(Product.sku == sku))
+    if product is not None:
+        return product
+    candidates = (
+        await db.execute(
+            select(Product).where(sku_loose_sql(Product.sku) == sku_loose(sku))
+        )
+    ).scalars().all()
+    return candidates[0] if len(candidates) == 1 else None
+
+
 async def _enforce_bidirectional_aliases(
     db: AsyncSession, product_id: int, new_aliases: list[str], old_aliases: list[str] | None = None
 ) -> list[str]:
@@ -870,16 +904,19 @@ async def _enforce_bidirectional_aliases(
     activated = []
 
     for alias_sku in added:
-        alias_product = await db.scalar(select(Product).where(Product.sku == alias_sku))
+        alias_product = await _resolve_product_by_sku(db, alias_sku)
         if alias_product:
             alias_list = list(set(alias_product.aliases or []) | {current_product.sku})
             alias_product.aliases = alias_list
             activated.append(alias_sku)
 
     for alias_sku in removed:
-        alias_product = await db.scalar(select(Product).where(Product.sku == alias_sku))
+        alias_product = await _resolve_product_by_sku(db, alias_sku)
         if alias_product:
-            alias_list = [a for a in (alias_product.aliases or []) if a != current_product.sku]
+            alias_sku_key = sku_loose(current_product.sku)
+            alias_list = [
+                a for a in (alias_product.aliases or []) if sku_loose(a) != alias_sku_key
+            ]
             alias_product.aliases = alias_list
 
     return activated
@@ -1115,6 +1152,11 @@ async def create_product(
     existing = await db.scalar(select(Product).where(Product.sku == payload.sku))
     if existing:
         raise HTTPException(status_code=409, detail="Артикул с таким SKU уже существует")
+    if await _product_with_dash_only_spelling(db, payload.sku) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Артикул отличается только дефисом от существующего",
+        )
     if payload.code:
         existing_code = await db.scalar(select(Product).where(Product.code == payload.code))
         if existing_code:
@@ -1306,13 +1348,24 @@ async def patch_product(
             )
             if duplicate:
                 raise HTTPException(status_code=409, detail="Артикул с таким SKU уже существует")
+            if await _product_with_dash_only_spelling(
+                db, normalized_sku, exclude_id=product_id
+            ) is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Артикул отличается только дефисом от существующего",
+                )
             old_sku = item.sku
+            old_sku_loose = sku_loose(old_sku)
             item.sku = normalized_sku
             others = (await db.execute(select(Product).where(Product.id != product_id))).scalars().all()
             for other in others:
-                if other.aliases and old_sku in other.aliases:
+                if other.aliases and any(
+                    sku_loose(alias) == old_sku_loose for alias in other.aliases
+                ):
                     other.aliases = [
-                        normalized_sku if alias == old_sku else alias for alias in other.aliases
+                        normalized_sku if sku_loose(alias) == old_sku_loose else alias
+                        for alias in other.aliases
                     ]
 
     for key, value in patch_data.items():
@@ -1457,11 +1510,18 @@ async def delete_product(product_id: int, db: AsyncSession = Depends(get_db)):
     # удаляется вместе с продуктом (FK product_id каскадит на уровне БД).
     await db.execute(delete(ProductComposition).where(ProductComposition.product_id == product_id))
 
-    # Remove this product from other products' aliases
+    # Remove this product from other products' aliases. Написание алиаса —
+    # снимок: товар мог быть записан дефисной формой (#474), поэтому сравнение
+    # терпимо к дефису между буквой и цифрой.
+    removed_sku_loose = sku_loose(item.sku)
     all_products = (await db.execute(select(Product))).scalars().all()
     for p in all_products:
-        if p.id != product_id and item.sku in (p.aliases or []):
-            p.aliases = [a for a in p.aliases if a != item.sku]
+        if p.id != product_id and any(
+            sku_loose(alias) == removed_sku_loose for alias in (p.aliases or [])
+        ):
+            p.aliases = [
+                a for a in p.aliases if sku_loose(a) != removed_sku_loose
+            ]
 
     await db.delete(item)
     # Коммит ДО ответа: иначе 204 уходит раньше коммита, а список артикулов
