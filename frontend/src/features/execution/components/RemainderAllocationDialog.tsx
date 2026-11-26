@@ -177,10 +177,19 @@ export function RemainderAllocationDialog({
       try {
         const products = await listProducts({ q: positionSku, limit: 20 });
         const normalizedSku = skuLoose(positionSku);
-        const product =
-          products.find((p) => skuLoose(p.sku) === normalizedSku) ??
-          (products.length === 1 ? products[0] : undefined);
-        const productId = product?.id ?? 0;
+        // Один артикул может прийти в двух написаниях (`ALS-1103`/`ALS1103`).
+        // Это не повод взять первый: бэкенд такую пару не резолвит, и выдача
+        // остатков ушла бы не с той карточки. Единственное написание — оно;
+        // единственный результат поиска без совпадений — тоже он.
+        const matches = products.filter((p) => skuLoose(p.sku) === normalizedSku);
+        if (matches.length > 1) {
+          throw new Error("Артикул неоднозначен — несколько карточек отличаются только дефисом");
+        }
+        const product = matches[0] ?? (products.length === 1 ? products[0] : undefined);
+        if (!product) {
+          throw new Error("Артикул не найден в справочнике — остатки запросить не с чего");
+        }
+        const productId = product.id;
         // `order=operations` — тот же порядок, что предвыбор на бэкенде
         // (#314): больше пройденных операций = ближе к следующему этапу.
         const allBalances = await getProductStockBalances(productId, undefined, "operations");
