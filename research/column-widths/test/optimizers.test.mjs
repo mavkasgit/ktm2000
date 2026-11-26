@@ -140,6 +140,25 @@ test("p90 не выходит за min/max и даёт больше ширины
   assert.ok(stats.get("source_name").p90 > stats.get("row").p90);
 });
 
+test("p90 не выходит за maxShare, когда его желаемые ширины уже бюджета (#486)", async () => {
+  for (const profile of ["all-short", "realistic", "mixed"]) {
+    for (const tableWidth of [1180, 1500, 1920]) {
+      for (const count of [6, 11, 12, 20]) {
+        const { prepared } = await fixture({ profile, columns: count });
+        const content = tableWidth - SERVICE_WIDTH_PX;
+        const { widths } = OPTIMIZERS.p90(prepared, content);
+        for (const column of prepared.columns) {
+          assert.ok(
+            widths[column.id] <= maxWidth(column, content) + 0.5,
+            `${profile}/${count}@${tableWidth}: ${column.id} = ${widths[column.id]} ` +
+              `выше максимума ${maxWidth(column, content)}`,
+          );
+        }
+      }
+    }
+  }
+});
+
 test("narrowing, breakpoints и search не хуже baseline (cost и высота)", async () => {
   const { prepared } = await fixture({ profile: "realistic", rows: 120 });
   const baseline = evaluate(prepared, OPTIMIZERS.baseline(prepared, CONTENT).widths);

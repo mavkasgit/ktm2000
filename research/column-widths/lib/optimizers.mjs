@@ -146,8 +146,15 @@ export function p90Optimizer(prepared, contentWidth) {
   );
   const desiredSum = desired.reduce((sum, value) => sum + value, 0);
   const widths = { ...fixedWidths };
+  const scale = flexBudget / Math.max(1, desiredSum);
   flex.forEach((column, index) => {
-    widths[column.id] = (desired[index] * flexBudget) / Math.max(1, desiredSum);
+    // Пропорция может быть >1, когда сумма p90 меньше бюджета: без потолка
+    // колонка уехала бы за maxShare, а `distributeLeftover` умеет только
+    // добавлять. Остаток бюджета он же и раздаст — уже с учётом запаса.
+    widths[column.id] = Math.min(
+      desired[index] * scale,
+      maxWidth(column, contentWidth),
+    );
   });
   return { widths: distributeLeftover(columns, widths, contentWidth) };
 }
