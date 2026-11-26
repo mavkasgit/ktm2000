@@ -1672,11 +1672,21 @@ def _preview_section_label(
     return section_names.get(section_id, f"#{section_id}")
 
 
+# Подпись пропуска в предпросмотре — механизм, а не категория реестра: строка
+# либо уже решена в реестре исключений, либо не нашла пары (в каталоге или в
+# поддерживаемых единицах). Категория и заметка остаются в реестре, оператору в
+# таблице достаточно одного короткого ответа (CODING_STANDARDS п.10–11).
+SKIP_LABEL_IN_REGISTRY = "есть в исключениях"
+SKIP_LABEL_NO_MATCH = "нет совпадения"
+
+
 def _preview_errors_label(item: RemainderItem) -> str:
     if item.status == "skipped":
-        # Не ошибка: колонка показывает решение каталога, чтобы строка была
-        # объяснена прямо в таблице (#464). Сам статус и его счётчик — отдельно.
-        label = item.skip_reason_label or "пропущено по решению каталога"
+        # Не ошибка: колонка объясняет строку прямо в таблице (#464), а статус и
+        # его счётчик живут отдельно. Второй строки-заметки нет: она повторяла
+        # подпись и удваивала высоту строки. Префикс «Пропущено: » держит e2e
+        # (`remainders-import-preview.spec.ts`) и счётчик в шапке.
+        label = item.skip_reason_label or SKIP_LABEL_NO_MATCH
         return f"Пропущено: {label}"
     if not item.errors:
         return "—" if item.status == "valid" else "Ошибка"

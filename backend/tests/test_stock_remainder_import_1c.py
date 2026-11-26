@@ -822,6 +822,7 @@ async def test_resolve_quantities_unsupported_unit_is_skipped(
     assert items[0].quantity is None
     assert items[0].errors == []
     assert items[0].skip_reason == "not_mes"
+    assert items[0].skip_reason_label == "нет совпадения"
     assert items[0].skip_note == "Единица измерения 'кг' не поддерживается"
 
 
@@ -1007,6 +1008,7 @@ async def test_preview_osv_returns_source_fields_and_pieces(
     assert unsupported_unit["status"] == "skipped"
     assert unsupported_unit["errors"] == []
     assert unsupported_unit["skip_reason"] == "not_mes"
+    assert unsupported_unit["skip_reason_label"] == "нет совпадения"
     assert unsupported_unit["skip_note"] == "Единица измерения 'кг' не поддерживается"
 
 
@@ -1112,7 +1114,7 @@ async def test_lookup_1c_registry_skips_by_code_with_reason(
     assert item.product_id is None
     assert item.errors == []
     assert item.skip_reason == "not_mes"
-    assert item.skip_reason_label == "не MES (химия, плёнки, крепёж, СИЗ, газы)"
+    assert item.skip_reason_label == "есть в исключениях"
     assert item.skip_note == "упаковка, не наша"
 
 
@@ -1245,6 +1247,7 @@ async def test_preview_osv_counts_skipped_and_filters_by_it(
     assert skipped["status"] == "skipped"
     assert skipped["errors"] == []
     assert skipped["skip_reason"] == "not_mes"
+    assert skipped["skip_reason_label"] == "есть в исключениях"
     assert skipped["skip_note"] == "упаковка"
     assert by_code["22069"]["status"] == "invalid"
 

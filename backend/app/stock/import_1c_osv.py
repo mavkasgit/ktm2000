@@ -32,7 +32,6 @@ from app.domain.dimensions import (
 )
 from app.models.product import Product, Product1CCode, ProductLength
 from app.models.product_1c_skipped import (
-    SKIP_REASON_LABELS,
     SKIP_REASON_NOT_MES,
     Product1CSkipped,
 )
@@ -51,6 +50,8 @@ from app.services.route_storage_classifier import STOCK_TYPES
 from app.stock.import_1c_markers import ColorVocabulary, extract_osv_markers
 from app.stock.import_service import (
     _EMPTY_CELL_VALUES,
+    SKIP_LABEL_IN_REGISTRY,
+    SKIP_LABEL_NO_MATCH,
     RemainderItem,
     SheetSummary,
     _attach_remainder_product,
@@ -1160,9 +1161,7 @@ async def _lookup_1c_products(
                 # строке — в предпросмотре её видно рядом с прочерком в ошибках.
                 item.status = "skipped"
                 item.skip_reason = entry.reason
-                item.skip_reason_label = SKIP_REASON_LABELS.get(
-                    entry.reason, entry.reason
-                )
+                item.skip_reason_label = SKIP_LABEL_IN_REGISTRY
                 item.skip_note = entry.note
                 continue
             item.errors.extend(decision.errors)
@@ -1230,9 +1229,7 @@ async def resolve_1c_osv_quantities(
             # заказчика (26.11.2026), а не тихое проглатывание.
             item.status = "skipped"
             item.skip_reason = SKIP_REASON_NOT_MES
-            item.skip_reason_label = SKIP_REASON_LABELS.get(
-                SKIP_REASON_NOT_MES, SKIP_REASON_NOT_MES
-            )
+            item.skip_reason_label = SKIP_LABEL_NO_MATCH
             item.skip_note = _unit_error(item.source_unit)
             continue
         if unit_kind == "pcs":

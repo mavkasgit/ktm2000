@@ -186,15 +186,17 @@ function getImportItemSectionLabel(
   return sections.find((section) => section.id === sectionId)?.name ?? `#${sectionId}`;
 }
 
-/** Подпись причины пропуска из реестра исключений ОСВ. */
+/** Подпись пропуска из предпросмотра: «нет совпадения» / «есть в исключениях». */
 function getImportItemSkipReason(item: RemainderImportItem): string {
-  return item.skip_reason_label?.trim() || "пропущено по решению каталога";
+  return item.skip_reason_label?.trim() || "нет совпадения";
 }
 
 function getImportItemErrorsLabel(item: RemainderImportItem): string {
   // Правило повторяет `_preview_errors_label` (`stock/import_service.py`):
   // пропуск — не ошибка, но колонка объясняет строку, и по этой же подписи
-  // сервер фильтрует `?errors=`. Иначе строка без текста выглядела бы пустой.
+  // сервер фильтрует `?errors=`. Второй строки-заметки нет: `skip_note`
+  // повторял подпись и удваивал высоту строки (CODING_STANDARDS п.11).
+  // Префикс «Пропущено: » держит e2e остатков и счётчик в шапке.
   if (item.status === "skipped") {
     return `Пропущено: ${getImportItemSkipReason(item)}`;
   }
@@ -1504,18 +1506,9 @@ export function ImportRemaindersDialog({
                                   isSkipped ? "text-amber-700 dark:text-amber-400" : "text-destructive"
                                 }`}
                               >
-                                {isSkipped ? (
-                                  <>
-                                    {getImportItemErrorsLabel(item)}
-                                    {item.skip_note ? (
-                                      <span className="block text-[10px] font-normal text-muted-foreground">
-                                        {item.skip_note}
-                                      </span>
-                                    ) : null}
-                                  </>
-                                ) : (
-                                  item.errors.map(translateImportError).join(", ") || "—"
-                                )}
+                                {isSkipped
+                                  ? getImportItemErrorsLabel(item)
+                                  : item.errors.map(translateImportError).join(", ") || "—"}
                               </td>
                               <TableCornerResetCell />
                             </tr>
