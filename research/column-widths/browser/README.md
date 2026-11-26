@@ -213,13 +213,37 @@ Playwright сам поднимает Vite на свободном порту, `r
 CSS продукта, а не контракт исследования (20 px / вес 400); `leading-snug`
 оставлен как есть — переход на 20 px удлинял бы каждую двухстрочную строку.
 
-Воспроизвести: `npm --prefix research/column-widths run browser:test` (три
+Воспроизвести: `npm --prefix research/column-widths run browser:test` (четыре
 стенда) или `npx playwright test --config browser/playwright.config.mjs
 runtime.spec.mjs` из `research/column-widths`. Сырые JSON —
 `results/runtime.json` и `results/product.json`; без throttling —
 `results/runtime-throttle-1x.json`. Спека не падает на медленном результате
 (это решение #485), но падает на сломанном замере: шрифт не загружен,
 DPR ≠ 1, нарушен `minPx`, ширины разошлись с полной подготовкой.
+
+### Адаптивная политика: рантайм обеих раскладок (#489)
+
+`adaptive.html` / `adaptive.spec.mjs` меряет **продуктовую**
+`computePreviewColumnWidths` (собранную Vite'ом из
+`frontend/src/features/spg/lib/previewColumnWidths.ts` в `browser/.product-build`,
+копии формул нет) — то есть обе раскладки: `H_full` и `H_trunc` — и выбранную
+по θ политику. Протокол тот же, что у `runtime.spec.mjs`: 300 строк × 11
+колонок, профили `realistic`/`long-tail`, ширины 1180–1920, CPU 4×, DPR 1, 9
+повторов со сбросом кэша `pretext`.
+
+| Фаза | Медиана | p95 |
+|---|---:|---:|
+| обе раскладки | **33.3 мс** | 46.25 мс |
+| только `H_trunc` (один `lineCount` «Ошибок» на строку) | 8.9 мс | 12.65 мс |
+
+Холодный первый лист — 171 мс (JIT), как и в #483. Политика совпадает с
+правилом θ во всех 10 конфигурациях: `realistic` → `full-text` (Δ 0.6–1.5%),
+`long-tail` → `baseline` (Δ 24–40%). Спека **падает** на медиане > 100 мс и на
+расхождении политики с правилом: гейт §15 — условие включения, а не наблюдение.
+
+Воспроизвести: `npx playwright test --config browser/playwright.config.mjs
+adaptive.spec.mjs` (бандл собирает `beforeAll`) или сначала
+`node research/column-widths/adaptive.mjs` для таблицы по профилям.
 
 ## Воспроизводимость
 
