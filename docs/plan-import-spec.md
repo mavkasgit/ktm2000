@@ -46,6 +46,15 @@ Errors (блокируют, `invalid`): `product_not_found`, `product_inactive`,
 молча получала первую операцию группы. Пустое значение ошибки не даёт —
 его легитимно обрабатывает правило `empty_primary`).
 
+`normal_length_not_found` несёт параметры длины в метрах:
+`:raw:<сырьевая>:<нормальная>` — в «Длина, м» записана сырьевая длина артикула
+(2,75 для нормы 2,7): лечить нужно файл, а не справочник — добавлять сырьевую
+длину как нормальную нельзя (ADR-0028); `:missing:<raw|product>:<длина>` —
+длины нет в реестре, подсказка адресуется в справочник сырья
+(`component`/`material`) или продуктов (`finished_good`/`semi_finished`).
+Операторский текст — в `plant_policies.py`, оттуда генерируется
+`generated-labels.ts`; база кода без параметров остаётся ошибкой строки.
+
 Warnings (не блокируют): `paired_hanger_adjusted`,
 `hanger_quantity_not_set`, `input_dimensions_unresolved`, `product_name_missing`,
 `invalid_input_length` / `invalid_output_length`, `paired_row_auto_included:*`,

@@ -223,7 +223,7 @@ async def test_unknown_normal_length_errors_only_its_import_position(
     assert unknown_full["status"] == "invalid"
     assert unknown_full["errors"]
     assert unknown_full["after_data"]["input_dimensions"] == {"length_mm": 2800}
-    assert unknown["codes"] == ["normal_length_not_found"]
+    assert unknown["codes"] == ["normal_length_not_found:missing:raw:2,8"]
     assert not any(
         code.startswith(("raw_length_not_found", "raw_length_substituted"))
         for code in known["codes"] + unknown["codes"]
@@ -246,6 +246,44 @@ async def test_unknown_normal_length_errors_only_its_import_position(
     assert by_length[2700]["status"] == "draft"
     assert by_length[2800]["status"] == "invalid"
     assert by_length[2800]["errors"]
+
+
+@pytest.mark.asyncio
+async def test_raw_length_from_excel_points_to_file_not_catalog(
+    client,
+    session: AsyncSession,
+) -> None:
+    """Сырьевая длина в «Длина, м» — ошибка файла, а не отсутствие нормы в карточке."""
+    sku = "PLAN-CUTOVER-RAW-IN-FILE"
+    await _create_linear_product(
+        client,
+        session,
+        sku=sku,
+        lengths=[
+            {"length_mm": 1800, "raw_length_mm": None, "is_primary": False},
+            {"length_mm": 2700, "raw_length_mm": 2750, "is_primary": True},
+        ],
+    )
+    await _seed_route(session, sku)
+
+    body = await _import_item(
+        client,
+        sku=sku,
+        rows=[
+            _plan_row(
+                sku,
+                input_length_m=2.75,
+                output_length_m=2.7,
+                quantity=18,
+            )
+        ],
+    )
+    item = body["items"][0]
+    full = await _full_item(client, item["item_id"])
+
+    assert full["status"] == "invalid"
+    assert full["after_data"]["input_dimensions"] == {"length_mm": 2750}
+    assert item["codes"] == ["normal_length_not_found:raw:2,75:2,7"]
 
 
 @pytest.mark.asyncio

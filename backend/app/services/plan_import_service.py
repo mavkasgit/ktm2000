@@ -1002,8 +1002,33 @@ async def _make_change_items(
             dimension_state = getattr(product.dimension_state, "value", product.dimension_state)
             if dimension_state == "length" and normal_length_mm is not None:
                 length_key = _length_key(normal_length_mm)
-                if not any(_length_key(length.length_mm) == length_key for length in product.lengths):
-                    errors.append("normal_length_not_found")
+                lengths = list(product.lengths)
+                if not any(_length_key(length.length_mm) == length_key for length in lengths):
+                    # Длина из Excel может оказаться сырьевой для одной из
+                    # нормальных длин карточки. Тогда лечить нужно файл, а не
+                    # карточку: добавлять 2750 как нормальную нельзя (ADR-0028).
+                    raw_normal_mm = next(
+                        (
+                            round(length.length_mm)
+                            for length in lengths
+                            if length.raw_length_mm is not None
+                            and length.length_mm
+                            and round(length.raw_length_mm) == round(normal_length_mm)
+                        ),
+                        None,
+                    )
+                    if raw_normal_mm is not None:
+                        errors.append(
+                            f"normal_length_not_found:raw:{_mm_as_meters(normal_length_mm)}:"
+                            f"{_mm_as_meters(raw_normal_mm)}"
+                        )
+                    else:
+                        product_type = getattr(product.type, "value", product.type)
+                        kind = "raw" if product_type in {"component", "material"} else "product"
+                        errors.append(
+                            f"normal_length_not_found:missing:{kind}:"
+                            f"{_mm_as_meters(normal_length_mm)}"
+                        )
 
         # Округление количества до кратности подвесам
         effective_quantity = row.quantity
