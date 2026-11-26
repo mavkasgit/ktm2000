@@ -38,6 +38,14 @@ import {
   REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH,
   REMAINDER_PREVIEW_RESET_COLUMN_WIDTH,
 } from "../lib/remainderPreviewColumns";
+import { isOptimalColumnWidthsEnabled } from "../lib/optimalColumnWidthsFlag";
+import {
+  previewErrorsCellText,
+  previewErrorsText,
+  previewNameCellClass,
+} from "../lib/remainderPreviewErrors";
+import { PREVIEW_MIN_ROW_HEIGHT_PX } from "../lib/previewColumnWidths";
+import { useOptimalColumnWidths } from "../lib/useOptimalColumnWidths";
 
 import {
   useImportRowExpansion,
@@ -202,27 +210,6 @@ function getImportItemSectionLabel(
   return sections.find((section) => section.id === sectionId)?.name ?? `#${sectionId}`;
 }
 
-/** Подпись пропуска из предпросмотра: «нет совпадения» / «есть в исключениях». */
-function getImportItemSkipReason(item: RemainderImportItem): string {
-  return item.skip_reason_label?.trim() || "нет совпадения";
-}
-
-function getImportItemErrorsLabel(item: RemainderImportItem): string {
-  // Правило повторяет `_preview_errors_label` (`stock/import_service.py`):
-  // пропуск — не ошибка, но колонка объясняет строку, и по этой же подписи
-  // сервер фильтрует `?errors=`. Второй строки-заметки нет: `skip_note`
-  // повторял подпись и удваивал высоту строки (CODING_STANDARDS п.11).
-  // Префикс «Пропущено: » держит e2e остатков и счётчик в шапке.
-  if (item.status === "skipped") {
-    return `Пропущено: ${getImportItemSkipReason(item)}`;
-  }
-  const messages = [...item.warnings, ...item.errors];
-  if (messages.length === 0) {
-    return item.status === "valid" ? "—" : "Ошибка";
-  }
-  return messages.map(translateImportError).join(", ");
-}
-
 function getImportItemCellValue(
   item: RemainderImportItem,
   field: RemainderPreviewSortField,
@@ -249,7 +236,7 @@ function getImportItemCellValue(
     case "section":
       return getImportItemSectionLabel(item, sectionOverrides, sections);
     case "errors":
-      return getImportItemErrorsLabel(item);
+      return previewErrorsText(item);
   }
 }
 
@@ -303,6 +290,11 @@ type PreviewRowProps = {
   expanded: boolean;
   qualityOverride: QualityState | null;
   sectionOverride: number | null;
+  /**
+   * Под флагом #483 «Наименование» переносится: ширина колонки посчитана, а
+   * высота строки предсказана моделью. Без флага — прежний `truncate`.
+   */
+  nameWraps: boolean;
   onToggle: (rowNumber: number) => void;
   onQualityChange: (rowNumber: number, state: QualityState) => void;
   onSectionChange: (rowNumber: number, sectionId: number | null) => void;
@@ -316,11 +308,10 @@ type PreviewRowProps = {
  * ошибочной строки импорт их не применит, поэтому там статичный бейдж, а не
  * ``Select`` (ADR-0030 — строка остаётся компактной).
  *
- * Высота строки — один ритм `TABLE_ROW_COMPACT` (ADR-0030), поэтому текстовые
- * ячейки печатаются одной строкой (`truncate`), а полное значение — в `title`:
- * перенос длинного наименования/артикула растягивал строку и ломал оценку
- * виртуализатора. Перенос оставлен только «Ошибкам»: это причина, по которой
- * строка попала в предпросмотр, и её видно без наведения.
+ * Без флага #483 текстовые ячейки печатаются одной строкой (`truncate`), а
+ * полное значение — в `title`: виртуализатор не знал переменной высоты.
+ * Под флагом ширина колонок посчитана, высота каждой строки предсказана
+ * моделью, и «Наименование» печатается полностью (`whitespace-pre-line`).
  */
 const PreviewRow = memo(function PreviewRow({
   item,
@@ -329,6 +320,7 @@ const PreviewRow = memo(function PreviewRow({
   expanded,
   qualityOverride,
   sectionOverride,
+  nameWraps,
   onToggle,
   onQualityChange,
   onSectionChange,
@@ -379,7 +371,7 @@ const PreviewRow = memo(function PreviewRow({
           ) : null}
         </td>
         <td
-          className={`px-1.5 py-0.5 truncate ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
+          className={`px-1.5 py-0.5 ${previewNameCellClass(nameWraps)} ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
           title={item.source_name ?? item.product_name ?? undefined}
         >
           {item.product_name ?? item.source_name ?? "—"}
@@ -479,9 +471,7 @@ const PreviewRow = memo(function PreviewRow({
               : "whitespace-pre-line text-destructive"
           }`}
         >
-          {isSkipped
-            ? getImportItemErrorsLabel(item)
-            : item.errors.map(translateImportError).join(", ") || "—"}
+          {previewErrorsCellText(item)}
         </td>
         <TableCornerResetCell />
       </tr>
@@ -561,6 +551,9 @@ const summaryCellClass = TABLE_ROW_COMPACT.cell;
  */
 const PREVIEW_ALL_ROWS_LIMIT = 5000;
 
+/** Флаг #483: без него экран ведёт себя как раньше — текущие доли колонок. */
+const OPTIMAL_COLUMN_WIDTHS_ENABLED = isOptimalColumnWidthsEnabled();
+
 export function ImportRemaindersDialog({
   open,
   onOpenChange,
@@ -636,6 +629,9 @@ export function ImportRemaindersDialog({
   // Последнее показанное превью листа: пока грузится новый фильтр, таблица
   // остаётся на экране вместе с полем поиска и его фокусом (ADR-0060 п.1).
   const [lastPreviewBySheet, setLastPreviewBySheet] = useState<Record<number, RemainderPreviewResponse>>({});
+  // Первый полный нефильтрованный ответ листа — вход модели ширин (#483).
+  // Поиск, сортировка и чипы приходят позже и раскладку не пересчитывают.
+  const [widthItemsBySheet, setWidthItemsBySheet] = useState<Record<number, RemainderImportItem[]>>({});
   const [sheetsLoading, setSheetsLoading] = useState(false);
   const [rowSelection, setRowSelection] = useState("");
   const [clearExisting, setClearExisting] = useState(false);
@@ -754,6 +750,22 @@ export function ImportRemaindersDialog({
     );
   }, [previewData, selectedSheet]);
 
+  // Снапшот для модели ширин — первая же (нефильтрованная) выдача листа.
+  // Если лист впервые открыли уже с фильтром, снапшота нет: экран честно
+  // остаётся на текущих долях, а не считает ширины по подвыборке.
+  useEffect(() => {
+    if (!previewData) return;
+    const unfiltered =
+      !debouncedSearch.trim() &&
+      !rowSelection &&
+      !sort &&
+      Object.keys(columnApiParams).length === 0;
+    if (!unfiltered) return;
+    setWidthItemsBySheet((prev) =>
+      prev[selectedSheet]?.length ? prev : { ...prev, [selectedSheet]: previewData.items },
+    );
+  }, [previewData, selectedSheet, debouncedSearch, rowSelection, sort, columnApiParams]);
+
   // ── Resolve location id for API (из файла, per-row override или первая валидная строка) ──
   const resolveImportLocationId = useMemo((): number | null => {
     if (!shownPreview?.section_meta) return null;
@@ -772,6 +784,7 @@ export function ImportRemaindersDialog({
     setPreviewCache({});
     setPreviewLoadingKeys({});
     setLastPreviewBySheet({});
+    setWidthItemsBySheet({});
     previewSourceToken.current = null;
   }, []);
 
@@ -1144,6 +1157,49 @@ export function ImportRemaindersDialog({
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // ── Оптимальные ширины колонок (#483, за флагом) ───────────────────────
+  // Ширина контейнера — единственный вход, который пересчитывает раскладку.
+  // Слушаем после монтирования рамки таблицы (шаг `preview`); сам пересчёт
+  // дебаунсит хук.
+  const [previewWidth, setPreviewWidth] = useState(0);
+  useEffect(() => {
+    const node = scrollContainerRef.current;
+    if (!node) return;
+    const update = () => setPreviewWidth(node.clientWidth);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [step]);
+
+  const optimalWidths = useOptimalColumnWidths({
+    enabled: OPTIMAL_COLUMN_WIDTHS_ENABLED,
+    sheetIndex: selectedSheet,
+    items: widthItemsBySheet[selectedSheet] ?? null,
+    operations,
+    containerWidth: previewWidth,
+  });
+  const optimalShares = optimalWidths.result?.shares ?? null;
+  // Пока ширин нет (новый лист), таблицу держит спиннер: показать её на
+  // текущих долях и потом переложить — это и есть «прыжок», который тикет
+  // запрещает. На ресайз ширины остаются прошлые, пока не готовы новые.
+  const widthsPending =
+    OPTIMAL_COLUMN_WIDTHS_ENABLED &&
+    !optimalShares &&
+    optimalWidths.status !== "off";
+  const overflowMinWidth =
+    optimalShares && optimalWidths.result && optimalWidths.result.minTableWidthPx > 1180
+      ? optimalWidths.result.minTableWidthPx
+      : null;
+  const rowHeights = optimalShares
+    ? visibleItems.map(
+        (item) =>
+          optimalWidths.result?.rowHeights.get(item.source_row_number) ??
+          PREVIEW_MIN_ROW_HEIGHT_PX,
+      )
+    : undefined;
+
   // Развёрнутая сырая строка — переменной высоты; виртуализатор считает строки
   // одинаковыми, поэтому на время разворота таблица рисуется обычным tbody.
   const hasExpandedPreviewRow = useMemo(
@@ -1164,6 +1220,9 @@ export function ImportRemaindersDialog({
         expanded={isRowExpanded(item.source_row_number)}
         qualityOverride={qualityStateOverrides[item.source_row_number] ?? null}
         sectionOverride={targetSectionOverrides[item.source_row_number] ?? null}
+        // Наименование переносится только когда применена посчитанная
+        // раскладка: на текущих долях его высота не предсказана.
+        nameWraps={Boolean(optimalShares)}
         onToggle={toggleRow}
         onQualityChange={handleRowQualityChange}
         onSectionChange={handleRowSectionChange}
@@ -1175,6 +1234,7 @@ export function ImportRemaindersDialog({
       isRowExpanded,
       qualityStateOverrides,
       targetSectionOverrides,
+      optimalShares,
       toggleRow,
       handleRowQualityChange,
       handleRowSectionChange,
@@ -1691,7 +1751,9 @@ export function ImportRemaindersDialog({
                 // Спиннер — только пока предпросмотра на экране не было ни
                 // разу: перечитывание по фильтру не должно уносить таблицу
                 // вместе с открытым поповером и набранным текстом (ADR-0044).
-                loading={previewLoading && !shownPreview}
+                // Пока считаются ширины (#483), таблица тоже не показывается:
+                // иначе колонки прыгнут после первого кадра.
+                loading={(previewLoading && !shownPreview) || widthsPending}
                 isEmpty={shownPreview !== null && visibleItems.length === 0}
                 emptyContent={
                   shownPreview && previewItemsTotal > 0 ? (
@@ -1711,11 +1773,17 @@ export function ImportRemaindersDialog({
                     смонтированных строк — при скролле они «перерисовывались».
                     Ширины объявлены один раз в `remainderPreviewColumns`
                     (вместе со служебными колонками дают 100%). */}
-                <table className="w-full min-w-[1180px] table-fixed text-[11px] text-left border-collapse">
+                <table
+                  className="w-full min-w-[1180px] table-fixed text-[11px] text-left border-collapse"
+                  style={overflowMinWidth ? { minWidth: `${overflowMinWidth}px` } : undefined}
+                >
                     <colgroup>
                       <col style={{ width: REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH }} />
                       {remainderPreviewColumns.map((column) => (
-                        <col key={column.id} style={{ width: column.width }} />
+                        <col
+                          key={column.id}
+                          style={{ width: optimalShares?.[column.id] ?? column.width }}
+                        />
                       ))}
                       <col style={{ width: REMAINDER_PREVIEW_RESET_COLUMN_WIDTH }} />
                     </colgroup>
@@ -1755,6 +1823,9 @@ export function ImportRemaindersDialog({
                         // Оценка из общего набора компактной строки (ADR-0030):
                         // фактическую высоту виртуализатор измеряет сам.
                         rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
+                        // С флагом #483 — предсказанная высота каждой строки
+                        // (`lines × lineHeight` «Ошибок»); без флага — как раньше.
+                        rowHeights={rowHeights}
                         colSpan={remainderPreviewColumns.length + 2}
                         scrollContainerRef={scrollContainerRef}
                         renderRow={renderPreviewRow}

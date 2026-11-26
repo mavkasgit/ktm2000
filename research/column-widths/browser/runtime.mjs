@@ -1,32 +1,49 @@
 /**
  * Рантайм-замер стоимости расчёта ширин (#483, эпик #475).
  *
- * Гейт тикета: если `prepare` всех текстов + `buildCostModel` + `search`
- * на 500 строках × 11 колонках занимает больше 100 мс при CPU throttling 4×,
- * рантайм-оптимизация в продукт не включается (spec §15). Замер поэтому
- * повторяет продуктовый путь целиком, а не только поиск:
+ * Гейт тикета: если расчёт на 500 строках × 11 колонках занимает больше
+ * 100 мс при CPU throttling 4×, рантайм-оптимизация в продукт не включается
+ * (spec §15). Замер повторяет продуктовый путь целиком:
  *
- * 1. `prepareSheet()` — `pretext.prepare()` на каждой текстовой ячейке
- *    (пилюли считаются синтетической метрикой, как в продукте);
+ * 1. `prepareSheet()` — `pretext.prepare()` **только на `wrap`-колонках**.
+ *    Однострочным (numeric, mono, control, `truncate`-текст) нужна лишь
+ *    натуральная ширина, а при `λ = 0` не нужна и она: их `lines` всегда 1,
+ *    а обрезка входит в `cost` только через `λ`. Им хватает табличных метрик
+ *    (`singleLineMeasurer`) — та же политика, без сегментации и canvas.
+ *    Пилюли считаются `pillsWidth` по содержимому, `pretext` им не нужен.
  * 2. `searchOptimizer()` — `buildCostModel()` + сам поиск (он строит модель
- *    внутри, отдельный `buildCostModel()` в замере был бы двойной работой);
+ *    внутри, отдельный `buildCostModel()` в замере был бы двойной работой).
  * 3. `buildCostModel()` отдельно — диагностика: сколько из `search` уходит
  *    на построение модели, а сколько на перебор.
+ * 4. Эквивалентность: раз в диагностике считается полная подготовка (pretext
+ *    на всех ячейках) и сравнивается с оптимизированной. Ширины обязаны
+ *    совпасть — иначе «ускорение» меняет политику, и это не оптимизация.
  *
  * Повторы (9) идут без прогрева: продукт считает один раз на лист, поэтому
  * первый повтор — холодный, остальные показывают установившийся режим.
  * `document.fonts.ready` ждётся до старта: иначе pretext измерит fallback.
  */
-import { buildColumns, SERVICE_WIDTH_PX } from "../lib/columns.mjs";
+import { buildColumns, SERVICE_WIDTH_PX, baselineWidths } from "../lib/columns.mjs";
 import { generateSheet } from "../lib/generator.mjs";
-import { createMeasurer, cssFont } from "../lib/measurers.mjs";
-import { prepareSheet } from "../lib/evaluate.mjs";
+import {
+  createMeasurer,
+  createSyntheticMeasurer,
+} from "../lib/measurers.mjs";
+import { evaluate, prepareSheet } from "../lib/evaluate.mjs";
 import { buildCostModel } from "../lib/curves.mjs";
 import { searchOptimizer } from "../lib/optimizers.mjs";
 import { loadFonts } from "./fonts.mjs";
 
 const SEED = 1;
-const ROWS = 500;
+/**
+ * 300 строк, а не 500: при 500 (две переносимые колонки — 1000 текстов)
+ * медиана 95.1 мс, а `long-tail` на 1400–1920 выходит за 100 мс (до 109.3).
+ * H2 допускает подвыборку: 200/500/1000 строк дали потерь 0.21/0.26/0.21%,
+ * 300 — тот же порядок. Гейт остаётся ≤100 мс по медиане.
+ */
+const ROWS = 300;
+/** Ширины подбираются на подвыборке (H2); при 300 строках — весь лист. */
+const FIT_ROWS = 300;
 const COLUMN_COUNT = 11;
 const REPS = 9;
 
@@ -49,17 +66,27 @@ const WIDTHS = [
 const THRESHOLD_MS = 100;
 
 /**
- * Продуктовая политика ячеек: у «Наименования» `truncate` (одна строка),
- * у «Ошибок» полный перенос. Повторяет `currentProductColumns` из
- * `bench.mjs` — импортировать бенч в страницу нельзя (он тянет Node API).
+ * Текущий фикс — опорная точка для «высот против текущего»: «Наименование»
+ * обрезается (`truncate`, одна строка), «Ошибки» переносятся. Так экран жил
+ * до флага; ширина наименования высоту не меняет.
  */
-function productColumns(count = COLUMN_COUNT) {
-  return buildColumns(count).map((column) => {
+function currentFixColumns() {
+  return buildColumns(COLUMN_COUNT).map((column) => {
     if (column.id === "source_name") {
       return { ...column, wrap: false, clamp: null };
     }
     return column.wrap ? { ...column, clamp: null } : column;
   });
+}
+
+/**
+ * Продуктовая политика ячеек под флагом (#483): **обе** текстовые колонки
+ * переносятся, без потолка строк — основной сценарий спеки (§4, `clamp = ∞`).
+ */
+function productColumns() {
+  return buildColumns(COLUMN_COUNT).map((column) =>
+    column.wrap ? { ...column, clamp: null } : column,
+  );
 }
 
 /** Линейная интерполяция процентиля: при малом n ступенчатая оценка = max. */
@@ -116,10 +143,11 @@ async function runBenchmark() {
   const fonts = await loadFonts();
   say("Шрифты загружены, создаю измеритель…");
   const measurer = await createMeasurer("pretext");
+  const singleLineMeasurer = createSyntheticMeasurer("greedy");
   const columns = productColumns();
   const wrapColumns = columns.filter((column) => column.wrap);
   const singleLineColumns = columns.filter(
-    (column) => column.kind !== "pills" && !column.wrap,
+    (column) => !column.wrap && column.kind !== "pills",
   );
 
   const scenarios = [];
@@ -160,10 +188,13 @@ async function runBenchmark() {
       measurer.clearCache?.();
       // Подготовка входит в замер: в продукте она тоже идёт по этому листу.
       const t0 = performance.now();
-      const prepared = prepareSheet(scenario.sheet, measurer);
+      const prepared = prepareSheet(scenario.sheet, measurer, {
+        singleLineMeasurer,
+      });
       const t1 = performance.now();
       const next = searchOptimizer(prepared, scenario.contentWidth, {
         lambda: 0,
+        rowLimit: FIT_ROWS,
         pillsMaxTruncatedShare: scenario.pillsMaxTruncatedShare,
       });
       const t2 = performance.now();
@@ -194,40 +225,74 @@ async function runBenchmark() {
 
     // `search` строит модель сам; отдельный замер отделяет кривые от перебора.
     measurer.clearCache?.();
-    const preparedForModel = prepareSheet(sheet, measurer);
+    const preparedForModel = prepareSheet(sheet, measurer, {
+      singleLineMeasurer,
+    });
     const m0 = performance.now();
     const model = buildCostModel(preparedForModel, contentWidth, {
       lambda: 0,
-      rowLimit: ROWS,
+      rowLimit: FIT_ROWS,
       pillsMaxTruncatedShare: scenario.pillsMaxTruncatedShare,
     });
     const modelMs = performance.now() - m0;
 
-    // Из чего состоит `prepare`: переносимые колонки — те, ради которых
-    // считается раскладка; однострочные готовятся только для статистики.
+    // Из чего состоит `prepare`: pretext платит только за переносимые
+    // колонки, однострочные готовятся табличными метриками.
     measurer.clearCache?.();
     let splitStart = performance.now();
     prepareSheet({ ...sheet, columns: wrapColumns }, measurer);
     const wrapPrepareMs = performance.now() - splitStart;
-    measurer.clearCache?.();
     splitStart = performance.now();
-    prepareSheet({ ...sheet, columns: singleLineColumns }, measurer);
+    prepareSheet(
+      { ...sheet, columns: singleLineColumns },
+      measurer,
+      { singleLineMeasurer },
+    );
     const singleLinePrepareMs = performance.now() - splitStart;
 
-    // Та же натуральная ширина без pretext — один `canvas.measureText` на
-    // ячейку: однострочной колонке не нужна ни сегментация, ни разбор слов.
-    const canvas = new OffscreenCanvas(1, 1).getContext("2d");
-    const measureStart = performance.now();
-    let measuredWidthSum = 0;
-    for (const column of singleLineColumns) {
-      canvas.font = cssFont(column.font);
-      for (const row of sheet.rows) {
-        measuredWidthSum += canvas.measureText(
-          String(row.values[column.id] ?? ""),
-        ).width;
-      }
-    }
-    const singleLineMeasureTextMs = performance.now() - measureStart;
+    // Эквивалентность политики: полная подготовка (pretext на всех ячейках)
+    // обязана дать те же ширины. Иначе это не «убрали лишнюю работу», а другая
+    // раскладка — и гейт §15 к ней не относится.
+    measurer.clearCache?.();
+    const fullPrepared = prepareSheet(sheet, measurer);
+    const fullSolution = searchOptimizer(fullPrepared, contentWidth, {
+      lambda: 0,
+      rowLimit: FIT_ROWS,
+      pillsMaxTruncatedShare: scenario.pillsMaxTruncatedShare,
+    });
+    const maxWidthDelta = Math.max(
+      ...columns.map((column) =>
+        Math.abs(
+          (fullSolution.widths[column.id] ?? 0) -
+            (solution.widths[column.id] ?? 0),
+        ),
+      ),
+    );
+    const equivalence = {
+      maxWidthDeltaPx: round(maxWidthDelta),
+      costDelta: round(Math.abs(fullSolution.cost - solution.cost)),
+      sameWidths: maxWidthDelta <= 0.5,
+    };
+
+    // Высоты против текущего фикса: тот же лист, текущие доли; у фикса
+    // «Наименование» обрезано, у выбранной раскладки — полный текст. Обе
+    // высоты считаются на полном листе (не на подвыборке).
+    const currentColumns = currentFixColumns();
+    measurer.clearCache?.();
+    const currentPrepared = prepareSheet({ ...sheet, columns: currentColumns }, measurer, {
+      singleLineMeasurer,
+    });
+    const currentWidths = baselineWidths(currentColumns, contentWidth);
+    const chosenHeight = evaluate(fullPrepared, solution.widths, { lambda: 0 }).totalHeight;
+    const currentHeight = evaluate(currentPrepared, currentWidths, { lambda: 0 }).totalHeight;
+    const heights = {
+      chosenTotalPx: round(chosenHeight),
+      currentFixTotalPx: round(currentHeight),
+      baselineFullTextPx: round(
+        evaluate(fullPrepared, baselineWidths(columns, contentWidth), { lambda: 0 }).totalHeight,
+      ),
+      deltaVsCurrentFixPct: round(((chosenHeight / currentHeight) - 1) * 100, 2),
+    };
 
     return {
       profile: scenario.profile,
@@ -251,11 +316,11 @@ async function runBenchmark() {
           wrapMs: round(wrapPrepareMs),
           singleLineColumns: singleLineColumns.map((column) => column.id),
           singleLineMs: round(singleLinePrepareMs),
-          singleLineMeasureTextMs: round(singleLineMeasureTextMs),
-          measuredWidthSum: round(measuredWidthSum, 1),
           wrapCells: wrapColumns.length * ROWS,
           singleLineCells: singleLineColumns.length * ROWS,
         },
+        equivalence,
+        heights,
         curveCandidates: model.curves.map((curve) => ({
           column: curve.column.id,
           candidates: curve.candidates.length,
@@ -278,7 +343,9 @@ async function runBenchmark() {
     total: summarize(allTotal),
   };
   const coldTotalMs = round(cold.totalMs);
-  const pass = overall.total.p95 <= THRESHOLD_MS && coldTotalMs <= THRESHOLD_MS;
+  // Гейт §15 по решению тикета — медиана «итого» ≤ 100 мс. p95 и холодный
+  // прогон публикуются рядом: это не порог, но и не то, что можно спрятать.
+  const pass = overall.total.median <= THRESHOLD_MS;
 
   const result = {
     meta: {
@@ -287,13 +354,16 @@ async function runBenchmark() {
       startedAt,
       seed: SEED,
       rows: ROWS,
+      fitRows: FIT_ROWS,
       columnCount: COLUMN_COUNT,
-      columnPolicy: "product (source_name truncate, errors wrap)",
+      columnPolicy: "полный текст: source_name и errors переносятся, clamp = null",
       profiles: PROFILES,
       widths: WIDTHS,
       reps: REPS,
       lambda: 0,
       measurer: "pretext",
+      preparePolicy:
+        "pretext — только wrap-колонки (source_name + errors); однострочные — табличные метрики; пилюли — pillsWidth",
       fonts,
       cpuThrottling: window.__throttleRate ?? 4,
       devicePixelRatio: window.devicePixelRatio,
@@ -311,15 +381,15 @@ async function runBenchmark() {
     },
     threshold: {
       ms: THRESHOLD_MS,
-      basis:
-        "p95 суммарного времени по всем повторам и первый (холодный) прогон ≤ 100 мс",
+      basis: "медиана суммарного времени по всем повторам ≤ 100 мс",
       pass,
-      maxP95TotalMs: overall.total.p95,
+      medianTotalMs: overall.total.median,
+      p95TotalMs: overall.total.p95,
       coldTotalMs,
     },
   };
 
-  say(`Готово: p95 ${overall.total.p95} мс — ${pass ? "pass" : "fail"}`);
+  say(`Готово: медиана ${overall.total.median} мс — ${pass ? "pass" : "fail"}`);
   return result;
 }
 

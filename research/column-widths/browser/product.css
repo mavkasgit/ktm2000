@@ -1,0 +1,71 @@
+/*
+ * Точная копия CSS ячейки «Ошибок» предпросмотра остатков (#483).
+ *
+ * Источник — `ImportRemaindersDialog.tsx`: таблица `text-[11px]`, ячейка
+ * `px-1.5 py-0.5 font-medium leading-snug`, `whitespace-pre-line`,
+ * `overflow-wrap: normal`. Семейство — дефолтный `--font-sans` Tailwind v4:
+ * продукт не грузит webfont, поэтому canvas обязан мерить тот же системный
+ * стек, что резолвит DOM.
+ */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #fff;
+  color: #111;
+}
+
+#root {
+  padding: 8px;
+}
+
+.product-table {
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin: 0;
+  padding: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  font-size: 11px;
+  line-height: 1.5;
+  color: #111;
+}
+
+.product-table td {
+  padding: 2px 6px;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid #d4d4d8;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.product-table td.errors {
+  font-weight: 500;
+  line-height: 1.375;
+  white-space: pre-line;
+}
+
+/* «Наименование» под флагом: вместо `truncate` — обычный перенос, вес 400,
+   line-height наследуется (1.5 × 11 = 16.5 px). */
+.product-table td.name {
+  white-space: pre-line;
+}
+
+.product-table td.control {
+  padding: 2px 0;
+}
+
+.product-table .control-box {
+  display: block;
+  height: 24px;
+  border-radius: 6px;
+  background: #e4e4e7;
+}
+
+#status {
+  font: 13px/1.4 system-ui, sans-serif;
+  margin: 0;
+}

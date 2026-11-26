@@ -25,6 +25,7 @@
     "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
+    "@chenglou/pretext": "^1.0.0",
     "@multiavatar/multiavatar": "^1.0.7",
     "@radix-ui/react-alert-dialog": "^1.2.1",
     "@radix-ui/react-checkbox": "^1.4.1",
