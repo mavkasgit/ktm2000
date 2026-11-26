@@ -168,7 +168,9 @@ test("--only парсит секции и all", () => {
     "sweep",
     "stability",
     "robust",
+    "offline",
   ]);
+  assert.deepEqual(parseSections("offline"), ["offline"]);
   assert.throws(() => parseSections("matrix,nope"), /неизвестная секция/);
 });
 
