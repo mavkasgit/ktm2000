@@ -13,6 +13,7 @@ from app.domain.dimensions import (
     DimensionsValidationError,
     canonicalize_dimensions,
     dimensions_equal,
+    format_mm_as_meters,
     parse_length_m_to_mm,
 )
 from app.services.color_extraction import resolve_payload_color
@@ -575,7 +576,12 @@ def _check_group_balances(parsed: list[ParsedPlanRow]) -> None:
             continue
         total_in = row.input_quantity * Decimal(str(input_length))
         if total_in != total_out:
-            marker = f"plan_group_balance_mismatch:in={total_in.normalize()}mm,out={total_out.normalize()}mm"
+            marker = (
+                "plan_group_balance_mismatch:"
+                f"вход {format_mm_as_meters(total_in)} м, "
+                f"выход {format_mm_as_meters(total_out)} м "
+                f"(разница {format_mm_as_meters(total_out - total_in)} м)"
+            )
             if marker not in row.warnings:
                 row.warnings.append(marker)
 

@@ -264,6 +264,35 @@ def test_unbalanced_group_gets_warning() -> None:
     assert any(w.startswith("plan_group_balance_mismatch") for w in group.warnings)
 
 
+@pytest.mark.parametrize(
+    ("input_qty", "input_len", "outputs", "expected"),
+    [
+        # 200 × 1,8 м = 360 м; 300 × 1,8 + 100 × 0,9 = 630 м.
+        (200, 1.8, [(1.8, 300), (0.9, 100)], "вход 360 м, выход 630 м (разница 270 м)"),
+        # Обратное расхождение: разница печатается со знаком минус.
+        (350, 1.8, [(1.8, 100), (0.9, 200)], "вход 630 м, выход 360 м (разница -270 м)"),
+    ],
+)
+def test_unbalanced_group_warning_prints_meters_without_exponent(
+    input_qty: int,
+    input_len: float,
+    outputs: list[tuple[float, int]],
+    expected: str,
+) -> None:
+    """#473: маркер читается оператором — метры, запятая, без экспоненты."""
+    content = _plan_workbook(
+        [
+            _plan_row("AT-7121", "Профиль ПВХ", input_qty, input_len, *outputs[0]),
+            _plan_row("AT-7121", "", "", "", *outputs[1]),
+        ]
+    )
+    parsed = parse_factory_plan_workbook(content, "plan.xlsx")
+
+    assert len(parsed.parsed_rows) == 1
+    group = parsed.parsed_rows[0]
+    assert f"plan_group_balance_mismatch:{expected}" in group.warnings
+
+
 def test_group_fingerprint_is_idempotent_and_output_sensitive() -> None:
     rows = [
         _plan_row("AT-7121", "Профиль АТ", 150, 2.7, 0.9, 350),

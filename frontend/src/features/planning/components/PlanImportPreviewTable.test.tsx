@@ -223,6 +223,18 @@ describe("PlanImportPreviewTable — пара «Ошибки»/«Предупр.
     expect(cells.warnings).toContain("Не задано количество на подвес");
   });
 
+  it("предупреждение баланса раскроя переводится вместе с параметрами", () => {
+    // #473: подпись берётся по базе кода, хвост с метрами и разницей остаётся.
+    const cells = messageCells({
+      errors: [],
+      warnings: ["plan_group_balance_mismatch:вход 360 м, выход 630 м (разница 270 м)"],
+    });
+
+    expect(cells.warnings).toContain(
+      "Баланс раскроя не сходится: вход 360 м, выход 630 м (разница 270 м)",
+    );
+  });
+
   it("только ошибка занимает обе колонки пары", () => {
     const cells = messageCells({ errors: ["product_not_found"], warnings: [] });
 

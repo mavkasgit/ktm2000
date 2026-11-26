@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -34,6 +34,7 @@ from app.models.user import User
 from app.models.work_task import RESOLVED_WORK_TASK_STATUSES, WorkTask, WorkTaskStatus
 from app.seeds.canon.dependencies import get_plant_config
 from app.seeds.canon.models import PlantConfig
+from app.services.import_normalization import sku_loose, sku_loose_sql
 from app.services.plan_generation import create_release_batch, release_batch
 from app.services.plan_position_hanger import task_dimensions_for_plan_line
 from app.services.position_route_batch import resolve_position_routes_batch
@@ -2366,10 +2367,18 @@ async def _work_rows(
     if position_skus is not None:
         # У парной задачи product_id = product_a — это внутренняя деталь
         # резолва; «в работе» пары берём по её же позициям, а не по продукту.
+        # Позиция хранит написание на момент импорта — терпимо к дефису (#474).
         work_q = (
             work_q.join(SectionPlanLine, WorkTask.section_plan_line_id == SectionPlanLine.id)
             .join(PlanPosition, SectionPlanLine.plan_position_id == PlanPosition.id)
-            .where(PlanPosition.source_sku.in_(position_skus))
+            .where(
+                or_(
+                    PlanPosition.source_sku.in_(position_skus),
+                    sku_loose_sql(PlanPosition.source_sku).in_(
+                        {sku_loose(sku) for sku in position_skus}
+                    ),
+                )
+            )
         )
     return (await db.execute(work_q)).all()
 
@@ -2494,10 +2503,20 @@ async def get_product_wip_stats(
     if "+" in sku:
         return await _pair_wip_stats(db, sku)
 
-    # 1. Поиск продукта по артикулу
+    # 1. Поиск продукта по артикулу. Точное написание выигрывает; дефис между
+    # буквой и цифрой — оформление (#474), поэтому старый ``ALS-1103`` находит
+    # канонический ``ALS1103``. Две карточки, отличающиеся только дефисом, —
+    # неоднозначность: не угадываем.
     product = (
         await db.execute(select(Product).where(Product.sku == sku))
     ).scalar_one_or_none()
+    if product is None:
+        matches = (
+            await db.execute(
+                select(Product).where(sku_loose_sql(Product.sku) == sku_loose(sku))
+            )
+        ).scalars().all()
+        product = matches[0] if len(matches) == 1 else None
 
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")

@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import Product
-from app.services.import_normalization import normalize_sku
+from app.services.import_normalization import sku_loose
 
 
 @dataclass(frozen=True)
@@ -142,7 +142,7 @@ async def _load_alias_groups(db: AsyncSession) -> AliasGroups:
     # сопоставить ни с одним alias-текстом.
     products: list[tuple[int, str, tuple[str, ...]]] = []
     for product_id, sku, aliases in rows:
-        if not normalize_sku(sku or ""):
+        if not sku_loose(sku or ""):
             continue
         products.append(
             (
@@ -173,11 +173,13 @@ async def _load_alias_groups(db: AsyncSession) -> AliasGroups:
         parent[high] = low
 
     # Нормализованный SKU → минимальный product_id. Коллизия нормализации
-    # (две строки дают один normalize_sku) — один и тот же физический
-    # артикул: узлы сливаются, alias-ссылка попадает в минимальный id.
+    # (две строки дают один sku_loose) — один и тот же физический артикул:
+    # узлы сливаются, alias-ссылка попадает в минимальный id. Ключ — правило
+    # «дефис между буквой и цифрой — оформление» (#474): карточки ``ALS1103`` и
+    # ``ALS-1103`` — один артикул, а не два.
     id_by_normalized_sku: dict[str, int] = {}
     for product_id, sku, _aliases in products:
-        normalized = normalize_sku(sku)
+        normalized = sku_loose(sku)
         existing = id_by_normalized_sku.get(normalized)
         if existing is None:
             id_by_normalized_sku[normalized] = product_id
@@ -189,7 +191,7 @@ async def _load_alias_groups(db: AsyncSession) -> AliasGroups:
     # Alias на несуществующий SKU в индексе отсутствует и просто игнорируется.
     for product_id, _sku, aliases in products:
         for alias in aliases:
-            target_id = id_by_normalized_sku.get(normalize_sku(alias))
+            target_id = id_by_normalized_sku.get(sku_loose(alias))
             if target_id is not None:
                 union(product_id, target_id)
 

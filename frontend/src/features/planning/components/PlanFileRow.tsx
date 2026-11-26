@@ -14,7 +14,7 @@ import {
   type ImportFullItem,
 } from "@/shared/api/imports"
 import { saveBlobAsFile } from "@/shared/lib/downloadFile"
-import { actionLabels, errorLabels, statusLabels, statusVariant, warningLabels } from "../lib/plan-labels"
+import { actionLabels, errorLabels, statusLabels, statusVariant, translateLabel, warningLabels } from "../lib/plan-labels"
 import { isDuplicateRow } from "../lib/duplicateRows"
 import { buildImportRowStats } from "../lib/importRowStats"
 import { fmtQtyPrecise } from "@/shared/lib/quantityFormat"
@@ -416,7 +416,11 @@ function RollbackButton({
   )
 }
 
-function ItemDetail({ item }: { item: ImportFullItem }) {
+/**
+ * Детализация строки импорта: ошибки и предупреждения переводятся по базе кода
+ * (`код:параметры` → русская подпись + параметры), как в предпросмотре.
+ */
+export function ItemDetail({ item }: { item: ImportFullItem }) {
   const after = item.after_data ?? {}
   const fields: [string, unknown][] = [
     ["Артикул", after.source_sku],
@@ -431,12 +435,12 @@ function ItemDetail({ item }: { item: ImportFullItem }) {
       <div className="flex flex-wrap gap-1">
         {item.errors.map((code) => (
           <Badge key={code} variant="outline" className="font-normal">
-            {errorLabels[code] ?? code}
+            {translateLabel(code, errorLabels)}
           </Badge>
         ))}
         {item.warnings.map((code) => (
           <Badge key={code} variant="outline" className="font-normal">
-            {warningLabels[code] ?? code}
+            {translateLabel(code, warningLabels)}
           </Badge>
         ))}
         {item.errors.length === 0 && item.warnings.length === 0 && (

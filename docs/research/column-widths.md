@@ -3,7 +3,7 @@
 - **Дата:** 2026-11-26
 - **Спека:** [`docs/specs/preview-column-widths.md`](../specs/preview-column-widths.md)
 - **Эпик:** [#475](https://github.com/mavkasgit/ktm2000/issues/475)
-- **Решение:** [ADR-0079](../adr/0079-shiriny-kolonok-predprosmotra-iz-dannykh.md)
+- **Решение:** [ADR-0080](../adr/0080-shiriny-kolonok-predprosmotra-iz-dannykh.md)
 - **Стенд:** [`research/column-widths/`](../../research/column-widths/README.md)
 
 ## Задача

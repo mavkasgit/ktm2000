@@ -247,10 +247,42 @@ def parse_aliases(raw) -> list[str]:
     return [item.strip() for item in str(raw or "").split(",") if item.strip()]
 
 
+#: Варианты тире, сводимые к ``-`` при сопоставлении артикула. Совпадает с
+#: backend ``SKU_DASH_VARIANTS``.
+_SKU_DASH_VARIANTS = "\u2010\u2011\u2012\u2013\u2014\u2212\u2043\uFE58\uFE63\uFF0D"
+
+#: Дефис между буквой и цифрой — оформление. Шаблон с lookbehind, как в Python
+#: ``sku_loose``: реестр работает в памяти, а не в SQL.
+_DASH_BETWEEN_LETTER_AND_DIGIT = re.compile(r"(?<=[a-zа-яё])-(?=\d)")
+
+
+def _sku_key(value: str) -> str:
+    """Ключ сопоставления SKU: правило общее с backend ``sku_loose`` (#474).
+
+    Канон хранения после 089 — ``ALS1103``, а ручные решения, аудит и старые
+    выгрузки держат ``ALS-1103``. Ключ сводит написания (регистр, варианты тире,
+    пробелы, дефис между буквой и цифрой), не переписывая литералы: дефис между
+    цифрами (``12-34``) остаётся частью номера.
+    """
+    text = str(value or "").strip().lower()
+    for char in _SKU_DASH_VARIANTS:
+        text = text.replace(char, "-")
+    text = text.replace(" ", "").replace("\u00A0", "")
+    return _DASH_BETWEEN_LETTER_AND_DIGIT.sub("", text)
+
+
 def series_of(sku: str) -> str:
+    """Серия артикула. ALS принимается в обоих написаниях (#474).
+
+    Канон хранения — слитная форма ``ALS1103``; ``ALS-1103`` остаётся в
+    исторических снимках и старых выгрузках, и реестр не должен заводить для
+    неё отдельную серию.
+    """
     if sku.startswith("Кр.труба"):
         return "Кр.труба"
-    for prefix in ("ЮП-", "АТ-", "ALS-", "ПТ", "ПП", "ПС", "МС", "КП-", "Ш-"):
+    if re.match(r"^ALS-?\d", sku):
+        return "ALS"
+    for prefix in ("ЮП-", "АТ-", "ПТ", "ПП", "ПС", "МС", "КП-", "Ш-"):
         if sku.startswith(prefix):
             return prefix.rstrip("-")
     if re.match(r"^П\d", sku):
@@ -288,8 +320,9 @@ def parse_size_from_name(sku: str, name: str) -> str:
 
 
 def profile_type_of(sku: str, name: str, group: str, overrides: dict) -> str:
-    if sku in overrides and overrides[sku].get("profile_type"):
-        return overrides[sku]["profile_type"]
+    key = _sku_key(sku)
+    if key in overrides and overrides[key].get("profile_type"):
+        return overrides[key]["profile_type"]
     low = name.lower()
     if "накладка" in low:
         return "overlay"
@@ -327,8 +360,9 @@ def profile_type_of(sku: str, name: str, group: str, overrides: dict) -> str:
 
 
 def shape_of(profile_type: str, name: str, overrides: dict, sku: str) -> str:
-    if sku in overrides and overrides[sku].get("shape"):
-        return overrides[sku]["shape"]
+    key = _sku_key(sku)
+    if key in overrides and overrides[key].get("shape"):
+        return overrides[key]["shape"]
     low = name.lower()
     if profile_type == "tube":
         return "tube"
@@ -411,20 +445,33 @@ def relation_key(left: str, right: str) -> str:
 def build():
     products, pairs = load_db()
     by_sku = {item["sku"]: item for item in products}
+    # SKU после 089 — слитная ALS-форма, а ручные данные/аудит держат дефисную.
+    # Все SKU-словари и lookup-ы идут через ``_sku_key``; ``by_key`` возвращает
+    # написание, которое реально лежит в БД.
+    by_key = {_sku_key(sku): sku for sku in by_sku}
     meta = json.loads(META_PATH.read_text(encoding="utf-8")) if META_PATH.exists() else {}
-    review_map = json.loads(REVIEW_PATH.read_text(encoding="utf-8")) if REVIEW_PATH.exists() else {}
-    overrides = meta.get("classification", {})
+    review_map = {
+        _sku_key(sku): value
+        for sku, value in (
+            json.loads(REVIEW_PATH.read_text(encoding="utf-8"))
+            if REVIEW_PATH.exists()
+            else {}
+        ).items()
+    }
+    overrides = {_sku_key(sku): value for sku, value in meta.get("classification", {}).items()}
     fam_defs = meta.get("families", [])
     alias_notes = meta.get("alias_notes", {})
     visual_similar = meta.get("visual_similar", [])
     deleted = meta.get("deleted", [])
-    manual_claims = meta.get("claims", {})
-    manual_dims = meta.get("dimensions", {})
-    alias_overrides = meta.get("alias_overrides", {})
+    manual_claims = {_sku_key(sku): value for sku, value in meta.get("claims", {}).items()}
+    manual_dims = {_sku_key(sku): value for sku, value in meta.get("dimensions", {}).items()}
+    alias_overrides = {
+        _sku_key(sku): value for sku, value in meta.get("alias_overrides", {}).items()
+    }
 
     def effective_aliases(sku: str, raw_aliases) -> list[str]:
         raw = parse_aliases(raw_aliases)
-        override = alias_overrides.get(sku, {})
+        override = alias_overrides.get(_sku_key(sku), {})
         removed = set(override.get("remove", []))
         result = [alias for alias in raw if alias not in removed]
         for alias in override.get("add", []):
@@ -436,11 +483,21 @@ def build():
     for path in sorted((AUDIT / "groups").glob("*/results.csv")):
         for row in read_csv(path):
             row["_group"] = path.parent.name
-            group_rows[row["sku"]] = row
-    dims = {row["sku"]: row for row in read_csv(AUDIT / "dimensions" / "dimensions-reconciled.csv")}
-    decisions = {row["sku"]: row for row in read_csv(AUDIT / "decisions-applied.csv")}
-    applied_photo = set(meta.get("photo_applied", []))
-    photo_origin_map = meta.get("photo_origin", {})
+            # Канонический SKU группы для связей; ключ — для lookup-а.
+            row["_sku"] = by_key.get(_sku_key(row["sku"]), row["sku"])
+            group_rows[_sku_key(row["sku"])] = row
+    dims = {
+        _sku_key(row["sku"]): row
+        for row in read_csv(AUDIT / "dimensions" / "dimensions-reconciled.csv")
+    }
+    decisions = {
+        _sku_key(row["sku"]): row
+        for row in read_csv(AUDIT / "decisions-applied.csv")
+    }
+    applied_photo = {_sku_key(sku) for sku in meta.get("photo_applied", [])}
+    photo_origin_map = {
+        _sku_key(sku): value for sku, value in meta.get("photo_origin", {}).items()
+    }
 
     # fingerprint of DB data (not audit)
     canonical = json.dumps(products, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -452,7 +509,11 @@ def build():
     family_rows = []
     family_membership = defaultdict(list)
     for family in fam_defs:
-        present = [sku for sku in family.get("members", []) if sku in by_sku]
+        present = [
+            by_key[_sku_key(sku)]
+            for sku in family.get("members", [])
+            if _sku_key(sku) in by_key
+        ]
         if not present:
             continue
         family_rows.append({**family, "members": present})
@@ -468,9 +529,11 @@ def build():
     graph = defaultdict(set)
     for item in products:
         for alias in effective_aliases(item["sku"], item.get("aliases")):
-            if alias in by_sku:
-                graph[item["sku"]].add(alias)
-                graph[alias].add(item["sku"])
+            alias_key = _sku_key(alias)
+            if alias_key in by_key:
+                canonical_alias = by_key[alias_key]
+                graph[item["sku"]].add(canonical_alias)
+                graph[canonical_alias].add(item["sku"])
     seen = set()
     components = []
     for sku in by_sku:
@@ -493,6 +556,10 @@ def build():
     relation_index = set()
 
     def add_relation(left, right, relation, status, source, note):
+        # Ручные связи/семейства могут прийти в дефисном написании: сводим к
+        # каноническому SKU из БД, иначе связь молча выпала бы.
+        left = by_key.get(_sku_key(left), left)
+        right = by_key.get(_sku_key(right), right)
         if left == right or left not in by_sku or right not in by_sku:
             return
         key = (left, relation, right)
@@ -511,10 +578,12 @@ def build():
             for right in members[i + 1:]:
                 alias_pairs.add((left, right))
     manual_alias_pairs = set()
-    for sku, override in alias_overrides.items():
+    for sku_key, override in alias_overrides.items():
+        sku = by_key.get(sku_key, sku_key)
         for alias in override.get("add", []):
-            if alias in by_sku:
-                manual_alias_pairs.add(tuple(sorted((sku, alias))))
+            alias_key = _sku_key(alias)
+            if alias_key in by_key:
+                manual_alias_pairs.add(tuple(sorted((sku, by_key[alias_key]))))
     for left, right in sorted(alias_pairs):
         note = alias_notes.get(relation_key(left, right), "DB-алиас: тот же товар под другим кодом")
         status = "confirmed"
@@ -537,7 +606,7 @@ def build():
 
     # shared 2024 cells from group results
     rect_to_skus = defaultdict(set)
-    for sku, row in group_rows.items():
+    for row in group_rows.values():
         for chunk in (row.get("cells_2024") or "").split(" | "):
             chunk = chunk.strip()
             if not chunk:
@@ -546,7 +615,7 @@ def build():
                 rect = tuple(int(float(part)) for part in chunk.split(","))
             except ValueError:
                 continue
-            rect_to_skus[rect].add(sku)
+            rect_to_skus[rect].add(row["_sku"])
     for rect, skus in rect_to_skus.items():
         members = sorted(skus)
         if len(members) < 2:
@@ -588,32 +657,42 @@ def build():
 
     # dimension confidence overrides
     dimension_conf = {
-        "371": 100, "ALS-1103": 95, "ЮП-3019": 100, "3418": 90,
-        "84": 100, "ЮП-045": 100, "1010": 80, "3329": 85,
-        "80": 100, "031": 100, "130": 100, "ЮП-2396": 100,
-        "337": 100, "ЮП-2077": 100, "347": 100, "ЮП-2183": 100,
-        "ЮП-2910": 90, "ЮП-3473": 90, "325": 95,
+        _sku_key(sku): value
+        for sku, value in {
+            "371": 100, "ALS-1103": 95, "ЮП-3019": 100, "3418": 90,
+            "84": 100, "ЮП-045": 100, "1010": 80, "3329": 85,
+            "80": 100, "031": 100, "130": 100, "ЮП-2396": 100,
+            "337": 100, "ЮП-2077": 100, "347": 100, "ЮП-2183": 100,
+            "ЮП-2910": 90, "ЮП-3473": 90, "325": 95,
+        }.items()
     }
     identity_conf = {
-        "371": 95, "ALS-1103": 95, "3418": 95,
-        "337": 90, "ЮП-2077": 90,
-        "ЮП-2910": 90, "ЮП-3473": 90, "325": 90,
+        _sku_key(sku): value
+        for sku, value in {
+            "371": 95, "ALS-1103": 95, "3418": 95,
+            "337": 90, "ЮП-2077": 90,
+            "ЮП-2910": 90, "ЮП-3473": 90, "325": 90,
+        }.items()
     }
     photo_conf = {
-        "371": 100, "ALS-1103": 95, "3418": 100, "ЮП-3019": 95,
-        "84": 95, "ЮП-045": 95, "1010": 100, "3329": 95,
-        "80": 95, "031": 95, "130": 95, "ЮП-2396": 95,
-        "337": 100, "ЮП-2077": 95, "347": 100, "ЮП-2183": 80,
-        "ЮП-2910": 95, "ЮП-3473": 95, "325": 100,
+        _sku_key(sku): value
+        for sku, value in {
+            "371": 100, "ALS-1103": 95, "3418": 100, "ЮП-3019": 95,
+            "84": 95, "ЮП-045": 95, "1010": 100, "3329": 95,
+            "80": 95, "031": 95, "130": 95, "ЮП-2396": 95,
+            "337": 100, "ЮП-2077": 95, "347": 100, "ЮП-2183": 80,
+            "ЮП-2910": 95, "ЮП-3473": 95, "325": 100,
+        }.items()
     }
 
     records = []
     for item in products:
         sku = item["sku"]
-        group_row = group_rows.get(sku, {})
-        dim = dims.get(sku, {})
-        decision = decisions.get(sku, {})
-        mdim = manual_dims.get(sku, {})
+        sku_key = _sku_key(sku)
+        group_row = group_rows.get(sku_key, {})
+        dim = dims.get(sku_key, {})
+        decision = decisions.get(sku_key, {})
+        mdim = manual_dims.get(sku_key, {})
         attrs = item.get("attributes") or {}
         perimeter = attrs.get("perimeter_mm")
         if mdim.get("perimeter_mm") is not None:
@@ -651,7 +730,7 @@ def build():
         n_mismatch = n_value is not None and auto_n is not None and n_value != auto_n
 
         base_group = group_row.get("_group") or "08-unknown-missing"
-        review = review_map.get(sku, {})
+        review = review_map.get(sku_key, {})
         review_status = review.get("status") or ""
         review_open = review_status == "open"
         group = "09-discrepancies" if review_open else base_group
@@ -669,14 +748,17 @@ def build():
 
         # special applied sizes (the audit's linear_best may be an old edition)
         applied_size = {
-            "371": "30×12", "ALS-1103": "39,65×12", "ЮП-3019": "24×9,8", "3418": "24×9,8",
-            "84": "28,5×5,7", "ЮП-045": "31,5×7", "1010": "10×10", "3329": "25×3",
-            "80": "80×3,9", "031": "80×3,9", "130": "44×4,1", "ЮП-2396": "40×4,2",
-            "337": "20,18×20", "ЮП-2077": "23,1×23,1", "347": "18,5×8", "ЮП-2183": "20×10",
-            "ЮП-2910": "26×8", "ЮП-3473": "26×9", "325": "26×8",
+            _sku_key(sku): value
+            for sku, value in {
+                "371": "30×12", "ALS-1103": "39,65×12", "ЮП-3019": "24×9,8", "3418": "24×9,8",
+                "84": "28,5×5,7", "ЮП-045": "31,5×7", "1010": "10×10", "3329": "25×3",
+                "80": "80×3,9", "031": "80×3,9", "130": "44×4,1", "ЮП-2396": "40×4,2",
+                "337": "20,18×20", "ЮП-2077": "23,1×23,1", "347": "18,5×8", "ЮП-2183": "20×10",
+                "ЮП-2910": "26×8", "ЮП-3473": "26×9", "325": "26×8",
+            }.items()
         }
-        if sku in applied_size:
-            size_text = applied_size[sku]
+        if sku_key in applied_size:
+            size_text = applied_size[sku_key]
             size_source = "чертёж/решение"
 
         # images
@@ -697,7 +779,7 @@ def build():
         else:
             photo_status = "файл отсутствует"
 
-        origin_entry = photo_origin_map.get(sku, {})
+        origin_entry = photo_origin_map.get(sku_key, {})
         photo_origin = origin_entry.get("origin") or ("none" if photo_status == "нет" else "own")
         photo_from = origin_entry.get("from") or ""
         photo_origin_scope = origin_entry.get("scope") or ""
@@ -711,7 +793,7 @@ def build():
             photo_label = photo_status
 
         verdict = group_row.get("verdict") or ""
-        if sku in applied_photo:
+        if sku_key in applied_photo:
             photo_verdict = "upgrade_applied"
         elif verdict in {"ideal", "no_better"}:
             photo_verdict = "verified_best"
@@ -728,7 +810,7 @@ def build():
 
         # dimension status
         dim_status = "manual" if mdim else (dim.get("status") or "")
-        if sku in decisions:
+        if sku_key in decisions:
             dim_status = "applied"
         if (
             not mdim
@@ -764,8 +846,8 @@ def build():
             p_source = "—"
 
         # confidence
-        if sku in identity_conf:
-            identity_pct = identity_conf[sku]
+        if sku_key in identity_conf:
+            identity_pct = identity_conf[sku_key]
         elif base_group == "08-unknown-missing":
             identity_pct = 80
         else:
@@ -773,8 +855,8 @@ def build():
 
         if mdim:
             dimension_pct = int(mdim.get("confidence", 100))
-        elif sku in dimension_conf:
-            dimension_pct = dimension_conf[sku]
+        elif sku_key in dimension_conf:
+            dimension_pct = dimension_conf[sku_key]
         elif dim_status == "match":
             dimension_pct = 100
         elif dim_status == "db_empty":
@@ -788,8 +870,8 @@ def build():
         else:
             dimension_pct = 60
 
-        if sku in photo_conf:
-            photo_pct = photo_conf[sku]
+        if sku_key in photo_conf:
+            photo_pct = photo_conf[sku_key]
         elif not full_exists:
             photo_pct = 0
         elif photo_verdict == "verified_best":
@@ -838,7 +920,7 @@ def build():
             overall_status = "unknown"
 
         # claims
-        claims = list(manual_claims.get(sku, []))
+        claims = list(manual_claims.get(sku_key, []))
         if archive_p and archive_p not in {"—", "-"}:
             claims.append({
                 "claim": mdim.get("claim") or f"Периметр {fmt_value(archive_p)} по чертежу",
@@ -869,7 +951,7 @@ def build():
                 "verdict": "open",
                 "evidence": "файл отсутствует; источник не найден" if photo_verdict == "no_source" else "файл отсутствует",
             })
-        if group_row.get("verdict") == "decision" and sku not in decisions:
+        if group_row.get("verdict") == "decision" and sku_key not in decisions:
             claims.append({
                 "claim": "Фото/размер требуют решения",
                 "verdict": "open",
@@ -930,7 +1012,7 @@ def build():
             for rel in relations_by_sku.get(sku, [])
             if rel["relation"] in {"alias_of", "visual_similar", "pair_with"}
         )
-        alias_text = alias_overrides.get(sku, {}).get("text")
+        alias_text = alias_overrides.get(sku_key, {}).get("text")
         if alias_text:
             relation_text = "; ".join(part for part in (relation_text, alias_text) if part)
         family_text = family or ""
@@ -1013,7 +1095,7 @@ def build():
                 mdim.get("note")
                 or (
                     decision.get("decision")
-                    if sku in decisions and decision.get("decision")
+                    if sku_key in decisions and decision.get("decision")
                     else (dim.get("conflict_note") or dim.get("status") or "")
                 )
             ),

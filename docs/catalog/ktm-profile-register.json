@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-11-26T08:25:48+00:00",
-  "db_fingerprint": "e381ebad186a1fc9",
-  "review_fingerprint": "45a1bfcd976aaf46",
+  "generated_at": "2026-11-26T15:33:20+00:00",
+  "db_fingerprint": "191f0f27cd9d5498",
+  "review_fingerprint": "309fa2e391ef09aa",
   "db": {
     "container": "ktm2000-postgres-prod",
     "database": "ktm2000_prod",
@@ -968,7 +968,7 @@
   "products": [
     {
       "id": 1,
-      "sku": "ALS-1103",
+      "sku": "ALS1103",
       "code": "",
       "name": "Плинтус алюминиевый 40 мм",
       "type": "component",
@@ -1098,7 +1098,7 @@
       ],
       "relations": [
         {
-          "from_sku": "ALS-1103",
+          "from_sku": "ALS1103",
           "relation": "alias_of",
           "to_sku": "ЮП-3773",
           "status": "confirmed",
@@ -1130,7 +1130,7 @@
     },
     {
       "id": 2,
-      "sku": "ALS-1288",
+      "sku": "ALS1288",
       "code": "",
       "name": "Профиль торцевой",
       "type": "component",
@@ -1273,7 +1273,7 @@
     },
     {
       "id": 3,
-      "sku": "ALS-1289",
+      "sku": "ALS1289",
       "code": "",
       "name": "Профиль соед",
       "type": "component",
@@ -1416,7 +1416,7 @@
     },
     {
       "id": 4,
-      "sku": "ALS-1290",
+      "sku": "ALS1290",
       "code": "",
       "name": "Профиль угловой",
       "type": "component",
@@ -1559,7 +1559,7 @@
     },
     {
       "id": 5,
-      "sku": "ALS-1291",
+      "sku": "ALS1291",
       "code": "",
       "name": "Профиль светодиот",
       "type": "component",
@@ -1702,7 +1702,7 @@
     },
     {
       "id": 6,
-      "sku": "ALS-1320",
+      "sku": "ALS1320",
       "code": "",
       "name": "Плинтус JD 21-60мм",
       "type": "component",
@@ -1839,7 +1839,7 @@
     },
     {
       "id": 7,
-      "sku": "ALS-1359",
+      "sku": "ALS1359",
       "code": "",
       "name": "Деформационный профиль",
       "type": "component",
@@ -1964,7 +1964,7 @@
     },
     {
       "id": 8,
-      "sku": "ALS-1360",
+      "sku": "ALS1360",
       "code": "",
       "name": "Плинтус JD 22-60мм",
       "type": "component",
@@ -2100,7 +2100,7 @@
     },
     {
       "id": 9,
-      "sku": "ALS-798",
+      "sku": "ALS798",
       "code": "",
       "name": "Плинтус 17",
       "type": "component",
@@ -2243,7 +2243,7 @@
     },
     {
       "id": 10,
-      "sku": "ALS-917",
+      "sku": "ALS917",
       "code": "",
       "name": "Алюминиевая декоративная вставка 5,3*6 ZU2.0-5.5 T1.8L 2,7м",
       "type": "component",
@@ -2373,7 +2373,7 @@
       ],
       "relations": [
         {
-          "from_sku": "ALS-917",
+          "from_sku": "ALS917",
           "relation": "alias_of",
           "to_sku": "335",
           "status": "confirmed",
@@ -16397,7 +16397,7 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ALS-1103"
+        "ALS1103"
       ],
       "lengths": [
         {
@@ -16507,20 +16507,20 @@
         "perimeter:—",
         "confidence:46",
         "status:unknown",
-        "alias:ALS-1103",
+        "alias:ALS1103",
         "open"
       ],
       "relations": [
         {
           "from_sku": "ЮП-3773",
           "relation": "alias_of",
-          "to_sku": "ALS-1103",
+          "to_sku": "ALS1103",
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
         }
       ],
-      "relation_text": "alias_of→ALS-1103",
+      "relation_text": "alias_of→ALS1103",
       "confirmed": [],
       "refuted": [],
       "open_claims": [
@@ -17006,7 +17006,7 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ALS-915"
+        "ALS915"
       ],
       "lengths": [
         {
@@ -17118,15 +17118,15 @@
         "perimeter:чертёж",
         "confidence:96",
         "status:confirmed",
-        "alias:ALS-915",
-        "shared_photo_full:ALS-915",
-        "shared_photo_thumb:ALS-915"
+        "alias:ALS915",
+        "shared_photo_full:ALS915",
+        "shared_photo_thumb:ALS915"
       ],
       "relations": [
         {
           "from_sku": "ЮП-048",
           "relation": "alias_of",
-          "to_sku": "ALS-915",
+          "to_sku": "ALS915",
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
@@ -17134,7 +17134,7 @@
         {
           "from_sku": "ЮП-048",
           "relation": "shared_photo_full",
-          "to_sku": "ALS-915",
+          "to_sku": "ALS915",
           "status": "confirmed",
           "source": "storage:sha256",
           "note": "f2591994fa73"
@@ -17142,13 +17142,13 @@
         {
           "from_sku": "ЮП-048",
           "relation": "shared_photo_thumb",
-          "to_sku": "ALS-915",
+          "to_sku": "ALS915",
           "status": "confirmed",
           "source": "storage:sha256",
           "note": "2143749a571d"
         }
       ],
-      "relation_text": "alias_of→ALS-915",
+      "relation_text": "alias_of→ALS915",
       "confirmed": [
         {
           "claim": "Периметр 83.7 по чертежу",
@@ -25824,7 +25824,7 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ALS-917"
+        "ALS917"
       ],
       "lengths": [
         {
@@ -25936,20 +25936,20 @@
         "perimeter:чертёж",
         "confidence:92",
         "status:probable",
-        "alias:ALS-917",
+        "alias:ALS917",
         "open"
       ],
       "relations": [
         {
           "from_sku": "335",
           "relation": "alias_of",
-          "to_sku": "ALS-917",
+          "to_sku": "ALS917",
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
         }
       ],
-      "relation_text": "alias_of→ALS-917",
+      "relation_text": "alias_of→ALS917",
       "confirmed": [
         {
           "claim": "Периметр 31.1 по чертежу",
@@ -32064,7 +32064,7 @@
     },
     {
       "id": 200,
-      "sku": "ALS-915",
+      "sku": "ALS915",
       "code": "",
       "name": "ALS-915",
       "type": "component",
@@ -32196,7 +32196,7 @@
       ],
       "relations": [
         {
-          "from_sku": "ALS-915",
+          "from_sku": "ALS915",
           "relation": "alias_of",
           "to_sku": "ЮП-048",
           "status": "confirmed",
@@ -32204,7 +32204,7 @@
           "note": "DB-алиас: тот же товар под другим кодом"
         },
         {
-          "from_sku": "ALS-915",
+          "from_sku": "ALS915",
           "relation": "shared_photo_full",
           "to_sku": "ЮП-048",
           "status": "confirmed",
@@ -32212,7 +32212,7 @@
           "note": "f2591994fa73"
         },
         {
-          "from_sku": "ALS-915",
+          "from_sku": "ALS915",
           "relation": "shared_photo_thumb",
           "to_sku": "ЮП-048",
           "status": "confirmed",
@@ -35472,13 +35472,13 @@
     {
       "from_sku": "335",
       "relation": "alias_of",
-      "to_sku": "ALS-917",
+      "to_sku": "ALS917",
       "status": "confirmed",
       "source": "db:aliases",
       "note": "DB-алиас: тот же товар под другим кодом"
     },
     {
-      "from_sku": "ALS-917",
+      "from_sku": "ALS917",
       "relation": "alias_of",
       "to_sku": "335",
       "status": "confirmed",
@@ -35662,7 +35662,7 @@
       "note": "DB-алиас: тот же товар под другим кодом"
     },
     {
-      "from_sku": "ALS-1103",
+      "from_sku": "ALS1103",
       "relation": "alias_of",
       "to_sku": "ЮП-3773",
       "status": "confirmed",
@@ -35672,13 +35672,13 @@
     {
       "from_sku": "ЮП-3773",
       "relation": "alias_of",
-      "to_sku": "ALS-1103",
+      "to_sku": "ALS1103",
       "status": "confirmed",
       "source": "db:aliases",
       "note": "DB-алиас: тот же товар под другим кодом"
     },
     {
-      "from_sku": "ALS-915",
+      "from_sku": "ALS915",
       "relation": "alias_of",
       "to_sku": "ЮП-048",
       "status": "confirmed",
@@ -35688,7 +35688,7 @@
     {
       "from_sku": "ЮП-048",
       "relation": "alias_of",
-      "to_sku": "ALS-915",
+      "to_sku": "ALS915",
       "status": "confirmed",
       "source": "db:aliases",
       "note": "DB-алиас: тот же товар под другим кодом"
@@ -36766,7 +36766,7 @@
       "note": "e96ad063c7a5"
     },
     {
-      "from_sku": "ALS-915",
+      "from_sku": "ALS915",
       "relation": "shared_photo_full",
       "to_sku": "ЮП-048",
       "status": "confirmed",
@@ -36776,7 +36776,7 @@
     {
       "from_sku": "ЮП-048",
       "relation": "shared_photo_full",
-      "to_sku": "ALS-915",
+      "to_sku": "ALS915",
       "status": "confirmed",
       "source": "storage:sha256",
       "note": "f2591994fa73"
@@ -37950,7 +37950,7 @@
       "note": "d3d259269b7e"
     },
     {
-      "from_sku": "ALS-915",
+      "from_sku": "ALS915",
       "relation": "shared_photo_thumb",
       "to_sku": "ЮП-048",
       "status": "confirmed",
@@ -37960,7 +37960,7 @@
     {
       "from_sku": "ЮП-048",
       "relation": "shared_photo_thumb",
-      "to_sku": "ALS-915",
+      "to_sku": "ALS915",
       "status": "confirmed",
       "source": "storage:sha256",
       "note": "2143749a571d"
