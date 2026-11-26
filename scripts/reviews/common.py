@@ -41,8 +41,8 @@ KIND_LABELS = {
 KIND_ORDER = ("drawing", "plakat", "photo", "none")
 
 REASON_LABELS = {
-    "not_mes": "не MES (химия, плёнки, крепёж, СИЗ, газы)",
-    "purchased": "покупное (не сырьё MES)",
+    "not_mes": "не наша номенклатура (химия, плёнки, крепёж, СИЗ, газы)",
+    "purchased": "покупное (не наше сырьё)",
     "no_catalog": "нет в каталоге, новые артикулы не заводим",
 }
 REASON_ORDER = ("not_mes", "purchased", "no_catalog")

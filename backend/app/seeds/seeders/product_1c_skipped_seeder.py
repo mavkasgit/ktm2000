@@ -31,8 +31,8 @@ from app.stock.import_1c_osv import _norm_cell
 # строка печатается оператору в предпросмотре импорта, а основание и история
 # решения живут в документации (спека импорта ОСВ, решения приёмки).
 _SEED_NOTE_BY_REASON: dict[str, str] = {
-    SKIP_REASON_NOT_MES: "Не MES: химия, плёнки, крепёж, СИЗ, газы",
-    SKIP_REASON_PURCHASED: "Покупное изделие, не сырьё MES",
+    SKIP_REASON_NOT_MES: "Не наша номенклатура: химия, плёнки, крепёж, СИЗ, газы",
+    SKIP_REASON_PURCHASED: "Покупное изделие, не наше сырьё",
     SKIP_REASON_NO_CATALOG: "Нет в каталоге, новые артикулы не заводим",
 }
 _SEED_DECIDED_BY = "каталог"

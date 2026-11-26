@@ -811,7 +811,7 @@ async def test_resolve_quantities_all_meter_unit_spellings(
 async def test_resolve_quantities_unsupported_unit_is_skipped(
     session: AsyncSession,
 ) -> None:
-    """Единица вне MES (кг, м²) — пропуск «не MES», а не ошибка строки."""
+    """Неподдерживаемая единица (кг, м²) — пропуск «нет совпадения», не ошибка."""
     product = await _make_product(session, "KANT-KG", lengths=[(2700, None, True)])
     await _bind_1c_code(session, product, "20933")
     items = _items([_osv_row("20933", "Кант 2,70м", "кг", 100)])

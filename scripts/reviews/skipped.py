@@ -115,7 +115,7 @@ def render(skipped: list[dict], found: list[dict], source: str) -> tuple[str, di
         "поиск: код или наименование 1С",
         [
             ("all", "все"),
-            ("not_mes", f"не MES · {by_reason.get('not_mes', 0)}"),
+            ("not_mes", f"не наша номенклатура · {by_reason.get('not_mes', 0)}"),
             ("purchased", f"покупное · {by_reason.get('purchased', 0)}"),
             ("no_catalog", f"нет в каталоге · {by_reason.get('no_catalog', 0)}"),
         ],
