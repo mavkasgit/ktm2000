@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ADAPTIVE_HEIGHT_THRESHOLD,
   PREVIEW_COLUMN_SPECS,
   PREVIEW_MIN_ROW_HEIGHT_PX,
   PREVIEW_ROW_PADDING_PX,
@@ -10,6 +11,7 @@ import {
   pillsTruncatedShareAt,
   pillsTruncationLimitAtWidth,
   predictRowHeight,
+  resolveLayoutPolicy,
 } from "./previewColumnWidths";
 import type {
   PreviewFont,
@@ -74,8 +76,18 @@ function compute(overrides: Partial<Parameters<typeof computePreviewColumnWidths
     rows: rows(100),
     measurer: fakeMeasurer(),
     fonts,
+    // Тесты ниже — про сам аллокатор ширин (полный текст). Адаптивная
+    // политика #489 проверяется отдельным блоком, где `auto` включается явно.
+    layoutPolicy: "full-text",
     ...overrides,
   });
+}
+
+/** Тот же расчёт, но с правилом θ (#489) — как в проде. */
+function computeAuto(
+  overrides: Partial<Parameters<typeof computePreviewColumnWidths>[0]> = {},
+) {
+  return compute({ layoutPolicy: "auto", ...overrides });
 }
 
 describe("раскладка предпросмотра", () => {
@@ -232,3 +244,103 @@ describe("предсказанная высота строки", () => {
     expect(result.rowHeights.get(1)).toBe(PREVIEW_MIN_ROW_HEIGHT_PX);
   });
 });
+
+describe("адаптивная политика (#489)", () => {
+  /** Имя в две строки на максимально допустимой ширине наименования. */
+  const LONG_NAME = "Соединитель декоративный армированный для профиля монтажа";
+
+  function rowsWithLongNames(count: number): PreviewRowMeasurement[] {
+    return rows(100, { nameText: "Плинтус 2,7 м", errorsText: "—" }).map((item, index) =>
+      index < count ? { ...item, nameText: LONG_NAME } : item,
+    );
+  }
+
+  it("порог θ = 5% зафиксирован; на границе — полный текст, выше — фикс", () => {
+    expect(ADAPTIVE_HEIGHT_THRESHOLD).toBe(0.05);
+    expect(resolveLayoutPolicy(1050, 1000)).toBe("full-text");
+    expect(resolveLayoutPolicy(1050.01, 1000)).toBe("baseline");
+    // Полный текст дешевле фикса (он и в #483 дал минус) — тоже полный.
+    expect(resolveLayoutPolicy(973.4, 1000)).toBe("full-text");
+    // Сравнивать не с чем — остаётся текущий фикс.
+    expect(resolveLayoutPolicy(0, 0)).toBe("baseline");
+  });
+
+  it("граница проходит через реальный расчёт: 16 тяжёлых строк влезают в 5%, 17 — нет", () => {
+    // Фикс: все строки по одной (29 px) — H_trunc = 2900. Допуск 5% = 3045 px.
+    // Полный текст: длинное имя не влезает и в потолок колонки (2 строки,
+    // 38 px), поэтому каждая тяжёлая строка стоит +9 px.
+    const inside = computeAuto({ rows: rowsWithLongNames(16) });
+    expect(inside.baselineHeightPx).toBeCloseTo(2900, 5);
+    expect(inside.fullTextHeightPx).toBeCloseTo(16 * 38 + 84 * 29, 5);
+    expect(inside.heightDeltaPct).toBeLessThanOrEqual(5);
+    expect(inside.policy).toBe("full-text");
+
+    const outside = computeAuto({ rows: rowsWithLongNames(17) });
+    expect(outside.fullTextHeightPx).toBeCloseTo(17 * 38 + 83 * 29, 5);
+    expect(outside.heightDeltaPct).toBeGreaterThan(5);
+    expect(outside.policy).toBe("baseline");
+  });
+
+  it("дешёвый лист (realistic) → full-text: имена короткие, ошибок нет", () => {
+    const result = computeAuto({
+      rows: rows(100, { nameText: "Плинтус 2,7 м", errorsText: "—" }),
+    });
+    expect(result.policy).toBe("full-text");
+    expect(result.textTruncatedCells).toBe(0);
+    expect(result.heightDeltaPct).toBeLessThanOrEqual(5);
+  });
+
+  it("дорогой лист (long-tail) при 1180 → baseline на текущих долях", () => {
+    const result = computeAuto({
+      containerWidth: 1180,
+      rows: rows(100, { nameText: LONG_NAME, errorsText: "—" }),
+    });
+    expect(result.policy).toBe("baseline");
+    expect(result.heightDeltaPct).toBeGreaterThan(5);
+    // Ширины — доли `remainderPreviewColumns`, а не посчитанные.
+    expect(result.shares.source_name).toBe("15%");
+    expect(result.shares.operations).toBe("21%");
+    expect(result.shares.errors).toBe("11%");
+    expect(result.nameWidthPx).toBeCloseTo(0.15 * 1180, 1);
+    expect(result.pillsFloorPx).toBeCloseTo(0.21 * 1180, 1);
+    // Имя в одну строку не влезает — это ровно текущий фикс, и он честно
+    // сообщает, сколько ячеек обрезано.
+    expect(result.textTruncatedCells).toBe(100);
+    expect(result.wordOverflowCells).toBe(0);
+  });
+
+  it("в baseline высота строки — по «Ошибкам», наименование её не меняет", () => {
+    // «Единица измерения не поддерживается» = 36 символов × 6 = 216 px:
+    // на текущей доле «Ошибок» (11% от 1500 = 165, usable 153) это 2 строки.
+    const errorsRows = rows(100, {
+      nameText: LONG_NAME,
+      errorsText: "Единица измерения не поддерживается",
+    });
+    const result = computeAuto({ rows: errorsRows });
+    const expectedRow = Math.max(
+      PREVIEW_MIN_ROW_HEIGHT_PX,
+      Math.max(nameFont.lineHeightPx, 2 * errorsFont.lineHeightPx) + PREVIEW_ROW_PADDING_PX,
+    );
+    expect(result.policy).toBe("baseline");
+    expect(result.rowHeights.size).toBe(100);
+    for (const height of result.rowHeights.values()) {
+      expect(height).toBeCloseTo(expectedRow, 5);
+    }
+    expect(result.totalHeightPx).toBeCloseTo(100 * expectedRow, 2);
+    // Тот же лист с другими именами: высота baseline не зависит от имени.
+    const shorterNames = computeAuto({
+      rows: errorsRows.map((item) => ({ ...item, nameText: "Плинтус" })),
+    });
+    expect(shorterNames.baselineHeightPx).toBeCloseTo(result.baselineHeightPx, 5);
+  });
+
+  it("обе высоты посчитаны по всем строкам, а не по подвыборке ширины", () => {
+    const result = computeAuto({
+      rows: rows(600, { nameText: LONG_NAME, errorsText: "—" }),
+      fitRows: 120,
+    });
+    expect(result.fitRows).toBe(120);
+    expect(result.baselineHeightPx).toBeCloseTo(600 * PREVIEW_MIN_ROW_HEIGHT_PX, 5);
+  });
+});
+

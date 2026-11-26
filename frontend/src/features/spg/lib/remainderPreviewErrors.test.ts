@@ -36,7 +36,7 @@ describe("текст ячеек предпросмотра", () => {
     expect(previewNameCellText(item())).toBe("—");
   });
 
-  it("наименование переносится только когда посчитана раскладка", () => {
+  it("наименование переносится только в ветке полного текста (#489 baseline → truncate)", () => {
     expect(previewNameCellClass(true)).toBe("whitespace-pre-line");
     expect(previewNameCellClass(false)).toBe("truncate");
   });

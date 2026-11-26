@@ -293,13 +293,14 @@ type PreviewRowProps = {
   sectionOverride: number | null;
   /**
    * Под флагом #483 «Наименование» переносится: ширина колонки посчитана, а
-   * высота строки предсказана моделью. Без флага — прежний `truncate`.
+   * высота строки предсказана моделью. `false` — текущий фикс: `truncate` в
+   * одну строку (в том числе в ветке `baseline` адаптивной политики #489).
    */
   nameWraps: boolean;
   /**
    * Предсказанная моделью высота строки (#483), px. Живёт в `data-*` только
    * для наблюдаемости: E2E #484 сверяет её с фактической высотой `<tr>`.
-   * На раскладку не влияет; без флага — `null`.
+   * Считается в обеих ветках политики #489; без флага — `null`.
    */
   predictedHeight: number | null;
   onToggle: (rowNumber: number) => void;
@@ -319,6 +320,9 @@ type PreviewRowProps = {
  * полное значение — в `title`: виртуализатор не знал переменной высоты.
  * Под флагом ширина колонок посчитана, высота каждой строки предсказана
  * моделью, и «Наименование» печатается полностью (`whitespace-pre-line`).
+ * Адаптивная политика (#489) может вернуть `baseline` и на флаге: тогда
+ * ширины — текущие доли, «Наименование» снова `truncate`, а предсказанная
+ * высота остаётся (она нужна виртуализатору).
  */
 const PreviewRow = memo(function PreviewRow({
   item,
@@ -1196,6 +1200,11 @@ export function ImportRemaindersDialog({
     containerWidth: previewWidth,
   });
   const optimalShares = optimalWidths.result?.shares ?? null;
+  // Адаптивная политика (#489): полный текст применяется только если он не
+  // дороже текущего фикса больше чем на θ. При `baseline` ширины — текущие
+  // доли, наименование снова `truncate`, а предсказанные высоты остаются —
+  // они нужны виртуализатору.
+  const fullTextLayout = optimalWidths.result?.policy === "full-text";
   // Пока ширин нет (новый лист), таблицу держит спиннер: показать её на
   // текущих долях и потом переложить — это и есть «прыжок», который тикет
   // запрещает. На ресайз ширины остаются прошлые, пока не готовы новые.
@@ -1235,9 +1244,9 @@ export function ImportRemaindersDialog({
         expanded={isRowExpanded(item.source_row_number)}
         qualityOverride={qualityStateOverrides[item.source_row_number] ?? null}
         sectionOverride={targetSectionOverrides[item.source_row_number] ?? null}
-        // Наименование переносится только когда применена посчитанная
-        // раскладка: на текущих долях его высота не предсказана.
-        nameWraps={Boolean(optimalShares)}
+        // Наименование переносится только в раскладке полного текста: в
+        // `baseline` (#489) его высота — одна строка, как у текущего фикса.
+        nameWraps={fullTextLayout}
         predictedHeight={
           optimalShares
             ? optimalWidths.result?.rowHeights.get(item.source_row_number) ??
@@ -1255,6 +1264,7 @@ export function ImportRemaindersDialog({
       isRowExpanded,
       qualityStateOverrides,
       targetSectionOverrides,
+      fullTextLayout,
       optimalShares,
       optimalWidths.result?.rowHeights,
       toggleRow,
@@ -1798,14 +1808,18 @@ export function ImportRemaindersDialog({
                 {/* Наблюдаемость режима (#484): E2E проверяет, какая раскладка
                     применена, совпала ли предсказанная высота с фактической и
                     уложилась ли доля обрезанных пилюль в лимит текущего фикса.
-                    Только чтение; на вёрстку не влияет. */}
+                    `data-height-delta-pct` (#489) — цена полного текста против
+                    текущего фикса: по ней E2E видит, что ветка выбрана правилом
+                    θ, а не «на глаз». Только чтение; на вёрстку не влияет. */}
                 <table
                   className="w-full min-w-[1180px] table-fixed text-[11px] text-left border-collapse"
                   style={overflowMinWidth ? { minWidth: `${overflowMinWidth}px` } : undefined}
-                  data-column-layout={optimalShares ? "optimal" : "baseline"}
+                  data-column-layout={fullTextLayout ? "optimal" : "baseline"}
                   data-pills-limit-share={optimalWidths.result?.pillsLimitShare}
                   data-predicted-total-height={optimalWidths.result?.totalHeightPx}
                   data-predicted-row-count={optimalWidths.result?.rowHeights.size}
+                  data-height-delta-pct={optimalWidths.result?.heightDeltaPct}
+                  data-baseline-height={optimalWidths.result?.baselineHeightPx}
                 >
                     <colgroup>
                       <col style={{ width: REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH }} />
