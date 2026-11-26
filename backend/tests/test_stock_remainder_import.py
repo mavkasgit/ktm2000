@@ -345,6 +345,100 @@ async def test_preview_remainders_excel_unknown_sku(
     assert any("not found" in e for e in items[0]["errors"])
 
 
+async def test_preview_dash_variant_sku_binds_canonical_product(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Ячейка ``ALS-1103`` находит канонический ``ALS1103`` (#474).
+
+    Предфильтр кандидатов обязан быть надстройкой того же правила, что и
+    решение Python: иначе дефисный кандидат просто не доезжает до
+    ``match_sku_cell`` и строка остаётся невалидной.
+    """
+    product = await _make_product(session, "ALS1103")
+    location = await _make_location(session, "ALS-LOOSE-LOC")
+    await session.commit()
+
+    excel_buf = _make_excel([("ALS-1103", 5, None)])
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={
+            "file": (
+                "test.xlsx",
+                excel_buf,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"location_id": str(location.id), "sheet_index": "0"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["status"] == "valid"
+    assert item["product_id"] == product.id
+    assert item["matched_sku"] == "ALS1103"
+    assert item["errors"] == []
+
+
+async def test_preview_canonical_cell_binds_dash_catalog_product(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Обратное направление: ``ALS1103`` находит исторический ``ALS-1103``."""
+    product = await _make_product(session, "ALS-1103")
+    location = await _make_location(session, "ALS-DASH-LOC")
+    await session.commit()
+
+    excel_buf = _make_excel([("ALS1103", 7, None)])
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={
+            "file": (
+                "test.xlsx",
+                excel_buf,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"location_id": str(location.id), "sheet_index": "0"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["status"] == "valid"
+    assert item["product_id"] == product.id
+    assert item["matched_sku"] == "ALS-1103"
+    assert item["errors"] == []
+
+
+async def test_partial_text_matches_sku_ignoring_dash(
+    client: AsyncClient,
+    session: AsyncSession,
+) -> None:
+    """Вхождение артикула в текст строки тоже терпимо к дефису."""
+    product = await _make_product(session, "ALS-1103")
+    location = await _make_location(session, "ALS-CONTAINED-LOC")
+    await session.commit()
+
+    excel_buf = _make_excel([("поставка ALS1103, партия A", 4, None)])
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={
+            "file": (
+                "test.xlsx",
+                excel_buf,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+        data={"location_id": str(location.id), "sheet_index": "0"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    item = resp.json()["items"][0]
+    assert item["status"] == "valid"
+    assert item["product_id"] == product.id
+    assert any("частично" in warning.lower() for warning in item["warnings"])
+
+
 async def test_partial_sku_preview_and_import_create_manual_in(
     client: AsyncClient,
     session: AsyncSession,
@@ -1050,7 +1144,7 @@ async def test_download_remainders_template(
     assert ws.cell(1, 4).value == "Операции"
     assert ws.cell(1, 5).value == "Участок"
     assert ws.cell(2, 1).value == "361"
-    assert ws.cell(3, 1).value == "ALS-1289"
+    assert ws.cell(3, 1).value == "ALS1289"
     assert ws.cell(4, 1).value == "ЮП-2630"
 
 
