@@ -1,29 +1,38 @@
 /**
  * Ширины колонок предпросмотра остатков — чистый расчёт (#483, эпик #475).
  *
- * Модель повторяет исследование (`research/column-widths`, спека
- * `docs/specs/preview-column-widths.md`), но только в той части, которая
- * нужна продукту:
+ * Сценарий — **основной из спеки (§4): полный текст в обеих текстовых
+ * колонках**, `clamp = ∞`. «Наименование» и «Ошибки» переносятся, ширина
+ * каждой участвует в высоте строки. Пилюли «Операций» — одна строка, их ширина
+ * бесплатна по высоте и ограничена снизу долей обрезанных рядов.
  *
- * - **Считаются только переносимые колонки.** «Ошибки» — единственная
- *   колонка, чья ширина меняет высоту строки. «Наименование» обрезается
- *   (`truncate`), «Операции» — пилюли в одну строку, остальные — одна строка
- *   по определению. Их ширины участвуют в бюджете, но `pretext` для них не
- *   вызывается: при `λ = 0` высота от них не зависит.
- * - **Пилюли — не `pretext`.** Ширина ряда пилюль считается по содержимому
- *   (`previewPillWidths.ts`), а нижняя граница «Операций» — квантиль по этим
- *   ширинам: не хуже текущей доли обрезанных строк на этой ширине.
- * - **Бюджет в пикселях, наружу — проценты.** Считаем от `contentWidth`
- *   (95% таблицы: 2 × 2.5% служебных колонок), в `<colgroup>` отдаём проценты,
- *   чтобы ресайз до пересчёта не рвал раскладку.
- * - **Честное переполнение.** Если нижние границы не влезают в бюджет,
- *   раскладка не «подкручивает» `minPx`, а отдаёт `overflow: true` и
- *   минимальную ширину таблицы: появится горизонтальный скролл.
+ * Что считается:
  *
- * Высота строки — `max(минимум строки, lines × lineHeight + padding)`, где
- * `lineHeight` приходит из CSS ячейки (у «Ошибок» это `leading-snug` =
- * 15.125 px). Это второй потребитель модели: `VirtualizedTableBody` получает
- * предсказанную высоту вместо среднего по таблице.
+ * - **`pretext` — только текстовые колонки** (2 × строки). Однострочные
+ *   (numeric, mono, control) остаются на текущей доле: их `lines` всегда 1,
+ *   а при `λ = 0` обрезка в высоту не входит.
+ * - **Ширины двух текстовых колонок** — 1D-перебор порогов числа строк.
+ *   Для каждой колонки и строки подвыборки считаются пороги `(lines → 1)`
+ *   бинарным поиском (как `cellThresholds` в research `curves`); кандидаты —
+ *   сами пороги, а бюджет между колонками делится один к одному (`errors`
+ *   получает остаток). `source_name` шире — `errors` уже, и наоборот;
+ *   минимизируется сумма высот строк, а не «ноль обрезки».
+ * - **Высота строки** — максимум по колонкам со своими `line-height` из CSS
+ *   (`errors` 15.125 px, наименование 16.5 px), плюс `py` и бордер, не ниже
+ *   29 px. Это второй потребитель модели: `VirtualizedTableBody` получает
+ *   предсказанную высоту каждой строки.
+ * - **Подвыборка ≤300 строк** (H2: 200/500/1000 дали 0.21/0.26/0.21% потерь):
+ *   ширины подбираются на стратифицированной выборке, высоты — по всем
+ *   строкам. Это же число строк в гейте §15.
+ * - **Пилюли**: нижняя граница — квантиль натуральных ширин рядов по лимиту
+ *   «не хуже текущего фикса» на этой ширине и не уже текущей доли 21%.
+ * - **Честное переполнение**: если минимумы текстовых колонок не влезают в
+ *   бюджет, `minPx` не подкручивается — таблица получает `min-width` и
+ *   горизонтальный скролл.
+ *
+ * Потеря текста в этом сценарии — **ноль**: у обеих текстовых колонок нет
+ * `clamp`/`truncate`, а ширина каждой не меньше `maxWordWidth + padding`
+ * (#479/H4), поэтому ни одно слово не обрезается и не вылезает за строку.
  */
 import { remainderPreviewColumns } from "./remainderPreviewColumns";
 import type {
@@ -47,8 +56,14 @@ export const PREVIEW_CELL_PADDING_PX = 12;
 export const PREVIEW_MIN_ROW_HEIGHT_PX = 29;
 /** `py-0.5` (2+2) + 1 px `border-b`. */
 export const PREVIEW_ROW_PADDING_PX = 5;
+/** Потолок строк при поиске порогов (как `MAX_LINES` в research curves). */
+const MAX_LINES = 64;
+/** Подвыборка для подбора ширин (H2, гейт §15). */
+export const PREVIEW_FIT_ROWS = 300;
+/** Потолок кандидатов после прореживания. */
+const MAX_CANDIDATES = 32;
 
-export type PreviewColumnPolicy = "fixed" | "truncate" | "pills" | "wrap";
+export type PreviewColumnPolicy = "fixed" | "wrap" | "pills";
 
 export interface PreviewColumnSpec {
   id: string;
@@ -56,17 +71,14 @@ export interface PreviewColumnSpec {
   /** Доля таблицы из `remainderPreviewColumns`, проценты. */
   baselineShare: number;
   minPx: number;
-  /**
-   * Потолок доли содержательной ширины. У «Ошибок» — защита от монополиста;
-   * ограничение пилюль (`minPx`/квантиль) важнее и потолком не срезается.
-   */
+  /** Потолок доли содержательной ширины; у текстовых — защита от монополиста. */
   maxShare?: number;
 }
 
 /**
  * Политика и границы по `id` колонки. Доли не дублируются: они берутся из
  * `remainderPreviewColumns`, единственного места, где объявлена раскладка.
- * `minPx` — из спеки §6 (шапка, контрол, пара знаков).
+ * `minPx` — из спеки §6.
  */
 const COLUMN_POLICY: Record<
   string,
@@ -75,7 +87,7 @@ const COLUMN_POLICY: Record<
   row: { policy: "fixed", minPx: 32 },
   source_code: { policy: "fixed", minPx: 60 },
   sku: { policy: "fixed", minPx: 70 },
-  source_name: { policy: "truncate", minPx: 90, maxShare: 0.35 },
+  source_name: { policy: "wrap", minPx: 90, maxShare: 0.35 },
   quantity: { policy: "fixed", minPx: 55 },
   meters: { policy: "fixed", minPx: 55 },
   length: { policy: "fixed", minPx: 45 },
@@ -102,8 +114,7 @@ export const PREVIEW_COLUMN_SPECS: readonly PreviewColumnSpec[] =
 
 /**
  * Текущая доля строк с обрезанными пилюлями на ширине таблицы (#487/#488).
- * Дефолтный лимит интеграции — «не хуже текущего фикса», а не строгий ≤5%:
- * строгий режим несовместим с выигрышем на 1180 (спека §11).
+ * Лимит интеграции — «не хуже текущего фикса», а не строгий ≤5%.
  */
 const PILL_TRUNCATION_LIMIT: ReadonlyArray<readonly [number, number]> = [
   [1180, 0.3279],
@@ -134,13 +145,15 @@ export interface PreviewWidthInput {
   containerWidth: number;
   rows: readonly PreviewRowMeasurement[];
   measurer: PreviewTextMeasurer;
-  fonts: { errors: PreviewFont; pill: PreviewFont };
+  fonts: { name: PreviewFont; errors: PreviewFont; pill: PreviewFont };
   specs?: readonly PreviewColumnSpec[];
   minRowHeightPx?: number;
   rowPaddingPx?: number;
   cellPaddingPx?: number;
   /** Переопределение лимита пилюль (тесты); по умолчанию — по ширине. */
   pillLimitShare?: number;
+  /** Потолок подвыборки (тесты); по умолчанию `PREVIEW_FIT_ROWS`. */
+  fitRows?: number;
 }
 
 export interface PreviewWidthResult {
@@ -150,13 +163,31 @@ export interface PreviewWidthResult {
   /** Проценты для `<colgroup>`: сумма содержательных + 5% служебных = 100. */
   shares: Record<string, string>;
   rowHeights: ReadonlyMap<number, number>;
+  nameWidthPx: number;
   errorsWidthPx: number;
-  errorsLinesTotal: number;
+  /** Всегда 0: у текстовых колонок нет `clamp`/`truncate` — текст не теряется. */
+  textTruncatedCells: number;
+  /** Ячейки, где слово шире колонки (инвариант #479/H4); должно быть 0. */
+  wordOverflowCells: number;
+  /** Строк в подвыборке, на которой выбраны ширины. */
+  fitRows: number;
+  /** Суммарная предсказанная высота листа (для сравнения раскладок). */
+  totalHeightPx: number;
   overflow: boolean;
   minTableWidthPx: number;
   pillsFloorPx: number;
   pillsTruncatedShare: number;
   pillsLimitShare: number;
+}
+
+interface FitRow {
+  row: PreviewRowMeasurement;
+  namePrepared: unknown;
+  errorsPrepared: unknown;
+  nameNatural: number;
+  errorsNatural: number;
+  nameThresholds: number[];
+  errorsThresholds: number[];
 }
 
 function round(value: number, digits = 3): number {
@@ -166,9 +197,8 @@ function round(value: number, digits = 3): number {
 
 /**
  * Минимальная ширина «Операций», при которой обрезано не больше `limitShare`
- * строк. `pillWidth` — натуральная ширина ряда, поэтому ряд помещается, когда
- * `pillWidth <= width - padding`. Квантиль, а не перебор кандидатов: ширина
- * ряда не зависит от колонки, и множество порогов — сами ширины строк.
+ * строк. Ряд помещается, когда `pillWidth <= width - padding`, поэтому
+ * граница — квантиль натуральных ширин, а не перебор сетки.
  */
 export function pillsFloorWidth(
   pillWidths: readonly number[],
@@ -206,27 +236,103 @@ export function predictRowHeight(
 }
 
 /**
+ * Пороги «число строк упало до k»: ширины контента, при которых `lineCount`
+ * становится ≤ k. `lines(u) = 1 + #{t : t > u}` — та же запись, что в
+ * research `curves`, поэтому стоимость ширины считается без вызова измерителя.
+ */
+export function lineThresholds(
+  measurer: PreviewTextMeasurer,
+  prepared: unknown,
+  minUsableWidth: number,
+  maxLines: number = MAX_LINES,
+): number[] {
+  const natural = measurer.naturalWidth(prepared);
+  if (!(natural > minUsableWidth)) return [];
+  const cap = Math.min(maxLines, MAX_LINES);
+  const thresholds: number[] = [];
+  for (let target = 2; target <= cap; target += 1) {
+    if (measurer.lineCount(prepared, minUsableWidth) <= target) break;
+    let low = minUsableWidth;
+    let high = natural;
+    while (high - low > 1) {
+      const middle = (low + high) >> 1;
+      if (measurer.lineCount(prepared, middle) <= target) high = middle;
+      else low = middle;
+    }
+    thresholds.push(high);
+  }
+  return thresholds;
+}
+
+function linesAt(thresholds: readonly number[], usableWidth: number): number {
+  let above = 0;
+  for (let index = thresholds.length - 1; index >= 0; index -= 1) {
+    if (thresholds[index] > usableWidth) above += 1;
+    else break;
+  }
+  return 1 + above;
+}
+
+/**
+ * Детерминированная стратифицированная подвыборка: самые «тяжёлые» строки
+ * (обе колонки) попадают в неё гарантированно, остаток — равномерно. Копия
+ * `selectSampleRows` из research curves, адаптированная к двум колонкам.
+ */
+export function selectFitRows<T>(
+  rows: readonly T[],
+  limit: number,
+  score: (row: T) => number,
+): T[] {
+  if (rows.length <= limit) return [...rows];
+  const order = rows
+    .map((row, index) => ({ row, index, value: score(row) }))
+    .sort((a, b) => b.value - a.value || a.index - b.index);
+  const longCount = Math.min(rows.length, Math.max(4, Math.ceil(limit * 0.2)));
+  const chosen = order.slice(0, longCount);
+  const rest = order.slice(longCount);
+  const need = limit - longCount;
+  for (let index = 0; index < need; index += 1) {
+    const pick = Math.min(
+      rest.length - 1,
+      Math.round((index * (rest.length - 1)) / Math.max(1, need - 1)),
+    );
+    chosen.push(rest[pick]);
+  }
+  return chosen
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => entry.row);
+}
+
+function thinCandidates(candidates: number[], limit: number): number[] {
+  if (candidates.length <= limit) return candidates;
+  const result = [];
+  for (let index = 0; index < limit; index += 1) {
+    result.push(candidates[Math.round((index * (candidates.length - 1)) / (limit - 1))]);
+  }
+  return [...new Set(result)];
+}
+
+/**
  * Считает ширины и предсказанные высоты строк.
  *
- * Порядок распределения бюджета:
- * 1. фиксированные колонки — текущая доля таблицы, но не уже `minPx`;
- * 2. «Наименование» — свой минимум (обрезается в одну строку, высоту не
- *    меняет, поэтому не расширяется: освободившиеся пиксели нужны «Ошибкам»);
- * 3. «Операции» — нижняя граница по пилюлям (лимит «не хуже текущего»);
- * 4. «Ошибки» — весь остаток до `maxShare`; модель линии считает она одна.
+ * Бюджет содержательных колонок `C`: фиксированные берут текущую долю (не уже
+ * `minPx`), «Операции» — нижнюю границу по пилюлям, остаток `R` делят
+ * «Наименование» и «Ошибки». Перебор по ширине наименования: `errors`
+ * получает `R - name` (до `maxShare`), поэтому одна переменная, а не две.
  */
 export function computePreviewColumnWidths(input: PreviewWidthInput): PreviewWidthResult {
   const specs = input.specs ?? PREVIEW_COLUMN_SPECS;
   const cellPadding = input.cellPaddingPx ?? PREVIEW_CELL_PADDING_PX;
   const minRowHeight = input.minRowHeightPx ?? PREVIEW_MIN_ROW_HEIGHT_PX;
   const rowPadding = input.rowPaddingPx ?? PREVIEW_ROW_PADDING_PX;
+  const fitRows = input.fitRows ?? PREVIEW_FIT_ROWS;
   const tableWidth = Math.max(PREVIEW_TABLE_MIN_WIDTH_PX, input.containerWidth);
   const contentWidth = tableWidth * PREVIEW_CONTENT_SHARE;
   const limitShare = input.pillLimitShare ?? pillsTruncationLimitAtWidth(tableWidth);
 
   const widths: Record<string, number> = {};
   let fixedTotal = 0;
-  let sourceSpec: PreviewColumnSpec | null = null;
+  let nameSpec: PreviewColumnSpec | null = null;
   let pillsSpec: PreviewColumnSpec | null = null;
   let errorsSpec: PreviewColumnSpec | null = null;
 
@@ -235,98 +341,180 @@ export function computePreviewColumnWidths(input: PreviewWidthInput): PreviewWid
       const width = Math.max(spec.minPx, (spec.baselineShare / 100) * tableWidth);
       widths[spec.id] = width;
       fixedTotal += width;
-    } else if (spec.policy === "truncate") {
-      sourceSpec = spec;
     } else if (spec.policy === "pills") {
       pillsSpec = spec;
+    } else if (spec.id === "source_name") {
+      nameSpec = spec;
     } else {
       errorsSpec = spec;
     }
   }
+  if (!nameSpec || !errorsSpec) {
+    throw new Error("previewColumnWidths: нужны переносимые source_name и errors");
+  }
 
   const pillWidths = input.rows.map((row) => row.pillWidth);
-  // Пилюли не уже текущей доли: лимит «не хуже текущего фикса» выполняется по
-  // построению, а модель ряда только расширяет колонку, если квантиль требует.
+  // Пилюли не уже текущей доли: лимит «не хуже текущего» — по построению.
   const pillsCurrent = pillsSpec
     ? Math.max(pillsSpec.minPx, (pillsSpec.baselineShare / 100) * tableWidth)
     : 0;
-  const pillsFloor = pillsSpec
+  const pillsWidth = pillsSpec
     ? Math.max(
         pillsFloorWidth(pillWidths, limitShare, pillsSpec.minPx, cellPadding),
         pillsCurrent,
       )
     : 0;
-  const sourceMin = sourceSpec?.minPx ?? 0;
+  if (pillsSpec) widths[pillsSpec.id] = pillsWidth;
 
-  // Ошибки: нижняя граница — самое широкое слово строки (#479/H4): pretext
-  // переносит по сегментам, а CSS с `overflow-wrap: normal` слово не рвёт.
-  let errorsMaxWordWidth = 0;
-  const preparedErrors = new Map<number, unknown>();
-  for (const row of input.rows) {
-    const prepared = input.measurer.prepare(row.errorsText, input.fonts.errors);
-    preparedErrors.set(row.rowKey, prepared);
-    errorsMaxWordWidth = Math.max(
-      errorsMaxWordWidth,
-      input.measurer.maxWordWidth(prepared),
+  const preparedRows = input.rows.map((row) => {
+    const namePrepared = input.measurer.prepare(row.nameText, input.fonts.name);
+    const errorsPrepared = input.measurer.prepare(row.errorsText, input.fonts.errors);
+    return {
+      row,
+      namePrepared,
+      errorsPrepared,
+      nameNatural: input.measurer.naturalWidth(namePrepared),
+      errorsNatural: input.measurer.naturalWidth(errorsPrepared),
+    };
+  });
+
+  let nameMaxWord = 0;
+  let errorsMaxWord = 0;
+  for (const prepared of preparedRows) {
+    nameMaxWord = Math.max(nameMaxWord, input.measurer.maxWordWidth(prepared.namePrepared));
+    errorsMaxWord = Math.max(
+      errorsMaxWord,
+      input.measurer.maxWordWidth(prepared.errorsPrepared),
     );
   }
-  const errorsFloor = Math.max(
-    errorsSpec?.minPx ?? 0,
-    errorsMaxWordWidth + cellPadding,
-  );
-  const errorsMax = errorsSpec?.maxShare
+  // Инвариант H4: колонка не уже самого широкого слова строки (#479).
+  const nameMin = Math.max(nameSpec.minPx, Math.ceil(nameMaxWord) + cellPadding);
+  const errorsMin = Math.max(errorsSpec.minPx, Math.ceil(errorsMaxWord) + cellPadding);
+  const nameMax = nameSpec.maxShare
+    ? nameSpec.maxShare * contentWidth
+    : Number.POSITIVE_INFINITY;
+  const errorsMax = errorsSpec.maxShare
     ? errorsSpec.maxShare * contentWidth
     : Number.POSITIVE_INFINITY;
 
-  const remaining = contentWidth - fixedTotal - sourceMin - pillsFloor;
-  let errorsWidth = Math.min(Math.max(remaining, errorsFloor), errorsMax);
-  let sourceWidth = sourceMin;
-  let pillsWidth = pillsFloor;
+  const budget = contentWidth - fixedTotal - pillsWidth;
+  const overflow = budget + 0.5 < nameMin + errorsMin;
+  const nameCeiling = Math.max(
+    nameMin,
+    Math.min(nameMax, budget - errorsMin),
+  );
+  const errorsFloor = errorsMin;
 
-  // Остаток после потолка «Ошибок» отдаём «Наименованию» (больше текста без
-  // роста высоты), затем «Операциям» (пилюли перестают обрезаться).
-  let leftover = contentWidth - fixedTotal - sourceWidth - pillsWidth - errorsWidth;
-  if (leftover > 0.5 && sourceSpec) {
-    const sourceMax = sourceSpec.maxShare
-      ? sourceSpec.maxShare * contentWidth
-      : Number.POSITIVE_INFINITY;
-    const extra = Math.min(leftover, Math.max(0, sourceMax - sourceWidth));
-    sourceWidth += extra;
-    leftover -= extra;
+  const sampled = selectFitRows(
+    preparedRows,
+    Math.min(fitRows, preparedRows.length),
+    (prepared) =>
+      Math.log1p(prepared.nameNatural) + Math.log1p(prepared.errorsNatural),
+  );
+
+  const fitRowsData: FitRow[] = sampled.map((prepared) => ({
+    row: prepared.row,
+    namePrepared: prepared.namePrepared,
+    errorsPrepared: prepared.errorsPrepared,
+    nameNatural: prepared.nameNatural,
+    errorsNatural: prepared.errorsNatural,
+    nameThresholds: lineThresholds(
+      input.measurer,
+      prepared.namePrepared,
+      Math.max(1, nameMin - cellPadding),
+    ),
+    errorsThresholds: lineThresholds(
+      input.measurer,
+      prepared.errorsPrepared,
+      Math.max(1, errorsFloor - cellPadding),
+    ),
+  }));
+
+  const candidates = new Set<number>([nameMin, nameCeiling]);
+  if (budget - errorsMax > nameMin) candidates.add(budget - errorsMax);
+  for (const fit of fitRowsData) {
+    for (const threshold of fit.nameThresholds) {
+      const width = Math.ceil(threshold) + cellPadding;
+      if (width >= nameMin && width <= nameCeiling) candidates.add(width);
+    }
   }
-  if (leftover > 0.5 && pillsSpec) {
-    pillsWidth += leftover;
-    leftover = 0;
+  const orderedCandidates = thinCandidates(
+    [...candidates].filter((width) => width >= nameMin).sort((a, b) => a - b),
+    MAX_CANDIDATES,
+  );
+
+  const rowHeightFor = (nameWidth: number, errorsWidth: number, fit: FitRow): number => {
+    const nameLines = linesAt(fit.nameThresholds, nameWidth - cellPadding);
+    const errorsLines = fit.row.errorsWraps
+      ? linesAt(fit.errorsThresholds, errorsWidth - cellPadding)
+      : 1;
+    return Math.max(
+      minRowHeight,
+      Math.max(
+        nameLines * input.fonts.name.lineHeightPx,
+        errorsLines * input.fonts.errors.lineHeightPx,
+      ) + rowPadding,
+    );
+  };
+
+  let best = { nameWidth: nameMin, errorsWidth: errorsMin, cost: Number.POSITIVE_INFINITY };
+  for (const nameWidth of orderedCandidates) {
+    const errorsWidth = Math.min(Math.max(budget - nameWidth, errorsFloor), errorsMax);
+    if (errorsWidth < errorsFloor - 1e-6) continue;
+    let cost = 0;
+    for (const fit of fitRowsData) cost += rowHeightFor(nameWidth, errorsWidth, fit);
+    // При равной высоте предпочитаем более широкое наименование: видно больше
+    // текста, а «Ошибки» уже не растут за счёт этого (бюджет один).
+    if (cost < best.cost - 1e-6 || (Math.abs(cost - best.cost) <= 1e-6 && nameWidth > best.nameWidth)) {
+      best = { nameWidth, errorsWidth, cost };
+    }
   }
 
-  if (sourceSpec) widths[sourceSpec.id] = sourceWidth;
-  if (pillsSpec) widths[pillsSpec.id] = pillsWidth;
-  if (errorsSpec) widths[errorsSpec.id] = errorsWidth;
-  errorsWidth = widths[errorsSpec?.id ?? ""] ?? errorsWidth;
+  widths[nameSpec.id] = best.nameWidth;
+  widths[errorsSpec.id] = best.errorsWidth;
+
+  const errorsUsable = best.errorsWidth - cellPadding;
+  const nameUsable = best.nameWidth - cellPadding;
+  const rowHeights = new Map<number, number>();
+  let totalHeight = 0;
+  let wordOverflowCells = 0;
+  for (const prepared of preparedRows) {
+    const { row } = prepared;
+    // Текст не теряется: у обеих колонок нет `clamp`/`truncate`. Слово шире
+    // колонки — отдельный инвариант (#479/H4): его держит `maxWordWidth` в
+    // нижней границе, здесь он только проверяется.
+    if (input.measurer.maxWordWidth(prepared.namePrepared) > nameUsable + 0.5) {
+      wordOverflowCells += 1;
+    }
+    if (
+      row.errorsWraps &&
+      input.measurer.maxWordWidth(prepared.errorsPrepared) > errorsUsable + 0.5
+    ) {
+      wordOverflowCells += 1;
+    }
+    const nameLines = row.nameText
+      ? Math.max(1, input.measurer.lineCount(prepared.namePrepared, nameUsable))
+      : 1;
+    const errorsLines =
+      row.errorsWraps && row.errorsText
+        ? Math.max(1, input.measurer.lineCount(prepared.errorsPrepared, errorsUsable))
+        : 1;
+    const height = Math.max(
+      minRowHeight,
+      Math.max(
+        nameLines * input.fonts.name.lineHeightPx,
+        errorsLines * input.fonts.errors.lineHeightPx,
+      ) + rowPadding,
+    );
+    rowHeights.set(row.rowKey, height);
+    totalHeight += height;
+  }
 
   const totalContent = Object.values(widths).reduce((sum, width) => sum + width, 0);
-  const overflow = totalContent > contentWidth + 0.5;
-  // При переполнении таблица обязана прокручиваться, а не сжимать колонки:
-  // `minPx` — жёсткий инвариант, ширина таблицы — нет.
-  const minTableWidthPx = overflow
-    ? Math.ceil(totalContent / PREVIEW_CONTENT_SHARE)
-    : PREVIEW_TABLE_MIN_WIDTH_PX;
-
-  const errorsUsable = Math.max(0, errorsWidth - cellPadding);
-  const rowHeights = new Map<number, number>();
-  let errorsLinesTotal = 0;
-  for (const row of input.rows) {
-    const prepared = preparedErrors.get(row.rowKey);
-    const lines =
-      row.errorsWraps && prepared
-        ? Math.max(1, input.measurer.lineCount(prepared, errorsUsable))
-        : 1;
-    errorsLinesTotal += lines;
-    rowHeights.set(
-      row.rowKey,
-      predictRowHeight(lines, input.fonts.errors.lineHeightPx, minRowHeight, rowPadding),
-    );
-  }
+  const minTableWidthPx =
+    totalContent > contentWidth + 0.5
+      ? Math.ceil(totalContent / PREVIEW_CONTENT_SHARE)
+      : PREVIEW_TABLE_MIN_WIDTH_PX;
 
   const shares: Record<string, string> = {};
   for (const [id, width] of Object.entries(widths)) {
@@ -341,8 +529,12 @@ export function computePreviewColumnWidths(input: PreviewWidthInput): PreviewWid
     ),
     shares,
     rowHeights,
-    errorsWidthPx: round(errorsWidth, 2),
-    errorsLinesTotal,
+    nameWidthPx: round(best.nameWidth, 2),
+    errorsWidthPx: round(best.errorsWidth, 2),
+    textTruncatedCells: 0,
+    wordOverflowCells,
+    fitRows: fitRowsData.length,
+    totalHeightPx: round(totalHeight, 2),
     overflow,
     minTableWidthPx,
     pillsFloorPx: round(pillsWidth, 2),

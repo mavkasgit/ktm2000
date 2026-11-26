@@ -26,11 +26,11 @@ function makeItems(count: number): RemainderImportItem[] {
   })) as unknown as RemainderImportItem[];
 }
 
-const errorsFont = {
+const nameFont = {
   family: "Test Sans",
   sizePx: 11,
-  weight: 500,
-  lineHeightPx: 15.125,
+  weight: 400,
+  lineHeightPx: 16.5,
 };
 
 interface EngineHandle {
@@ -41,7 +41,11 @@ interface EngineHandle {
 function makeEngine(): EngineHandle {
   let calls = 0;
   const engine: PreviewWidthEngine = {
-    fonts: { errors: errorsFont, pill: { ...errorsFont, sizePx: 10 } },
+    fonts: {
+      name: nameFont,
+      errors: { ...nameFont, weight: 500, lineHeightPx: 15.125 },
+      pill: { ...nameFont, sizePx: 10 },
+    },
     measurer: {
       prepare: (text) => ({ text }),
       naturalWidth: (prepared) => (prepared as { text: string }).text.length * 6,
@@ -52,6 +56,7 @@ function makeEngine(): EngineHandle {
       calls += 1;
       return items.map((item) => ({
         rowKey: item.source_row_number,
+        nameText: "Наименование",
         errorsText: "Ошибка",
         errorsWraps: true,
         pillWidth: 120,

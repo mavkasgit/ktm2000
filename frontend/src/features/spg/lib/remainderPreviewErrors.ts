@@ -31,6 +31,14 @@ export function previewErrorsText(item: RemainderImportItem): string {
 }
 
 /**
+ * Текст, который печатает ячейка «Наименование»: имя каталога, иначе имя из
+ * 1С, иначе прочерк. Модель считает перенос по этому же тексту.
+ */
+export function previewNameCellText(item: RemainderImportItem): string {
+  return item.product_name ?? item.source_name ?? "—";
+}
+
+/**
  * Текст, который печатает ячейка «Ошибки»: у пропуска — подпись причины,
  * у остальных — только `errors` (предупреждения видны в подсказке/фильтре, но
  * в клетку не попадают). Модель считает строки по этому тексту.

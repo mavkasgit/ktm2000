@@ -289,6 +289,11 @@ type PreviewRowProps = {
   expanded: boolean;
   qualityOverride: QualityState | null;
   sectionOverride: number | null;
+  /**
+   * Под флагом #483 «Наименование» переносится: ширина колонки посчитана, а
+   * высота строки предсказана моделью. Без флага — прежний `truncate`.
+   */
+  nameWraps: boolean;
   onToggle: (rowNumber: number) => void;
   onQualityChange: (rowNumber: number, state: QualityState) => void;
   onSectionChange: (rowNumber: number, sectionId: number | null) => void;
@@ -302,11 +307,10 @@ type PreviewRowProps = {
  * ошибочной строки импорт их не применит, поэтому там статичный бейдж, а не
  * ``Select`` (ADR-0030 — строка остаётся компактной).
  *
- * Высота строки — один ритм `TABLE_ROW_COMPACT` (ADR-0030), поэтому текстовые
- * ячейки печатаются одной строкой (`truncate`), а полное значение — в `title`:
- * перенос длинного наименования/артикула растягивал строку и ломал оценку
- * виртуализатора. Перенос оставлен только «Ошибкам»: это причина, по которой
- * строка попала в предпросмотр, и её видно без наведения.
+ * Без флага #483 текстовые ячейки печатаются одной строкой (`truncate`), а
+ * полное значение — в `title`: виртуализатор не знал переменной высоты.
+ * Под флагом ширина колонок посчитана, высота каждой строки предсказана
+ * моделью, и «Наименование» печатается полностью (`whitespace-pre-line`).
  */
 const PreviewRow = memo(function PreviewRow({
   item,
@@ -315,6 +319,7 @@ const PreviewRow = memo(function PreviewRow({
   expanded,
   qualityOverride,
   sectionOverride,
+  nameWraps,
   onToggle,
   onQualityChange,
   onSectionChange,
@@ -365,7 +370,7 @@ const PreviewRow = memo(function PreviewRow({
           ) : null}
         </td>
         <td
-          className={`px-1.5 py-0.5 truncate ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
+          className={`px-1.5 py-0.5 ${nameWraps ? "whitespace-pre-line" : "truncate"} ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
           title={item.source_name ?? item.product_name ?? undefined}
         >
           {item.product_name ?? item.source_name ?? "—"}
@@ -1214,6 +1219,9 @@ export function ImportRemaindersDialog({
         expanded={isRowExpanded(item.source_row_number)}
         qualityOverride={qualityStateOverrides[item.source_row_number] ?? null}
         sectionOverride={targetSectionOverrides[item.source_row_number] ?? null}
+        // Наименование переносится только когда применена посчитанная
+        // раскладка: на текущих долях его высота не предсказана.
+        nameWraps={Boolean(optimalShares)}
         onToggle={toggleRow}
         onQualityChange={handleRowQualityChange}
         onSectionChange={handleRowSectionChange}
@@ -1225,6 +1233,7 @@ export function ImportRemaindersDialog({
       isRowExpanded,
       qualityStateOverrides,
       targetSectionOverrides,
+      optimalShares,
       toggleRow,
       handleRowQualityChange,
       handleRowSectionChange,

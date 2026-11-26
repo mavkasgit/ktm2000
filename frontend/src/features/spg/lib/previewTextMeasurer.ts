@@ -1,17 +1,15 @@
 /**
  * Измеритель текста для модели ширин предпросмотра (#483).
  *
- * `pretext` грузится динамически: пока флаг выключен, чанк не скачивается, и
- * начальный пакет не растёт. Меряется **только то, что переносится**:
- * «Ошибки» — единственная колонка, чья высота зависит от ширины. Подписи
- * пилюль — однострочные, им хватает `measureText` (тот же canvas, что внутри
- * `pretext`, но без сегментации).
+ * `pretext` грузится динамически: пока флаг выключен, чанк не скачивается.
+ * Меряются **обе переносимые колонки** — «Наименование» и «Ошибки»: в
+ * основном сценарии спеки (§4) обе печатают полный текст, и высота строки —
+ * максимум по ним. Пилюли — однострочные, им хватает `measureText`.
  *
- * Шрифт не захардкожен: семейство, размер, вес и `line-height` берутся из
- * фактического CSS ячейки. В продукте не грузится webfont, поэтому модель
- * обязана мерить системный стек, который резолвит DOM, — иначе H4 на CSS
- * продукта (см. `research/column-widths/browser/product.spec.mjs`) не
- * переносится на машину оператора.
+ * Шрифты не захардкожены: семейство, размер, вес и `line-height` читаются из
+ * фактического CSS каждой ячейки (`getComputedStyle`). В продукте не грузится
+ * webfont, поэтому модель обязана мерить системный стек, который резолвит DOM;
+ * H4 на этом CSS — `browser/product.spec.mjs` (#483).
  */
 import type { ImportOperationStep, RemainderImportItem } from "@/shared/api/stock";
 
@@ -19,9 +17,12 @@ import { pillRowNaturalWidth } from "./previewPillWidths";
 import {
   previewErrorsCellText,
   previewErrorsWraps,
+  previewNameCellText,
 } from "./remainderPreviewErrors";
 
-/** Классы ячейки «Ошибок»: то же, что `font-medium leading-snug` + `text-[11px]`. */
+/** «Наименование» под флагом: перенос вместо `truncate`, вес 400. */
+export const PREVIEW_NAME_TEXT_CLASS = "text-[11px] whitespace-pre-line";
+/** «Ошибки»: `font-medium leading-snug`. */
 export const PREVIEW_ERRORS_TEXT_CLASS = "text-[11px] font-medium leading-snug";
 
 export interface PreviewFont {
@@ -41,15 +42,16 @@ export interface PreviewTextMeasurer {
 export interface PreviewRowMeasurement {
   /** `source_row_number`: ключ строки в предпросмотре. */
   rowKey: number;
+  nameText: string;
   errorsText: string;
-  /** `false` — ячейка печатается одной строкой (пропуск). */
+  /** `false` — ячейка ошибок печатается одной строкой (пропуск). */
   errorsWraps: boolean;
   /** Натуральная ширина ряда пилюль без padding ячейки, px. */
   pillWidth: number;
 }
 
 export interface PreviewWidthEngine {
-  fonts: { errors: PreviewFont; pill: PreviewFont };
+  fonts: { name: PreviewFont; errors: PreviewFont; pill: PreviewFont };
   measurer: PreviewTextMeasurer;
   buildRows(
     items: readonly RemainderImportItem[],
@@ -62,13 +64,12 @@ function cssFontValue(font: PreviewFont): string {
 }
 
 /**
- * Читает метрики ячейки «Ошибок» из фактического CSS. Проба — один скрытый
- * `<span>` с теми же классами; так модель следует за CSS, а не за копией
- * констант в коде.
+ * Читает метрики ячейки из фактического CSS. Проба — один скрытый `<span>` с
+ * теми же классами; так модель следует за CSS, а не за копией констант.
  */
-function readErrorsFont(): PreviewFont {
+function readCellFont(className: string): PreviewFont {
   const probe = document.createElement("span");
-  probe.className = PREVIEW_ERRORS_TEXT_CLASS;
+  probe.className = className;
   probe.textContent = "АБВГД 0123456789";
   probe.style.position = "absolute";
   probe.style.visibility = "hidden";
@@ -90,10 +91,9 @@ function readErrorsFont(): PreviewFont {
 /**
  * Создаёт движок замера: `pretext` + canvas для подписей пилюль.
  *
- * Кэш подготовленного текста живёт на время жизни движка (движок один на
- * приложение): при пересчёте на ресайз повторная сегментация 500 строк — это
- * та самая работа, которую тикет убирает. Кэш ограничен, чтобы смена листов
- * не копила подготовленные тексты бесконечно.
+ * Кэш подготовленного текста живёт на время жизни движка (один на приложение):
+ * при пересчёте на ресайз повторная сегментация строк — та самая работа,
+ * которую тикет убирает. Кэш ограничен, чтобы смена листов не копила тексты.
  */
 export async function createPreviewWidthEngine(): Promise<PreviewWidthEngine> {
   if (typeof document === "undefined") {
@@ -101,7 +101,8 @@ export async function createPreviewWidthEngine(): Promise<PreviewWidthEngine> {
   }
   await document.fonts.ready;
 
-  const errorsFont = readErrorsFont();
+  const nameFont = readCellFont(PREVIEW_NAME_TEXT_CLASS);
+  const errorsFont = readCellFont(PREVIEW_ERRORS_TEXT_CLASS);
   const pillFont: PreviewFont = {
     ...errorsFont,
     sizePx: 10,
@@ -176,11 +177,12 @@ export async function createPreviewWidthEngine(): Promise<PreviewWidthEngine> {
   };
 
   return {
-    fonts: { errors: errorsFont, pill: pillFont },
+    fonts: { name: nameFont, errors: errorsFont, pill: pillFont },
     measurer,
     buildRows(items, referenceOps) {
       return items.map((item) => ({
         rowKey: item.source_row_number,
+        nameText: previewNameCellText(item),
         errorsText: previewErrorsCellText(item),
         errorsWraps: previewErrorsWraps(item),
         pillWidth: pillRowNaturalWidth(
