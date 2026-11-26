@@ -248,9 +248,17 @@ def parse_aliases(raw) -> list[str]:
 
 
 def series_of(sku: str) -> str:
+    """Серия артикула. ALS принимается в обоих написаниях (#474).
+
+    Канон хранения — слитная форма ``ALS1103``; ``ALS-1103`` остаётся в
+    исторических снимках и старых выгрузках, и реестр не должен заводить для
+    неё отдельную серию.
+    """
     if sku.startswith("Кр.труба"):
         return "Кр.труба"
-    for prefix in ("ЮП-", "АТ-", "ALS-", "ПТ", "ПП", "ПС", "МС", "КП-", "Ш-"):
+    if re.match(r"^ALS-?\d", sku):
+        return "ALS"
+    for prefix in ("ЮП-", "АТ-", "ПТ", "ПП", "ПС", "МС", "КП-", "Ш-"):
         if sku.startswith(prefix):
             return prefix.rstrip("-")
     if re.match(r"^П\d", sku):

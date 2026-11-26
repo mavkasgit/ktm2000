@@ -48,6 +48,8 @@ from app.services.import_normalization import (
     numeric_sku_key,
     sku_compound_parts,
     sku_entry,
+    sku_loose,
+    sku_loose_sql,
 )
 from app.services.material_operations import (
     canonicalize_completed_operations,
@@ -682,6 +684,13 @@ def _sku_candidate_conditions(sku: str) -> list[object]:
     conditions = [
         _product_sku_contained_in_input(sku),
         normalized_sku == normalize_sku(sku),
+        # #474: дефис между буквой и цифрой — оформление. Без этого условия
+        # дефисный кандидат не доезжает до match_sku_cell, и правило loose
+        # в Python не срабатывает уже никогда.
+        sku_loose_sql(Product.sku) == sku_loose(sku),
+        # Тот же терпимый матч для вхождения артикула в текст строки
+        # («поставка ALS1103, партия A»).
+        func.strpos(sku_loose(sku), sku_loose_sql(Product.sku)) > 0,
     ]
     for part in sku_compound_parts(sku):
         conditions.append(normalized_sku == part)
@@ -729,15 +738,15 @@ def _attach_contained_product(item: RemainderItem, products: list[Product]) -> N
     Порядок выбора (позиция в строке, длина SKU, id) и текст предупреждения —
     прежние: на них опираются листы вида «PART-001, поставка».
     """
-    input_sku = item.sku.casefold()
-    candidates = [p for p in products if p.sku and p.sku.casefold() in input_sku]
+    input_sku = sku_loose(item.sku)
+    candidates = [p for p in products if p.sku and sku_loose(p.sku) in input_sku]
     if not candidates:
         item.status = "invalid"
         item.errors.append(f"SKU '{item.sku}' not found in database")
         return
     product = min(
         candidates,
-        key=lambda p: (input_sku.find(p.sku.casefold()), -len(p.sku), p.id),
+        key=lambda p: (input_sku.find(sku_loose(p.sku)), -len(p.sku), p.id),
     )
     _attach_remainder_product(
         item,
@@ -1559,7 +1568,7 @@ async def generate_remainders_template_for_location(
 
     ws.append(["Артикул", "Кол-во", "Статус качества", "Операции", "Участок", "Коммент.", "Длина"])
     ws.append(["361", 200, "Годный", "", raw_name, "", ""])
-    ws.append(["ALS-1289", 150, "Годный", "Дробеструй", prep_name, "Партия A", "2,7"])
+    ws.append(["ALS1289", 150, "Годный", "Дробеструй", prep_name, "Партия A", "2,7"])
     ws.append(["ЮП-2630", 80, "Окончательный брак", row3_ops, wip_name, "Срочный заказ", "1,8"])
 
     ws.column_dimensions["A"].width = 25

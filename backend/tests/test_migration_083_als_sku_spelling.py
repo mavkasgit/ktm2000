@@ -40,6 +40,11 @@ from tests.helpers.mig_db import (
 #: Версия непосредственно перед проверяемой миграцией.
 REVISION_BEFORE = "082_plan_position_validation_warnings_backfill"
 
+#: Сама проверяемая ревизия. Пришпилено к ней, а не к ``head``: следующая
+#: миграция 089 разворачивает направление 083, и ``upgrade head`` проверил бы
+#: уже другое состояние.
+REVISION = "083_normalize_als_sku_spelling"
+
 #: Слитая форма в ``sku`` + слитные элементы в ``aliases`` + коллизии.
 SEED_ROWS: list[tuple[str, list[str]]] = [
     ("ALS1290", []),
@@ -149,7 +154,7 @@ async def test_migration_083_normalizes_sku_and_aliases(tmp_path: Path) -> None:
             await conn.close()
             conn = None
 
-        run_alembic(("upgrade", "head"), env)
+        run_alembic(("upgrade", REVISION), env)
 
         conn = await asyncpg.connect(_asyncpg_dsn(target_url))
         try:

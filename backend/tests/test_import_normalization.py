@@ -10,6 +10,7 @@ from __future__ import annotations
 from app.services.import_normalization import (
     SkuEntry,
     match_sku_cell,
+    match_sku_loose,
     match_sku_numeric,
     match_sku_parts,
     numeric_sku_key,
@@ -209,3 +210,18 @@ def test_dashless_spelling_matches_sku():
     # Другой номер и дефис внутри цифр по-прежнему не склеиваются.
     assert not match_sku_cell("ALS1292", _catalog("ALS-1291")).found
     assert not match_sku_cell("12-34", _catalog("1234")).found
+
+
+def test_loose_step_is_a_public_matcher():
+    """Шаг «без дефиса» нужен импорту плана отдельно: у него свой первый шаг.
+
+    Общая функция, а не копия правила: импорт плана вставляет её между
+    числовым кодом и частями, и результат обязан совпадать с каскадом.
+    """
+    assert match_sku_loose("ALS1291", _catalog("ALS-1291")).index == 0
+    assert match_sku_loose("als-1291", _catalog("ALS1291")).index == 0
+    assert not match_sku_loose("ALS1292", _catalog("ALS-1291")).found
+    # Две записи отличаются только дефисом (и пробелом): не угадываем.
+    ambiguous = match_sku_loose("юп1", _catalog("ЮП 1", "ЮП-1"))
+    assert ambiguous.rejected is True
+    assert ambiguous.ambiguous_indexes == (0, 1)

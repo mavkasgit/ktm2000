@@ -13,6 +13,7 @@ vi.mock("@/shared/api/stock", async (importOriginal) => ({
 }));
 
 import { getProductStockBalances } from "@/shared/api/stock";
+import { listProducts } from "@/shared/api/products";
 import { RemainderAllocationDialog } from "./RemainderAllocationDialog";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,6 +51,7 @@ let root: Root;
 async function mount(
   onConfirm: (a: boolean, alloc: unknown) => void,
   balances: StockBalanceEntry[] = BALANCES,
+  positionSku = "SKU-1",
 ) {
   vi.mocked(getProductStockBalances).mockResolvedValue(balances);
   await act(async () => {
@@ -58,7 +60,7 @@ async function mount(
         open
         onOpenChange={() => {}}
         positionId={1}
-        positionSku="SKU-1"
+        positionSku={positionSku}
         positionName="Тест"
         releaseQuantity={40}
         onConfirm={onConfirm as never}
@@ -168,5 +170,16 @@ describe("RemainderAllocationDialog: выбор источника (#314)", () =
       button!.click();
     });
     expect(onConfirm).toHaveBeenCalledWith(false, null);
+  });
+
+  it("находит канонический артикул, когда позиция хранит дефисный снимок (#474)", async () => {
+    vi.mocked(listProducts).mockResolvedValue([
+      { id: 7, sku: "ALS1103", name: "Плинтус" },
+      { id: 8, sku: "ЮП-3773", name: "Другой" },
+    ] as never);
+    const onConfirm = vi.fn();
+    await mount(onConfirm, BALANCES, "ALS-1103");
+
+    expect(getProductStockBalances).toHaveBeenCalledWith(7, undefined, "operations");
   });
 });
