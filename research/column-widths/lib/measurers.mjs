@@ -136,6 +136,16 @@ export async function createPretextMeasurer() {
       const stats = pretext.measureLineStats(prepared.prepared, usable);
       return Math.max(1, stats.lineCount);
     },
+    /**
+     * Сбрасывает кэш измерений pretext (сегмент → ширина по Canvas).
+     *
+     * Без сброса повторный `prepare()` того же текста не платит `measureText`,
+     * и рантайм-замер (#483) показывает не стоимость продукта, а стоимость
+     * попадания в кэш: медиана повторов в ~5 раз ниже первого прогона.
+     */
+    clearCache() {
+      pretext.clearCache();
+    },
   };
 }
 

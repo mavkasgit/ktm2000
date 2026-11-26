@@ -35,7 +35,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: here,
-  testMatch: /validation\.spec\.mjs$/,
+  testMatch: /(validation|runtime)\.spec\.mjs$/,
   fullyParallel: false,
   retries: 0,
   workers: 1,
