@@ -386,6 +386,11 @@ export function buildCostModel(prepared, contentWidth, options = {}) {
   const lambda = options.lambda ?? 20;
   const rowLimit = options.rowLimit ?? DEFAULT_SAMPLE_ROWS;
   const maxCandidates = options.maxCandidates ?? DEFAULT_MAX_CANDIDATES;
+  // Ограничение на долю строк с обрезанными пилюлями (#488). Доля — от 0 до 1
+  // по строкам подвыборки; `null` — без ограничения (воспроизводимость H1).
+  const pillsMaxTruncatedShare = Number.isFinite(options.pillsMaxTruncatedShare)
+    ? Math.min(1, Math.max(0, options.pillsMaxTruncatedShare))
+    : null;
   const { columns, rows, measurer } = prepared;
 
   const { fixedWidths, fixedTotal, flexBudget } = fixedAssignments(columns, contentWidth);
@@ -442,6 +447,58 @@ export function buildCostModel(prepared, contentWidth, options = {}) {
       }),
     );
   });
+
+  // Нижние границы по кривым (#488). Ограничение пилюль — не штраф в `cost`
+  // (пилюли не влияют на высоту), а запрет опускать колонку ниже ширины, на
+  // которой доля строк с обрезанными пилюлями уже уложилась в лимит. Ищем
+  // первый кандидат с `truncCount ≤ лимит × строк`: `truncCounts` убывает с
+  // шириной, поэтому это и есть минимальная допустимая ширина.
+  const floors = curves.map(() => 0);
+  const floorWidths = {};
+  const pillConstraints = [];
+  if (pillsMaxTruncatedShare !== null && rowCount > 0) {
+    curves.forEach((curve, c) => {
+      if (curve.column.kind !== "pills") return;
+      const target = pillsMaxTruncatedShare * rowCount;
+      let index = curve.candidates.length - 1;
+      for (let i = 0; i < curve.candidates.length; i += 1) {
+        if (curve.truncCounts[i] <= target + 1e-9) {
+          index = i;
+          break;
+        }
+      }
+      floors[c] = index;
+      const width = curve.candidates[index];
+      floorWidths[curve.column.id] = width;
+      const sampleShare = curve.truncCounts[index] / rowCount;
+      pillConstraints.push({
+        column: curve.column.id,
+        limitPct: pillsMaxTruncatedShare * 100,
+        requiredWidth: width,
+        requiredFlexSharePct: (width / flexBudget) * 100,
+        sampleTruncatedSharePct: sampleShare * 100,
+        minWidth: curve.min,
+        maxWidth: curve.max,
+        // `false` — даже самый широкий кандидат не уложился в лимит: это
+        // фиксируется честно, а не выдаётся за выполненное ограничение.
+        satisfied: sampleShare <= pillsMaxTruncatedShare + 1e-9,
+      });
+    });
+  }
+  const lowerBounds = {};
+  for (const column of flexColumns) {
+    lowerBounds[column.id] = Math.max(
+      minimums[column.id],
+      floorWidths[column.id] ?? 0,
+    );
+  }
+  const lowerBoundTotal = flexColumns.reduce(
+    (sum, column) => sum + lowerBounds[column.id],
+    0,
+  );
+  // Сумма минимумов с ограничением больше бюджета — не «победа» поиска, а
+  // честное переполнение: раскладка останется на нижних границах.
+  const budgetFeasible = lowerBoundTotal <= flexBudget + 1e-6;
 
   const scratch = new Int32Array(rowCount);
 
@@ -527,6 +584,16 @@ export function buildCostModel(prepared, contentWidth, options = {}) {
     fixedTruncTotal,
     flexBudget,
     minimums,
+    // Нижние границы модели: `minimums` плюс ширина, требуемая ограничением
+    // пилюль. Поиск не опускается ниже `floors`, робастный вектор — ниже
+    // `lowerBounds`.
+    floors,
+    floorWidths,
+    lowerBounds,
+    lowerBoundTotal,
+    budgetFeasible,
+    pillsMaxTruncatedShare,
+    pillConstraints,
     maxWordWidths,
     sampleIndexes,
     rowCount,

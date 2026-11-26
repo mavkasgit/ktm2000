@@ -110,17 +110,20 @@ export function buildRobustScenario({
   maxCandidates = 12,
   profile = null,
   tableWidth = null,
+  pillsMaxTruncatedShare = null,
 }) {
   const columns = prepared.columns;
   const model = buildCostModel(prepared, contentWidth, {
     lambda,
     rowLimit,
     maxCandidates,
+    pillsMaxTruncatedShare,
   });
   const reference = searchOptimizer(prepared, contentWidth, {
     lambda,
     rowLimit,
     maxCandidates,
+    pillsMaxTruncatedShare,
   });
   const referenceCost = costAtWidths(model, reference.widths);
 
@@ -128,7 +131,9 @@ export function buildRobustScenario({
   const lower = {};
   const upper = {};
   for (const column of flex) {
-    lower[column.id] = model.minimums[column.id] / model.flexBudget;
+    lower[column.id] =
+      (model.lowerBounds?.[column.id] ?? model.minimums[column.id]) /
+      model.flexBudget;
     const cap = maxWidth(column, contentWidth);
     upper[column.id] = Number.isFinite(cap) ? cap / model.flexBudget : 1;
   }
@@ -145,6 +150,8 @@ export function buildRobustScenario({
     flex: flex.map((column) => column.id),
     lower,
     upper,
+    pillsMaxTruncatedShare,
+    pillsConstrained: Boolean(model.pillConstraints?.length),
   };
 }
 
@@ -175,8 +182,16 @@ function aggregateBounds(scenarios, ids) {
     lower[id] = Math.max(...scenarios.map((scenario) => scenario.lower[id]));
     upper[id] = Math.min(...scenarios.map((scenario) => scenario.upper[id]));
   }
-  const feasible = ids.every((id) => lower[id] <= upper[id] + SHARE_EPSILON);
-  return { lower, upper, feasible };
+  const lowerTotal = ids.reduce((sum, id) => sum + lower[id], 0);
+  const upperTotal = ids.reduce((sum, id) => sum + upper[id], 0);
+  // Пересечение по каждой колонке ещё не значит, что вектор существует:
+  // сумма нижних границ может превышать 1 (ограничение пилюль #488), а сумма
+  // верхних — не дотягивать до 1. Оба условия проверяются явно.
+  const feasible =
+    ids.every((id) => lower[id] <= upper[id] + SHARE_EPSILON) &&
+    lowerTotal <= 1 + SHARE_EPSILON &&
+    upperTotal >= 1 - SHARE_EPSILON;
+  return { lower, upper, lowerTotal, upperTotal, feasible };
 }
 
 function collectCandidates(scenarios, ids, bounds) {
@@ -368,6 +383,51 @@ function seedVectors(scenarios, ids) {
 }
 
 /**
+ * Проекция стартового вектора в пересечение `[lower, upper]` всех сценариев.
+ * Нужна ограничению пилюль (#488): стартовые доли #482 держат «Операции» на
+ * 16.58%, то есть ниже требуемой границы, и спуск из недопустимой точки
+ * минимизировал бы высоту, игнорируя ограничение.
+ */
+function projectShares(ids, shares, bounds) {
+  const out = {};
+  let total = 0;
+  for (const id of ids) {
+    out[id] = Math.min(
+      bounds.upper[id],
+      Math.max(bounds.lower[id], shares[id]),
+    );
+    total += out[id];
+  }
+  if (total > 1 + SHARE_EPSILON) {
+    const slack = ids.map((id) => Math.max(0, out[id] - bounds.lower[id]));
+    const slackTotal = slack.reduce((sum, value) => sum + value, 0);
+    if (slackTotal > SHARE_EPSILON) {
+      for (let index = 0; index < ids.length; index += 1) {
+        out[ids[index]] -= ((total - 1) * slack[index]) / slackTotal;
+      }
+    }
+  } else if (total < 1 - SHARE_EPSILON) {
+    const slack = ids.map((id) =>
+      Math.max(0, bounds.upper[id] - out[id]),
+    );
+    const slackTotal = slack.reduce((sum, value) => sum + value, 0);
+    if (slackTotal > SHARE_EPSILON) {
+      for (let index = 0; index < ids.length; index += 1) {
+        out[ids[index]] += ((1 - total) * slack[index]) / slackTotal;
+      }
+    }
+  }
+  return out;
+}
+
+/** Старт «всё на нижней границе», остаток — по запасу до `upper`. */
+function boundsSeed(ids, bounds) {
+  const shares = {};
+  for (const id of ids) shares[id] = bounds.lower[id];
+  return projectShares(ids, shares, bounds);
+}
+
+/**
  * Робастный вектор: один набор долей гибких колонок (сумма 1).
  *
  * @param {Array} scenarios результаты `buildRobustScenario` по сетке
@@ -385,6 +445,15 @@ export function robustShares(scenarios, options = {}) {
   // Стартовые доли и равномерное распределение обязаны остаться кандидатами,
   // иначе спуск не сможет к ним вернуться.
   const seeds = seedVectors(scenarios, ids);
+  const constrained =
+    options.pillsConstrained ??
+    scenarios.some((scenario) => scenario.pillsConstrained);
+  if (constrained) {
+    seeds.push({ label: "bounds", shares: boundsSeed(ids, bounds) });
+    for (const seed of seeds) {
+      seed.shares = projectShares(ids, seed.shares, bounds);
+    }
+  }
   for (const seed of seeds) {
     for (const id of ids) {
       const value = Math.round(seed.shares[id] / SHARE_EPSILON) * SHARE_EPSILON;

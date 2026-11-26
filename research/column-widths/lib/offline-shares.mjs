@@ -46,6 +46,56 @@ export const OFFLINE_FLEX_SHARES = Object.freeze({
 export const OFFLINE_FLEX_SHARES_SOURCE =
   "#482: 38.00 / 16.58 / 45.42% гибкого бюджета";
 
+/**
+ * Текущая продуктовая обрезка пилюль по ширине таблицы (#487, seed 1, среднее
+ * по профилям): предел режима «не хуже текущего фикса» в #488. Числа — не
+ * эталон «правильной» обрезки, а факт продукта: 1180 — треть строк, 1920 —
+ * практически ноль.
+ */
+export const PILLS_CURRENT_LIMIT_PCT = Object.freeze({
+  1180: 32.79,
+  1400: 19.49,
+  1500: 12.97,
+  1600: 5.64,
+  1920: 0.01,
+});
+
+/** Строгий режим #488: ≤5% строк с обрезанными пилюлями на любой W. */
+export const PILLS_STRICT_LIMIT_PCT = 5;
+
+export const PILLS_LIMIT_MODES = Object.freeze(["current", "strict"]);
+
+const PILLS_CURRENT_POINTS = Object.entries(PILLS_CURRENT_LIMIT_PCT)
+  .map(([width, limit]) => [Number(width), limit])
+  .sort((a, b) => a[0] - b[0]);
+
+/**
+ * Предел обрезки пилюль по ширине: для режима «не хуже текущего» — линейная
+ * интерполяция продуктовой кривой (в таблицу попадают и промежуточные W), вне
+ * диапазона — ближайшая точка. Строгий режим не зависит от W.
+ */
+export function pillsLimitPctForWidth(tableWidth, mode = "current") {
+  if (mode === "strict") return PILLS_STRICT_LIMIT_PCT;
+  const points = PILLS_CURRENT_POINTS;
+  if (tableWidth <= points[0][0]) return points[0][1];
+  const last = points[points.length - 1];
+  if (tableWidth >= last[0]) return last[1];
+  for (let index = 1; index < points.length; index += 1) {
+    const [rightWidth, rightLimit] = points[index];
+    if (tableWidth <= rightWidth) {
+      const [leftWidth, leftLimit] = points[index - 1];
+      const ratio = (tableWidth - leftWidth) / (rightWidth - leftWidth);
+      return leftLimit + (rightLimit - leftLimit) * ratio;
+    }
+  }
+  return last[1];
+}
+
+/** То же в долях строк — формат `pillsMaxTruncatedShare` модели. */
+export function pillsLimitForWidth(tableWidth, mode = "current") {
+  return pillsLimitPctForWidth(tableWidth, mode) / 100;
+}
+
 /** Границы бакетов — по ширине таблицы (включая 68 px служебных колонок). */
 export const OFFLINE_BUCKET_PLANS = Object.freeze({
   two: {

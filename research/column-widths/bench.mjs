@@ -18,7 +18,8 @@
  * - `stability` — матрица сожалений: доли с W0 = 1500 на других ширинах (#482);
  * - `robust`  — один робастный вектор долей на профили × ширины (#482);
  * - `offline` — запасной исход #487: зашитый вектор долей и таблица по 2–3
- *               бакетам против текущих продуктовых долей (порог §15).
+ *               бакетам против текущих продуктовых долей (порог §15);
+ *               дополнительно — ограничение обрезки пилюль (#488).
  *
  * Гипотезы H1–H4 выводятся с числом и вердиктом. H4 берётся из браузерного
  * прогона #479 (`results/browser.json`, создаёт `npm run browser:test`), а не из
@@ -69,8 +70,12 @@ import {
   OFFLINE_BUCKET_PLANS,
   OFFLINE_FLEX_SHARES,
   OFFLINE_FLEX_SHARES_SOURCE,
+  PILLS_CURRENT_LIMIT_PCT,
+  PILLS_LIMIT_MODES,
+  PILLS_STRICT_LIMIT_PCT,
   bucketIndexForTableWidth,
   fitBucketShares,
+  pillsLimitPctForWidth,
   policyMetrics,
   widthViolations as offlineWidthViolations,
 } from "./lib/offline-shares.mjs";
@@ -1060,6 +1065,11 @@ export function runRobustVector(measurer, spec = {}) {
  * которых не было в подборе (`heldOut`). Вектор из #482 не пересчитывается:
  * в отчёт и в #483 идёт одна и та же константа, а `fit` показывает, насколько
  * текущая сетка данных от неё ушла.
+ *
+ * #488: дополнительно считаются два режима ограничения пилюль — `current`
+ * (лимит = текущая продуктовая кривая по W) и `strict` (≤5% на любой W).
+ * Для каждого — `search` с нижней границей на каждой W, один вектор и старые
+ * 2/3 бакета, плюс таблица «цена п.п. обрезки в высоте».
  */
 export function runOfflineShares(measurer, spec = {}) {
   const profiles = spec.profiles ?? PROFILES;
@@ -1246,6 +1256,349 @@ export function runOfflineShares(measurer, spec = {}) {
 
   const policyNames = ["current", "offline", "refit", "search"];
   for (const name of planNames) policyNames.push(bucketName(name));
+
+  /**
+   * Ограничение обрезки пилюль (#488). Пилюли не влияют на высоту, поэтому
+   * неограниченный поиск отдаёт «Операциям» минимум и покупает высоту ценой
+   * `title`-обрезки. Здесь — два режима нижней границы:
+   * - `current` — не хуже текущего продукта на той же W (кривая #487);
+   * - `strict`  — ≤5% строк с обрезанными пилюлями на любой W.
+   * Для каждого режима считаются два ответа: `search` с ограничением на каждом
+   * листе (оптимум при данной W) и один оффлайн-вектор долей (то, что можно
+   * зашить). Текст не теряется: `clamp = ∞`, `λ = 0`.
+   */
+  const pillPolicySummary = (subset) => {
+    const summarizeOne = (name) => {
+      const items = subset.map((item) => item[name]);
+      const heightPct = items.map((item) => item.heightPct);
+      const pills = items.map((item) => item.pillTruncatedSharePct);
+      const limits = subset.map((item) => item.limitPct);
+      const currentPills = subset.map(
+        (item) => item.current.pillTruncatedSharePct,
+      );
+      const gaps = items.map((item) => item.gapToUnconstrainedPct);
+      return {
+        cases: items.length,
+        heightPctMean: round(average(heightPct), 2),
+        heightPctWorst: round(maxOf(heightPct), 2),
+        heightGainPctMean: round(-average(heightPct), 2),
+        pillTruncatedSharePctMean: round(average(pills), 2),
+        pillTruncatedSharePctWorst: round(maxOf(pills), 2),
+        currentPillTruncatedSharePctMean: round(average(currentPills), 2),
+        limitPctMean: round(average(limits), 2),
+        pillExcessPpMean: round(average(items.map((item) => item.pillExcessPp)), 2),
+        pillExcessPpWorst: round(maxOf(items.map((item) => item.pillExcessPp)), 2),
+        textTruncatedSharePctWorst: round(
+          maxOf(items.map((item) => item.textTruncatedSharePct)),
+          2,
+        ),
+        gapToUnconstrainedPctMean: round(average(gaps), 2),
+        gapToUnconstrainedPctWorst: round(maxOf(gaps), 2),
+        violations: items.reduce((sum, item) => sum + item.violations, 0),
+      };
+    };
+    return {
+      search: summarizeOne("search"),
+      vector: summarizeOne("vector"),
+      bucket2: summarizeOne("bucket2"),
+      bucket3: summarizeOne("bucket3"),
+    };
+  };
+
+  const pillModes = {};
+  for (const mode of PILLS_LIMIT_MODES) {
+    const limitPctFor = (tableWidth) => pillsLimitPctForWidth(tableWidth, mode);
+    const constrainedScenarios = [];
+    for (const profile of profiles) {
+      const prepared = fitPreparedFor(profile);
+      for (const tableWidth of scenarioWidths) {
+        constrainedScenarios.push(
+          buildRobustScenario({
+            prepared,
+            contentWidth: contentWidth(tableWidth),
+            lambda: MAIN_LAMBDA,
+            rowLimit: Math.min(fitRows, FIT_ROWS),
+            maxCandidates: fitMaxCandidates,
+            profile,
+            tableWidth,
+            pillsMaxTruncatedShare: limitPctFor(tableWidth) / 100,
+          }),
+        );
+      }
+    }
+    const constrainedFitScenarios = constrainedScenarios.filter((scenario) =>
+      fitWidths.includes(scenario.tableWidth),
+    );
+    const vectorFit = robustShares(constrainedFitScenarios, {
+      objectives: spec.objectives,
+      maxSweeps: fitMaxSweeps,
+      pillsConstrained: true,
+    });
+    const vectorShares = vectorFit.shares;
+    // Один вектор на все W может быть несовместим с лимитом (сумма нижних
+    // границ > 1). Бакеты — тот же запас, что в #487, но уже с ограничением:
+    // если они снимают несовместимость и стоят дешевле, #483 зашивает бакеты.
+    const constrainedPlans = {};
+    for (const [name, plan] of Object.entries(OFFLINE_BUCKET_PLANS)) {
+      constrainedPlans[name] = fitBucketShares(constrainedScenarios, plan, {
+        objectives: spec.objectives,
+        maxSweeps: fitMaxSweeps,
+        pillsConstrained: true,
+      });
+    }
+
+    const rows = [];
+    for (const item of cases) {
+      const content = item.contentWidth;
+      const prepared = preparedFor(item.seed, item.profile);
+      const maxWordWidths = maxWordsCache.get(`${item.seed}:${item.profile}`);
+      const limitPct = limitPctFor(item.tableWidth);
+      const current = item.policies.current;
+      const unconstrained = item.policies.search;
+      const flexWidth = (widths) =>
+        columns
+          .filter((column) => column.flex)
+          .reduce((sum, column) => sum + widths[column.id], 0);
+      const measure = (name, metrics, widths) => ({
+        name,
+        height: metrics.height,
+        heightPct: round((metrics.height / (current.height || 1) - 1) * 100, 2),
+        pillTruncatedSharePct: round(metrics.pillTruncatedSharePct, 2),
+        pillExcessPp: round(metrics.pillTruncatedSharePct - limitPct, 2),
+        textTruncatedSharePct: round(metrics.textTruncatedSharePct, 2),
+        gapToUnconstrainedPct: round(
+          (metrics.height / (unconstrained.height || 1) - 1) * 100,
+          2,
+        ),
+        operationsWidth: round(widths.operations, 1),
+        operationsFlexSharePct: round(
+          (widths.operations / (flexWidth(widths) || 1)) * 100,
+          2,
+        ),
+        violations: offlineWidthViolations(
+          columns,
+          widths,
+          content,
+          maxWordWidths,
+        ).length,
+      });
+
+      const searchRun = OPTIMIZERS.search(prepared, content, {
+        lambda: MAIN_LAMBDA,
+        pillsMaxTruncatedShare: limitPct / 100,
+      });
+      const vectorWidths = widthsFromFlexShares(
+        columns,
+        content,
+        vectorShares,
+      );
+      const bucketMeasurements = {};
+      for (const [name, fitted] of Object.entries(constrainedPlans)) {
+        const planKey = bucketName(name);
+        const bucketIndex = bucketIndexForTableWidth(item.tableWidth, {
+          buckets: fitted,
+        });
+        const bucketWidths = widthsFromFlexShares(
+          columns,
+          content,
+          fitted[bucketIndex].shares,
+        );
+        bucketMeasurements[planKey] = {
+          bucketIndex,
+          widths: bucketWidths,
+        };
+      }
+      rows.push({
+        seed: item.seed,
+        profile: item.profile,
+        tableWidth: item.tableWidth,
+        contentWidth: content,
+        limitPct: round(limitPct, 2),
+        current: {
+          height: current.height,
+          pillTruncatedSharePct: round(current.pillTruncatedSharePct, 2),
+        },
+        search: measure(
+          "search",
+          policyMetrics(prepared, searchRun.widths),
+          searchRun.widths,
+        ),
+        vector: measure(
+          "vector",
+          policyMetrics(prepared, vectorWidths),
+          vectorWidths,
+        ),
+        ...Object.fromEntries(
+          Object.entries(bucketMeasurements).map(
+            ([name, { widths: bucketWidths }]) => [
+              name,
+              measure(name, policyMetrics(prepared, bucketWidths), bucketWidths),
+            ],
+          ),
+        ),
+      });
+    }
+
+    const seedCases = rows.filter((item) => item.seed === fitSeed);
+    const overall = pillPolicySummary(seedCases);
+    // Пилюли «не хуже текущего» проверяются по средней доле: лимит задан
+    // средней продуктовой кривой, а не по каждой строке. Худшее превышение
+    // остаётся в отчёте как диагностика (полный лист против подвыборки).
+    const withinLimit = (summary) =>
+      summary.pillExcessPpMean <= 0.05 &&
+      summary.violations === 0 &&
+      summary.textTruncatedSharePctWorst === 0;
+    const modeDecision = (summary) => ({
+      heightPass: summary.heightGainPctMean >= 4,
+      pillPass: withinLimit(summary),
+      simultaneous:
+        summary.heightGainPctMean >= 4 && withinLimit(summary),
+    });
+    pillModes[mode] = {
+      mode,
+      label:
+        mode === "strict"
+          ? `строгий ≤${PILLS_STRICT_LIMIT_PCT}%`
+          : "не хуже текущего",
+      limitPctByWidth: Object.fromEntries(
+        widths.map((tableWidth) => [
+          tableWidth,
+          round(limitPctFor(tableWidth), 2),
+        ]),
+      ),
+      vector: {
+        shares: vectorShares,
+        contentShares: contentSharesFromFlexShares(
+          columns,
+          contentWidth(1500),
+          vectorShares,
+        ),
+        meanGapPct: round(vectorFit.meanGapPct, 2),
+        worstGapPct: round(vectorFit.worstGapPct, 2),
+        seed: vectorFit.seed,
+        objective: vectorFit.objective,
+        bounds: vectorFit.bounds,
+        feasible: vectorFit.bounds.feasible,
+      },
+      rows,
+      overall,
+      byWidth: widths.map((tableWidth) => {
+        const subset = seedCases.filter(
+          (item) => item.tableWidth === tableWidth,
+        );
+        return {
+          tableWidth,
+          limitPctMean: round(
+            average(subset.map((item) => item.limitPct)),
+            2,
+          ),
+          ...pillPolicySummary(subset),
+        };
+      }),
+      byProfile: profiles.map((profile) => {
+        const subset = seedCases.filter((item) => item.profile === profile);
+        return {
+          profile,
+          limitPctMean: round(
+            average(subset.map((item) => item.limitPct)),
+            2,
+          ),
+          ...pillPolicySummary(subset),
+        };
+      }),
+      bySeed: seeds.map((seed) => ({
+        seed,
+        ...pillPolicySummary(rows.filter((item) => item.seed === seed)),
+      })),
+      decision: {
+        search: modeDecision(overall.search),
+        vector: modeDecision(overall.vector),
+        bucket2: modeDecision(overall.bucket2),
+        bucket3: modeDecision(overall.bucket3),
+      },
+      plans: Object.fromEntries(
+        Object.entries(constrainedPlans).map(([name, buckets]) => [
+          name,
+          {
+            label: OFFLINE_BUCKET_PLANS[name].label,
+            buckets,
+            feasible: buckets.every((bucket) => bucket.bounds.feasible),
+          },
+        ]),
+      ),
+    };
+  }
+
+  // Цена одного п.п. обрезки пилюль: ограничение `search` на каждой W, seed 1.
+  // Это верхняя оценка (оптимум на листе), а не зашитый вектор — она показывает,
+  // сколько высоты вообще стоит пропускать больше пилюль в `title`.
+  const tradeoffLimits = spec.pillsTradeoffLimitsPct ?? [
+    1, 3, 5, 10, 15, 20, 25, 30, 40, 50, 100,
+  ];
+  const tradeoffCases = cases.filter((item) => item.seed === fitSeed);
+  const pillsTradeoff = tradeoffLimits.map((limitPct) => {
+    const items = [];
+    for (const item of tradeoffCases) {
+      const prepared = preparedFor(item.seed, item.profile);
+      const run = OPTIMIZERS.search(prepared, item.contentWidth, {
+        lambda: MAIN_LAMBDA,
+        pillsMaxTruncatedShare: limitPct / 100,
+      });
+      const metrics = policyMetrics(prepared, run.widths);
+      items.push({
+        heightPct:
+          (metrics.height / (item.policies.current.height || 1) - 1) * 100,
+        gapPct:
+          (metrics.height / (item.policies.search.height || 1) - 1) * 100,
+        pillPct: metrics.pillTruncatedSharePct,
+      });
+    }
+    return {
+      limitPct,
+      heightGainPctMean: round(-average(items.map((item) => item.heightPct)), 2),
+      pillTruncatedSharePctMean: round(
+        average(items.map((item) => item.pillPct)),
+        2,
+      ),
+      pillTruncatedSharePctWorst: round(
+        maxOf(items.map((item) => item.pillPct)),
+        2,
+      ),
+      gapToUnconstrainedPctMean: round(
+        average(items.map((item) => item.gapPct)),
+        2,
+      ),
+    };
+  });
+  const marginal = [];
+  for (let index = 1; index < pillsTradeoff.length; index += 1) {
+    const before = pillsTradeoff[index - 1];
+    const after = pillsTradeoff[index];
+    const deltaHeight = after.heightGainPctMean - before.heightGainPctMean;
+    const deltaPill =
+      after.pillTruncatedSharePctMean - before.pillTruncatedSharePctMean;
+    marginal.push({
+      fromLimitPct: before.limitPct,
+      toLimitPct: after.limitPct,
+      deltaHeightPct: round(deltaHeight, 2),
+      deltaPillPp: round(deltaPill, 2),
+      heightPctPerPillPp:
+        Math.abs(deltaPill) > 1e-6 ? round(deltaHeight / deltaPill, 2) : null,
+    });
+  }
+  const pillsConstraint = {
+    modes: pillModes,
+    tradeoff: {
+      limits: pillsTradeoff,
+      marginal,
+      source: "search с нижней границей на каждом листе, seed 1; верхняя оценка",
+    },
+    limitSource: {
+      current: PILLS_CURRENT_LIMIT_PCT,
+      strict: PILLS_STRICT_LIMIT_PCT,
+      note: "#487: текущая продуктовая обрезка пилюль, среднее по профилям",
+    },
+  };
 
   const summarize = (subset, names = policyNames) => {
     const summary = {};
@@ -1525,6 +1878,7 @@ export function runOfflineShares(measurer, spec = {}) {
       fitMaxSweeps,
       fitMaxCandidates,
       trainProfiles,
+      pillsTradeoffLimitsPct: tradeoffLimits,
     },
     pinned: {
       source: OFFLINE_FLEX_SHARES_SOURCE,
@@ -1550,6 +1904,7 @@ export function runOfflineShares(measurer, spec = {}) {
     bySeed,
     heldOut,
     bucketSwitches,
+    pillsConstraint,
     decision,
   };
 }
@@ -2222,6 +2577,35 @@ function buildHypotheses({ oracle, sampleStability, widthStability, h4, regret, 
         `${offline.cases.length} конфигураций, seed ${item.fitSeed} (проверка seed 2); ` +
         `пилюли — отдельная метрика, не потеря текста; профилей ниже 4%: ${item.profilesBelowHeight.length}`,
     });
+    if (offline.pillsConstraint) {
+      const modes = offline.pillsConstraint.modes;
+      const passes = (key) =>
+        PILLS_LIMIT_MODES.filter(
+          (mode) => modes[mode]?.decision[key]?.simultaneous,
+        );
+      const searchPass = passes("search");
+      const vectorPass = passes("vector");
+      const bucket3Pass = passes("bucket3");
+      const parts = PILLS_LIMIT_MODES.map(
+        (mode) =>
+          `${mode}: высота ${signedPercent(modes[mode]?.overall.search.heightPctMean)}, ` +
+          `пилюли ${modes[mode]?.overall.search.pillTruncatedSharePctMean}%`,
+      );
+      hypotheses.push({
+        id: "H-pills",
+        statement:
+          "ограничение обрезки пилюль (#488) совместимо с выигрышем ≥4% высоты",
+        value: parts.join("; "),
+        threshold: "пилюли не хуже текущего и высота ≥4%",
+        verdict:
+          searchPass.length > 0 ||
+          vectorPass.length > 0 ||
+          bucket3Pass.length > 0
+            ? "порог пройден"
+            : "порог не пройден",
+        note: `одновременно: search — ${searchPass.join(", ") || "нет"}, vector — ${vectorPass.join(", ") || "нет"}, 3 бакета — ${bucket3Pass.join(", ") || "нет"}`,
+      });
+    }
   }
 
   if (h4.available) {
@@ -2823,6 +3207,92 @@ function buildReport(data) {
     push("");
     push(`**${offline.decision.reason}**`);
     push("");
+    if (offline.pillsConstraint) {
+      const pc = offline.pillsConstraint;
+      push("### Ограничение обрезки пилюль «Операций» (#488)");
+      push("");
+      push(
+        "Пилюли не влияют на высоту (одна строка), поэтому неограниченный `search` отдаёт «Операциям» минимум и экономит высоту обрезкой подписи в `title`. " +
+          "Ограничение — не штраф, а нижняя граница: по кривым порогов берётся минимальная ширина «Операций», при которой доля строк с обрезанными пилюлями укладывается в лимит. " +
+          "`search` — оптимум при ограничении на каждой W; `vector` — один оффлайн-вектор для зашивки. Высота — Δ к текущим долям (отрицательная = лучше), gap — к неограниченному оптимуму на той же W.",
+      );
+      push("");
+      for (const mode of PILLS_LIMIT_MODES) {
+        const item = pc.modes[mode];
+        if (!item) continue;
+        const shares = ["source_name", "operations", "errors"]
+          .map((id) => `${id} ${round((item.vector.shares[id] ?? 0) * 100, 2)}%`)
+          .join(" / ");
+        push(
+          `#### Режим «${item.label}»: ${mode === "strict" ? `≤${PILLS_STRICT_LIMIT_PCT}% на любой W` : "лимит = текущая продуктовая доля на той же W"}`,
+        );
+        push("");
+        push(
+          `Вектор: ${shares} гибкого бюджета; средний gap ${item.vector.meanGapPct}%, худший ${item.vector.worstGapPct}%; один вектор ${item.vector.feasible ? "совместим с лимитами" : "**несовместим с лимитами на всех W** (сумма нижних границ > 1)"}. Лимиты по W: ${Object.entries(
+            item.limitPctByWidth,
+          )
+            .map(([width, limit]) => `${width} — ${limit}%`)
+            .join(", ")}.`,
+        );
+        push("");
+        push("| W | Лимит, % | search: высота Δ | search: пилюли, % | vector: высота Δ | vector: пилюли, % | 2 бакета: высота Δ | 2 бакета: пилюли, % | 3 бакета: высота Δ | 3 бакета: пилюли, % | Текст (max), % | gap search, % |");
+        push("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+        for (const group of item.byWidth) {
+          push(
+            `| ${group.tableWidth} | ${group.limitPctMean} | ${signedPercent(group.search.heightPctMean)} | ${group.search.pillTruncatedSharePctMean} | ${signedPercent(group.vector.heightPctMean)} | ${group.vector.pillTruncatedSharePctMean} | ${signedPercent(group.bucket2.heightPctMean)} | ${group.bucket2.pillTruncatedSharePctMean} | ${signedPercent(group.bucket3.heightPctMean)} | ${group.bucket3.pillTruncatedSharePctMean} | ${group.vector.textTruncatedSharePctWorst} | ${group.search.gapToUnconstrainedPctMean} |`,
+          );
+        }
+        push("");
+        push("| Профиль | search: высота Δ | search: пилюли, % | vector: высота Δ | vector: пилюли, % | 2 бакета Δ | 3 бакета Δ |");
+        push("|---|---:|---:|---:|---:|---:|---:|");
+        for (const group of item.byProfile) {
+          push(
+            `| ${group.profile} | ${signedPercent(group.search.heightPctMean)} | ${group.search.pillTruncatedSharePctMean} | ${signedPercent(group.vector.heightPctMean)} | ${group.vector.pillTruncatedSharePctMean} | ${signedPercent(group.bucket2.heightPctMean)} | ${signedPercent(group.bucket3.heightPctMean)} |`,
+          );
+        }
+        push("");
+        push(
+          `- **search:** высота ${signedPercent(item.overall.search.heightPctMean)} (порог ≥4% — ${item.decision.search.heightPass ? "пройден" : "не пройден"}), пилюли ${item.overall.search.pillTruncatedSharePctMean}% (превышение лимита в среднем ${item.overall.search.pillExcessPpMean} п.п., худшее ${item.overall.search.pillExcessPpWorst} п.п.; критерий ${item.decision.search.pillPass ? "пройден" : "не пройден"}), текст ${item.overall.search.textTruncatedSharePctWorst}%, нарушений ${item.overall.search.violations}.`,
+        );
+        push(
+          `- **vector:** высота ${signedPercent(item.overall.vector.heightPctMean)} (порог ≥4% — ${item.decision.vector.heightPass ? "пройден" : "не пройден"}), пилюли ${item.overall.vector.pillTruncatedSharePctMean}% (превышение в среднем ${item.overall.vector.pillExcessPpMean} п.п., худшее ${item.overall.vector.pillExcessPpWorst} п.п.; критерий ${item.decision.vector.pillPass ? "пройден" : "не пройден"}), текст ${item.overall.vector.textTruncatedSharePctWorst}%, нарушений ${item.overall.vector.violations}.`,
+        );
+        push(
+          `- **2 бакета:** высота ${signedPercent(item.overall.bucket2.heightPctMean)}, пилюли ${item.overall.bucket2.pillTruncatedSharePctMean}%, нарушений ${item.overall.bucket2.violations}, лимиты ${item.plans.two?.feasible ? "совместимы" : "несовместимы"}; **3 бакета:** высота ${signedPercent(item.overall.bucket3.heightPctMean)}, пилюли ${item.overall.bucket3.pillTruncatedSharePctMean}%, нарушений ${item.overall.bucket3.violations}, лимиты ${item.plans.three?.feasible ? "совместимы" : "несовместимы"}.`,
+        );
+        push(
+          `- **Одновременно «пилюли не хуже текущего» и «высота ≥4%»:** search — ${item.decision.search.simultaneous ? "да" : "нет"}, vector — ${item.decision.vector.simultaneous ? "да" : "нет"}, 2 бакета — ${item.decision.bucket2.simultaneous ? "да" : "нет"}, 3 бакета — ${item.decision.bucket3.simultaneous ? "да" : "нет"}.`,
+        );
+        push("");
+      }
+      push("#### Цена обрезки пилюль в высоте (search, seed 1)");
+      push("");
+      push(
+        "Ограничение на каждой W — верхняя оценка: это лучшая высота, которую можно получить при данном лимите. Пилюли в таблице — фактическая доля строк, а не лимит: при малом лимите ограничение упирается в максимальную ширину «Операций».",
+      );
+      push("");
+      push("| Лимит, % | Высота Δ к текущим | Пилюли, % (сред.) | Пилюли, % (худш.) | gap к неограниченному, % |");
+      push("|---:|---:|---:|---:|---:|");
+      for (const row of pc.tradeoff.limits) {
+        push(
+          `| ${row.limitPct} | ${signedPercent(-row.heightGainPctMean)} | ${row.pillTruncatedSharePctMean} | ${row.pillTruncatedSharePctWorst} | ${row.gapToUnconstrainedPctMean} |`,
+        );
+      }
+      push("");
+      const priced = pc.tradeoff.marginal.filter(
+        (row) => row.heightPctPerPillPp !== null,
+      );
+      if (priced.length > 0) {
+        push(
+          `Средняя цена п.п. обрезки на промежутках — от ${minOf(
+            priced.map((row) => row.heightPctPerPillPp),
+          )}% до ${maxOf(
+            priced.map((row) => row.heightPctPerPillPp),
+          )}% высоты за п.п.; на всём диапазоне ограничение стоит тем дороже, чем ближе лимит к нулю.`,
+        );
+      }
+      push("");
+    }
   }
 
   if (decision) {
@@ -3391,6 +3861,19 @@ async function main() {
         )
         .join("; ");
       console.log(`  ${plan.label}: ${boundaries}; ${plan.passes ? "проходит" : "не проходит"}`);
+    }
+    if (offline.pillsConstraint) {
+      console.log("");
+      console.log("Ограничение обрезки пилюль (#488):");
+      for (const mode of PILLS_LIMIT_MODES) {
+        const modeData = offline.pillsConstraint.modes[mode];
+        if (!modeData) continue;
+        console.log(
+          `  ${modeData.label}: search высота ${signedPercent(modeData.overall.search.heightPctMean)}, пилюли ${modeData.overall.search.pillTruncatedSharePctMean}%; ` +
+            `vector высота ${signedPercent(modeData.overall.vector.heightPctMean)}, пилюли ${modeData.overall.vector.pillTruncatedSharePctMean}%; ` +
+            `одновременно — search ${modeData.decision.search.simultaneous ? "да" : "нет"}, vector ${modeData.decision.vector.simultaneous ? "да" : "нет"}`,
+        );
+      }
     }
   }
   if (decision) {

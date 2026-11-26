@@ -176,6 +176,7 @@ function solution(model, contentWidth, indices) {
  */
 export function narrowToBudget(model, start) {
   const { curves, flexBudget } = model;
+  const floors = model.floors ?? [];
   const indices = start.slice();
   let widthSum = model.widthSumOf(indices);
   let cost = model.costOf(indices);
@@ -184,7 +185,9 @@ export function narrowToBudget(model, start) {
     let best = null;
     for (let c = 0; c < curves.length; c += 1) {
       const from = indices[c];
-      if (from === 0) continue;
+      // Ниже нижней границы колонку не сужаем: у «Операций» это ширина, на
+      // которой обрезка пилюль уложилась в лимит (#488).
+      if (from <= (floors[c] ?? 0)) continue;
       const curve = curves[c];
       const next = from - 1;
       const freed = curve.candidates[from] - curve.candidates[next];
@@ -214,7 +217,12 @@ export function narrowToBudget(model, start) {
  */
 export function greedyGrowth(model, start, ceilings = null) {
   const { curves, flexBudget } = model;
+  const floors = model.floors ?? [];
   let indices = start.slice();
+  // Старт не может быть ниже нижней границы колонки (ограничение пилюль).
+  for (let c = 0; c < curves.length; c += 1) {
+    if (indices[c] < (floors[c] ?? 0)) indices[c] = floors[c] ?? 0;
+  }
   let cost = model.costOf(indices);
   let widthSum = model.widthSumOf(indices);
   if (widthSum > flexBudget) {
@@ -266,6 +274,7 @@ export function narrowingOptimizer(prepared, contentWidth, options = {}) {
     lambda,
     rowLimit: options.rowLimit ?? DEFAULT_SAMPLE_ROWS,
     maxCandidates: options.maxCandidates ?? DEFAULT_MAX_CANDIDATES,
+    pillsMaxTruncatedShare: options.pillsMaxTruncatedShare,
   });
   const { curves } = model;
   if (curves.length === 0) {
@@ -287,8 +296,9 @@ export function breakpointOptimizer(prepared, contentWidth, options = {}) {
     lambda,
     rowLimit: options.rowLimit ?? DEFAULT_SAMPLE_ROWS,
     maxCandidates: options.maxCandidates ?? DEFAULT_MAX_CANDIDATES,
+    pillsMaxTruncatedShare: options.pillsMaxTruncatedShare,
   });
-  const start = model.curves.map(() => 0);
+  const start = model.curves.map((_, index) => model.floors[index] ?? 0);
   const grown = greedyGrowth(model, start);
   return solution(model, contentWidth, grown.indices);
 }
@@ -325,17 +335,26 @@ export function searchOptimizer(prepared, contentWidth, options = {}) {
     lambda,
     rowLimit: options.rowLimit ?? DEFAULT_SAMPLE_ROWS,
     maxCandidates: options.maxCandidates ?? DEFAULT_MAX_CANDIDATES,
+    pillsMaxTruncatedShare: options.pillsMaxTruncatedShare,
   });
   const { curves } = model;
+  const floors = model.floors;
 
-  let best = greedyGrowth(model, curves.map(() => 0));
+  let best = greedyGrowth(
+    model,
+    curves.map((_, index) => floors[index] ?? 0),
+  );
 
   for (let round = 0; round < rounds; round += 1) {
     let improved = false;
     for (let c = 0; c < curves.length; c += 1) {
       // `best` мог измениться на прошлой итерации: берём только сужение
       // относительно текущего состояния, иначе старт окажется вне бюджета.
-      const trials = downgradeTrials(best.indices[c], downgradeLimit);
+      // Ниже нижней границы колонки не сужаем — иначе ограничение пилюль
+      // обходится локальным обменом (#488).
+      const trials = downgradeTrials(best.indices[c], downgradeLimit).filter(
+        (index) => index >= (floors[c] ?? 0),
+      );
       for (const j of trials) {
         const trial = best.indices.slice();
         trial[c] = j;
@@ -373,6 +392,7 @@ export function oracleOptimizer(prepared, contentWidth, options = {}) {
     lambda,
     rowLimit: options.rowLimit ?? 60,
     maxCandidates: options.maxCandidates ?? Number.POSITIVE_INFINITY,
+    pillsMaxTruncatedShare: options.pillsMaxTruncatedShare,
   });
   const { curves, flexBudget } = model;
   if (curves.length === 0) {
@@ -382,10 +402,17 @@ export function oracleOptimizer(prepared, contentWidth, options = {}) {
     };
   }
 
+  const floors = model.floors;
   let combinations = 1;
-  for (const curve of curves) combinations *= curve.candidates.length;
+  for (let c = 0; c < curves.length; c += 1) {
+    combinations *= curves[c].candidates.length - (floors[c] ?? 0);
+  }
   let thinned = false;
-  let lists = curves.map((curve) => curve.candidates.map((_, index) => index));
+  let lists = curves.map((curve, c) =>
+    curve.candidates
+      .map((_, index) => index)
+      .filter((index) => index >= (floors[c] ?? 0)),
+  );
   while (combinations > maxCombinations) {
     thinned = true;
     const before = combinations;
@@ -477,13 +504,15 @@ export function oracleOptimizer(prepared, contentWidth, options = {}) {
   recurse(0, 0);
 
   if (best.indices === null) {
-    // Бюджет меньше суммы минимумов: честное переполнение по минимумам.
+    // Бюджет меньше суммы нижних границ (включая ограничение пилюль): честное
+    // переполнение по минимумам, а не их нарушение.
+    const floorIndices = curves.map((_, c) => floors[c] ?? 0);
     const widths = finalizeWidths(
       model,
-      widthsFromIndices(model, curves.map(() => 0)),
+      widthsFromIndices(model, floorIndices),
       contentWidth,
     );
-    return { widths, cost: model.costOf(curves.map(() => 0)), thinned };
+    return { widths, cost: model.costOf(floorIndices), thinned };
   }
 
   return {
