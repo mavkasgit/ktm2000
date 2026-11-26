@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-25T22:52:41+00:00",
-  "db_fingerprint": "0d0d44a1d1775724",
+  "generated_at": "2026-11-26T06:14:50+00:00",
+  "db_fingerprint": "73219f4778ba7153",
   "review_fingerprint": "45a1bfcd976aaf46",
   "db": {
     "container": "ktm2000-postgres-prod",
@@ -8595,7 +8595,7 @@
     },
     {
       "id": 50,
-      "sku": "ЮП-2464-1",
+      "sku": "ЮП-2464",
       "code": "",
       "name": "Потайной плинтус 50х15 мм под светодиод",
       "type": "component",
@@ -8608,7 +8608,8 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ПП50"
+        "ПП50",
+        "ЮП-2464-1"
       ],
       "lengths": [
         {
@@ -8663,8 +8664,8 @@
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
-      "audit_group": "04-plinths",
-      "base_audit_group": "04-plinths",
+      "audit_group": "08-unknown-missing",
+      "base_audit_group": "08-unknown-missing",
       "review_status": "",
       "review_drawing": "",
       "review_cause": "",
@@ -8673,17 +8674,17 @@
       "review_kpz_n": null,
       "review_register_n": null,
       "review_observations": null,
-      "audit_verdict": "upgrade_both",
-      "audit_confidence": "high",
-      "audit_note": "карточка ПП50 2025 + сечение с LED-каналом (цветная схема убрана)",
-      "audit_evidence": "candidates/ЮП-2464-1_full.jpg; candidates/ЮП-2464-1_thumb.jpg; sheets/_sheet-3.jpg",
+      "audit_verdict": "",
+      "audit_confidence": "",
+      "audit_note": "",
+      "audit_evidence": "",
       "photo_status": "full+thumb",
       "photo_label": "full+thumb",
       "photo_origin": "own",
       "photo_from": "",
       "photo_origin_scope": "",
       "photo_origin_note": "",
-      "photo_verdict": "upgrade_available",
+      "photo_verdict": "unverified",
       "perimeter_archive": "—",
       "perimeter_poster": "—",
       "perimeter_best": "168.6",
@@ -8702,29 +8703,30 @@
       "classification_family": "",
       "classification_family_name": "",
       "material": "—",
-      "identity_confidence": 100,
+      "identity_confidence": 80,
       "dimension_confidence": 75,
-      "photo_confidence": 90,
-      "classification_confidence": 85,
-      "overall_confidence": 88,
-      "overall_status": "probable",
+      "photo_confidence": 80,
+      "classification_confidence": 60,
+      "overall_confidence": 76,
+      "overall_status": "needs_review",
       "tags": [
-        "group:04-plinths",
+        "group:08-unknown-missing",
         "profile:plinth_hidden",
         "shape:complex",
         "series:ЮП",
         "size:15/20/50",
         "photo:full+thumb",
         "photo-origin:own",
-        "photo-verdict:upgrade_available",
+        "photo-verdict:unverified",
         "perimeter:бд",
-        "confidence:88",
-        "status:probable",
-        "alias:ПП50"
+        "confidence:76",
+        "status:needs_review",
+        "alias:ПП50",
+        "alias:ЮП-2464-1"
       ],
       "relations": [
         {
-          "from_sku": "ЮП-2464-1",
+          "from_sku": "ЮП-2464",
           "relation": "alias_of",
           "to_sku": "ПП50",
           "status": "confirmed",
@@ -11823,6 +11825,11 @@
       ],
       "lengths": [
         {
+          "length_mm": 2700,
+          "raw_length_mm": 2750,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3080,
           "is_primary": true
@@ -11833,6 +11840,10 @@
       "mount_width_mm": 16.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
+        "2700": {
+          "auto": 80,
+          "manual": null
+        },
         "3000": {
           "auto": 80,
           "manual": 80
@@ -11857,6 +11868,10 @@
         "perimeter_mm": 50.3,
         "mount_width_mm": 16.0,
         "quantity_per_hanger": {
+          "2700": {
+            "auto": 80,
+            "manual": null
+          },
           "3000": {
             "auto": 80,
             "manual": 80
@@ -27447,7 +27462,7 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [
-        "ЮП-2464-1"
+        "ЮП-2464"
       ],
       "lengths": [
         {
@@ -27560,19 +27575,19 @@
         "perimeter:бд",
         "confidence:88",
         "status:probable",
-        "alias:ЮП-2464-1"
+        "alias:ЮП-2464"
       ],
       "relations": [
         {
           "from_sku": "ПП50",
           "relation": "alias_of",
-          "to_sku": "ЮП-2464-1",
+          "to_sku": "ЮП-2464",
           "status": "confirmed",
           "source": "db:aliases",
           "note": "DB-алиас: тот же товар под другим кодом"
         }
       ],
-      "relation_text": "alias_of→ЮП-2464-1",
+      "relation_text": "alias_of→ЮП-2464",
       "confirmed": [],
       "refuted": [],
       "open_claims": []
@@ -35849,13 +35864,13 @@
     {
       "from_sku": "ПП50",
       "relation": "alias_of",
-      "to_sku": "ЮП-2464-1",
+      "to_sku": "ЮП-2464",
       "status": "confirmed",
       "source": "db:aliases",
       "note": "DB-алиас: тот же товар под другим кодом"
     },
     {
-      "from_sku": "ЮП-2464-1",
+      "from_sku": "ЮП-2464",
       "relation": "alias_of",
       "to_sku": "ПП50",
       "status": "confirmed",

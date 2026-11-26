@@ -131,7 +131,7 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ПП37,alias_of,ЮП-2413,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ПП37,shared_photo_full,ЮП-2413,confirmed,storage:sha256,f6ea04a48a17
 ПП37,shared_photo_thumb,ЮП-2413,confirmed,storage:sha256,86eb2d24d8cd
-ПП50,alias_of,ЮП-2464-1,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ПП50,alias_of,ЮП-2464,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ПП79,alias_of,ЮП-2975,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ПП95,alias_of,ЮП-2076,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ПС20,alias_of,ЮП-003,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
@@ -298,7 +298,7 @@ ALS-917,alias_of,335,confirmed,db:aliases,DB-алиас: тот же товар 
 ЮП-2413,alias_of,ПП37,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-2413,shared_photo_full,ПП37,confirmed,storage:sha256,f6ea04a48a17
 ЮП-2413,shared_photo_thumb,ПП37,confirmed,storage:sha256,86eb2d24d8cd
-ЮП-2464-1,alias_of,ПП50,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
+ЮП-2464,alias_of,ПП50,confirmed,db:aliases,DB-алиас: тот же товар под другим кодом
 ЮП-2604,pair_with,ЮП-2616,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 30}}"
 ЮП-2616,pair_with,ЮП-2604,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 30}}"
 ЮП-2616,pair_with,ЮП-3098,confirmed,db:product_pairs,"пара для фасовки, N={'2700': {'manual': 35}}"
