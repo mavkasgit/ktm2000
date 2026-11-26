@@ -11,7 +11,10 @@
  */
 
 const DASH_VARIANTS = /[\u2010\u2011\u2012\u2013\u2014\u2212\u2043\uFE58\uFE63\uFF0D]/g;
-const SPACES = /[\s\u00A0]/g;
+// Только обычный пробел и NBSP: серверный `normalize_sku` не снимает таб и
+// перевод строки, и `[\s\u00A0]` склеил бы артикулы, которые Python считает
+// разными.
+const SPACES = /[\u0020\u00A0]/g;
 const DASH_BETWEEN_LETTER_AND_DIGIT = /([a-zа-яё])-(?=[0-9])/g;
 
 export function skuLoose(value: string): string {
