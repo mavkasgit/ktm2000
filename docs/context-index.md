@@ -10,6 +10,8 @@
 | [`backend/tests/AGENTS.md`](../backend/tests/AGENTS.md) | **Канон pytest** | Изоляция БД, правила, npm test-скрипты |
 | [`frontend/AGENTS.md`](../frontend/AGENTS.md) | Frontend | FSD, Vitest |
 | [`frontend/e2e/AGENTS.md`](../frontend/e2e/AGENTS.md) | **Канон E2E** | Playwright: env, фикстуры, спеки |
+| [`e2e/`](e2e/) | **E2E: справочник** | Детали канона: механика БД стенда, ярусы и время, env/конфиг, pass-cache, реестр спек, отладка, регрессы |
+| [`docs/frontend/`](frontend/README.md) | Frontend: обоснования | «Почему» к правилам `frontend/AGENTS.md`: таблицы, свежесть данных, окна, код-сплиттинг, количество, прототипы |
 | [`project-overview.md`](project-overview.md) | Архитектура | Стек, домен, UI-модули, дерево каталогов |
 | [`storage-vs-production-ui-experience.md`](storage-vs-production-ui-experience.md) | **Маршруты / UI** | «Цех / склад / транзит», `stage_kind`, контракт для фронтенда |
 | [`auth-oidc.md`](auth-oidc.md) | **Auth / OIDC** | Authentik bridge, link order, dual-run, logout, env |

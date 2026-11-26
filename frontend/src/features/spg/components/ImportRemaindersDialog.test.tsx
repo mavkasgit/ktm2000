@@ -190,7 +190,7 @@ const makePreview = (
   detected_section_id: null,
   detected_section_name: null,
   total_rows: 0,
-  summary: { total: 0, valid: 0, invalid: 0, quantity_total: 0 },
+  summary: { total: 0, valid: 0, skipped: 0, invalid: 0, quantity_total: 0 },
   section_meta: [],
   items: [],
   items_total: 0,
@@ -231,7 +231,7 @@ function osvPreview(sheetIndex: number, sectionId: number, sectionName: string) 
     source_kind: "1c_osv" as const,
     detected_section_id: sectionId,
     detected_section_name: sectionName,
-    summary: { total: 1, valid: 1, invalid: 0, quantity_total: 10 },
+    summary: { total: 1, valid: 1, skipped: 0, invalid: 0, quantity_total: 10 },
     section_meta: [
       { source_row_number: 2, status: "valid" as const, target_section_id: sectionId, target_section_name: sectionName },
     ],
@@ -345,6 +345,18 @@ describe("подпись «Операции» в предпросмотре им
         remainderPreviewColumns,
       ),
     ).toEqual({ operations: OPERATIONS_NOT_RECORDED_LABEL });
+  });
+
+  it("ответ без completed_stages (null) не роняет сборку фильтра", () => {
+    // Предпросмотр ОСВ до правки отдавал null: диалог читал `.length` и
+    // падал ошибкой границы раздела ещё до показа строк.
+    const item = makeImportItem({
+      completed_stages: null as unknown as ImportOperationStep[],
+    });
+    expect(getImportItemOperationsServerLabel(item)).toBe(
+      OPERATIONS_NOT_RECORDED_LABEL,
+    );
+    expect(getImportItemOperationsLabel(item)).toBe("—");
   });
 });
 
@@ -475,6 +487,79 @@ describe("вкладки листов файла остатков", () => {
   });
 });
 
+describe("пропущенные строки и лист целиком", () => {
+  it("показывает причину пропуска и счётчик, а лист запрашивает без пагинации", async () => {
+    vi.mocked(listSections).mockResolvedValue([
+      makeSection({ id: 11, code: "RAW", name: "Зона Альфа" }),
+    ]);
+    vi.mocked(getRemainderImportOperations).mockResolvedValue([]);
+    vi.mocked(getRemainderSheets).mockResolvedValue([
+      makeSheet({ index: 0, name: "Склад сырой", kind: "1c_osv", detected_section_id: 11 }),
+    ]);
+    vi.mocked(previewRemaindersExcel).mockResolvedValue(
+      makePreview({
+        sheet_name: "Склад сырой",
+        source_kind: "1c_osv",
+        detected_section_id: 11,
+        detected_section_name: "Зона Альфа",
+        total_rows: 2,
+        summary: { total: 2, valid: 1, skipped: 1, invalid: 0, quantity_total: 5 },
+        items_total: 2,
+        offset: 0,
+        items: [
+          makeImportItem({ source_row_number: 2, sku: "RAW-001", quantity: 5, target_section_id: 11 }),
+          makeImportItem({
+            source_row_number: 3,
+            sku: "",
+            quantity: null,
+            status: "skipped",
+            skip_reason: "no_catalog",
+            skip_reason_label: "нет в каталоге",
+            skip_note: "Нет в каталоге, новые артикулы не заводим",
+            // Артикул в каталоге не найден: в колонке «Наименование» серым
+            // печатается строка из файла 1С, иначе пропуск не опознать.
+            source_name: "Уголок 50*50 (нет в каталоге)",
+            target_section_id: 11,
+          }),
+        ],
+      }),
+    );
+
+    const { cleanup } = mountDialog();
+    try {
+      await selectFile();
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("Пропущено: нет в каталоге");
+      });
+      const text = document.body.textContent ?? "";
+
+      // Счётчик и подпись пропуска видны в списке, а не только в логах.
+      expect(text).toContain("Пропущено: 1");
+      // Заметка реестра печатается второй строкой и уточняет причину.
+      expect(text).toContain("Нет в каталоге, новые артикулы не заводим");
+      // Наименование из файла видно там, где каталог артикул не нашёл.
+      expect(text).toContain("Уголок 50*50 (нет в каталоге)");
+      // Фильтр по статусу умеет показать только пропущенные.
+      const filterTrigger = screen.getAllByRole("combobox")[0];
+      await act(async () => {
+        fireEvent.click(filterTrigger);
+      });
+      await vi.waitFor(() => {
+        expect(screen.getByRole("option", { name: "Только пропущенные" })).toBeTruthy();
+      });
+
+      // Пагинации в модалке нет: лист запрошен целиком, футера страниц нет.
+      expect(previewRemaindersExcel).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ limit: 5000, offset: 0 }),
+      );
+      expect(text).not.toContain("Страница ");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 describe("колонки предпросмотра ОСВ", () => {
   it("печатает код 1С, наименование и метры, а шапка совпадает с телом", async () => {
     vi.mocked(listSections).mockResolvedValue([
@@ -491,7 +576,7 @@ describe("колонки предпросмотра ОСВ", () => {
         detected_section_id: 11,
         detected_section_name: "Зона Альфа",
         total_rows: 1,
-        summary: { total: 1, valid: 1, invalid: 0, quantity_total: 2367 },
+        summary: { total: 1, valid: 1, skipped: 0, invalid: 0, quantity_total: 2367 },
         items_total: 1,
         items: [
           makeImportItem({
@@ -621,14 +706,14 @@ describe("импорт всех листов ОСВ", () => {
             source_kind: "1c_osv",
             detected_section_id: 12,
             detected_section_name: "Зона Бета",
-            summary: { total: 4, valid: 3, invalid: 1, quantity_total: 3 },
+            summary: { total: 4, valid: 3, skipped: 0, invalid: 1, quantity_total: 3 },
           })
         : makePreview({
             sheet_name: "Склад сырой",
             source_kind: "1c_osv",
             detected_section_id: 11,
             detected_section_name: "Зона Альфа",
-            summary: { total: 6, valid: 5, invalid: 1, quantity_total: 5 },
+            summary: { total: 6, valid: 5, skipped: 0, invalid: 1, quantity_total: 5 },
           }),
     );
     vi.mocked(importRemaindersExcel).mockImplementation(async (_locationId, _source, opts) =>
@@ -696,7 +781,7 @@ describe("импорт всех листов ОСВ", () => {
         sheet_name: "Лист",
         source_kind: "1c_osv",
         detected_section_id: 11,
-        summary: { total: 4, valid: 4, invalid: 0, quantity_total: 4 },
+        summary: { total: 4, valid: 4, skipped: 0, invalid: 0, quantity_total: 4 },
       }),
     );
     vi.mocked(importRemaindersExcel).mockImplementation(async (_locationId, _source, opts) => {

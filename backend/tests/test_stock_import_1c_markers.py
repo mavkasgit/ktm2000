@@ -430,3 +430,31 @@ async def test_preview_and_apply_semi_finished_row_to_finished_stock(
         "PACK_SPUNBOND",
         "SHOT",
     ]
+
+
+async def test_preview_osv_row_without_markers_has_empty_stages(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """ОСВ-строка без маркеров: ``completed_stages`` в ответе — ``[]``, не ``null``.
+
+    Клиент читает у этого поля ``.length`` и собирает из него список фильтра
+    колонки «Операции» при отрисовке диалога. ``null`` ронял весь раздел
+    (``TypeError: Cannot read properties of null (reading 'length')``), а смысл
+    пустого состояния несёт ``completed_operations_raw`` (ADR-0055 п.5).
+    """
+    await _seed_packaging_route(session)
+    product = await _make_product(session, "ALS-917")
+    session.add(Product1CCode(product_id=product.id, code="22063"))
+    await session.commit()
+
+    content = make_osv_workbook([osv_row("22063", "ALS-917 2,7м", "м", 27)])
+    preview = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={"file": ("osv.xlsx", content, XLSX_MIME)},
+        data={"sheet_index": "0"},
+    )
+    assert preview.status_code == 200, preview.text
+    item = preview.json()["items"][0]
+    assert item["status"] == "valid", item["errors"]
+    assert item["completed_operations_raw"] == ""
+    assert item["completed_stages"] == []

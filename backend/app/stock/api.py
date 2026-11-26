@@ -32,7 +32,7 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -68,6 +68,7 @@ from app.stock.import_1c_osv import (
     SOURCE_KIND_1C_OSV,
     SOURCE_KIND_MANUAL_TEMPLATE,
     ParsedRemainders,
+    SourceKind,
     _lookup_1c_products,
     describe_remainder_sheets,
     parse_remainders_sheet,
@@ -76,6 +77,7 @@ from app.stock.import_1c_osv import (
     resolve_1c_storage_section,
 )
 from app.stock.import_service import (
+    PREVIEW_ITEMS_MAX_LIMIT,
     ImportResult,
     apply_remainders_import,
     generate_remainders_template_for_location,
@@ -1503,8 +1505,92 @@ async def list_remainder_sheets(
     }
 
 
+# ── Предпросмотр остатков: контракт ответа ───────────────────────────────────
+# Модели ответа, а не «сырой dict»: форма проверяется на сервере, а не на
+# клиенте. До этого `completed_stages` уходил `null`, хотя фронт объявлял
+# массив, и падал весь раздел. Заодно схема попадает в OpenAPI, и добавленное
+# поле нельзя молча не заметить на клиенте.
+
+
+class RemainderPreviewItemOut(BaseModel):
+    """Строка предпросмотра остатков (обе ветки: ОСВ и ручной шаблон)."""
+
+    source_row_number: int
+    sku: str
+    product_id: int | None = None
+    product_name: str | None = None
+    quantity: float | None = None
+    source_code: str | None = None
+    source_name: str | None = None
+    source_unit: str | None = None
+    source_quantity_m: float | None = None
+    comment: str | None = None
+    status: Literal["valid", "invalid", "skipped"]
+    errors: list[str] = Field(default_factory=list)
+    matched_sku: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    raw_values: list[str] = Field(default_factory=list)
+    completed_operations_raw: str | None = None
+    completed_stages: list[StockBalanceCompletedStageOut] = Field(
+        default_factory=list
+    )
+    target_section_name: str | None = None
+    target_section_id: int | None = None
+    quality_state_raw: str | None = None
+    quality_state: QualityState
+    length_raw: str | None = None
+    dimensions: dict[str, Any] | None = None
+    dimensions_label: str
+    skip_reason: str | None = None
+    skip_reason_label: str | None = None
+    skip_note: str | None = None
+
+
+class RemainderPreviewSummaryOut(BaseModel):
+    total: int
+    valid: int
+    skipped: int
+    invalid: int
+    quantity_total: float
+
+
+class RemainderSectionMetaOut(BaseModel):
+    source_row_number: int
+    status: Literal["valid", "invalid", "skipped"]
+    target_section_id: int | None = None
+    target_section_name: str | None = None
+
+
+class RemainderPreviewOut(BaseModel):
+    """Ответ ``POST /stock/import/remainders/preview``."""
+
+    sheet_name: str
+    source_kind: SourceKind
+    detected_section_id: int | None = None
+    detected_section_name: str | None = None
+    total_rows: int
+    summary: RemainderPreviewSummaryOut
+    section_meta: list[RemainderSectionMetaOut]
+    items: list[RemainderPreviewItemOut]
+    items_total: int
+    limit: int
+    offset: int
+
+
+class RemainderImportOut(BaseModel):
+    """Ответ ``POST /stock/import/remainders``."""
+
+    success: bool
+    imported_count: int
+    errors: list[str] = Field(default_factory=list)
+    transaction_ids: list[int] = Field(default_factory=list)
+    action_id: int | None = None
+    batch_id: int | None = None
+
+
 @router.post(
     "/import/remainders/preview",
+    response_model=RemainderPreviewOut,
     dependencies=[Depends(require_role(list(WRITER_ROLES)))],
 )
 async def preview_remainders_excel(
@@ -1673,13 +1759,14 @@ async def preview_remainders_excel(
         ],
         "items": [item.__dict__ for item in preview_page.items],
         "items_total": preview_page.items_total,
-        "limit": max(1, min(limit, 500)),
+        "limit": max(1, min(limit, PREVIEW_ITEMS_MAX_LIMIT)),
         "offset": max(0, offset),
     }
 
 
 @router.post(
     "/import/remainders",
+    response_model=RemainderImportOut,
     dependencies=[Depends(require_role(list(WRITER_ROLES)))],
 )
 async def import_remainders_excel(

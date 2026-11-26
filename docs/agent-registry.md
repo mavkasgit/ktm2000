@@ -17,14 +17,20 @@ MCP-матрица и порты для ИИ-ассистентов. Bootstrap �
 
 | Тип разведки | MCP | Инструменты | Когда |
 |--------------|-----|-------------|-------|
-| Код, символы, flow | **CodeGraph** | `codegraph_explore`, `codegraph_callers`, `codegraph_impact` | Всегда для codebase |
+| Код, символы, flow | **CodeGraph** | `codegraph_codegraph_explore` (в OpenCode — `tools["codegraph"].codegraph_codegraph_explore`) | Кросс-файловые вопросы «кто читает/кто вызывает/что тянет» |
 | Внешние best practices | **Exa** | `web_search_exa`, `web_fetch_exa` | Скауты в `/orchestrator-hands`, стандарты, гайды |
 | Доки фреймворков | **Context7** | `resolve-library-id`, `query-docs` | API reference библиотек |
 | Open source паттерны | **gh_grep** | `searchGitHub` | Поиск по GitHub |
-| Браузер / UI | **chrome-devtools** | `navigate_page`, `take_snapshot` | E2E-проверки |
-| SQL-запросы | **postgres** | `query` | Отладка данных в dev-БД |
+| Браузер / UI | **chrome-devtools** | `navigate_page`, `take_snapshot` | Живая проверка UI, если MCP подключился |
+| SQL-запросы | **postgres** (если подключён) | `query` | Отладка данных в dev-БД; иначе `npm run db:sql` |
 
 > Для внешней разведки предпочитайте **Exa**, не встроенный WebSearch.
+
+**Если MCP не отвечает.** Матрица — не гарантия подключения. Браузер не
+поднялся (профиль занят, «browser is already running») — откройте страницу
+встроенным браузером Orca (skill `orca-cli`) или попросите человека; в живой
+процесс dev-стека не печатайте. Инструмента SQL нет — тот же запрос идёт через
+`npm run db:sql -- "…"` (DSN из `.env.dev`, `--allow-prod` только осознанно).
 
 ## Порты
 

@@ -27,19 +27,15 @@ from app.seeds.product_1c_skipped import PRODUCT_1C_SKIPPED
 from app.stock.import_1c_osv import _norm_cell
 
 # Откуда решение и что оно значит — в ``note``, чтобы в БД было видно
-# основание, а не только код причины.
+# основание, а не только код причины. Номера задач сюда не попадают: эта
+# строка печатается оператору в предпросмотре импорта, а основание и история
+# решения живут в документации (спека импорта ОСВ, решения приёмки).
 _SEED_NOTE_BY_REASON: dict[str, str] = {
-    SKIP_REASON_NOT_MES: (
-        "Не MES: химия, плёнки, крепёж, СИЗ, газы (приёмка #456, решение #461)"
-    ),
-    SKIP_REASON_PURCHASED: (
-        "Покупное изделие, не сырьё MES (приёмка #456, решение #461)"
-    ),
-    SKIP_REASON_NO_CATALOG: (
-        "Нет в каталоге, новые артикулы не заводим (решение #461)"
-    ),
+    SKIP_REASON_NOT_MES: "Не MES: химия, плёнки, крепёж, СИЗ, газы",
+    SKIP_REASON_PURCHASED: "Покупное изделие, не сырьё MES",
+    SKIP_REASON_NO_CATALOG: "Нет в каталоге, новые артикулы не заводим",
 }
-_SEED_DECIDED_BY = "каталог #461"
+_SEED_DECIDED_BY = "каталог"
 
 
 def _seed_note(reason: str) -> str:

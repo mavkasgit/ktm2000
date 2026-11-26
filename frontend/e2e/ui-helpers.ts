@@ -870,11 +870,12 @@ export async function completeBoardTasksViaBulkUI(page: Page, sku: string): Prom
 }
 
 /** Заголовок, по которому видно, что маршрут смонтировался. */
-type RouteUrl = "/transfers" | "/section-tasks";
+type RouteUrl = "/transfers" | "/section-tasks" | "/spg";
 
 const ROUTE_HEADINGS: Record<RouteUrl, string> = {
   "/transfers": "Передачи между ГХП",
   "/section-tasks": "Участки",
+  "/spg": "Группы хранения и производства",
 };
 
 /**

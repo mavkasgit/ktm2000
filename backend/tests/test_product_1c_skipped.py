@@ -62,8 +62,11 @@ async def test_seed_product_1c_skipped_reasons_and_names(
     assert await _counts(session) == EXPECTED_REASONS
 
     rows = (await session.scalars(select(Product1CSkipped))).all()
-    assert {row.decided_by for row in rows} == {"каталог #461"}
+    assert {row.decided_by for row in rows} == {"каталог"}
     assert all(row.code and row.name_norm and row.note for row in rows)
+    # Заметка печатается оператору в предпросмотре: номера задач в ней —
+    # служебная ссылка, её место в документации, а не в причине пропуска.
+    assert all("#" not in row.note for row in rows)
     # Нормализация — ровно правило импорта, иначе строка 1С не найдётся.
     for row in rows:
         assert row.name_norm == _norm_cell(row.name_norm)

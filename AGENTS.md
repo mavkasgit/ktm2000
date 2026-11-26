@@ -16,6 +16,7 @@ npm run db:migrate             # Применить миграции
 npm run db:seed                # Справочники (участки, маршруты, шаблоны импорта)
 npm run db:seed:packing-demo   # Демо-доска «Участков»: два набора планов (упаковочный + «План подготовительного участка») на шести участках, парные артикулы, их непарный вариант и незакрытые позиции + дневные планы
 npm run db:snapshot -- dump <label> / restore <name>   # Слепок dev-БД в data/backups/snapshots
+npm run db:sql -- "select …"       # SQL к dev-БД (DSN из .env.dev), одна команда за вызов
 npm run imports:sweep        # Ручная уборка сирот в imports/ (файлы без строки import_files старше порога 24ч; фоновый планировщик выключен на e2e — .env.e2e)
 npm run test:pytest            # Тесты backend (параллельно, дефолт; slow пропускаются)
 npm run test:pytest:full       # Полный прогон в один поток
@@ -75,9 +76,16 @@ Worktree с `node_modules`-junction (и pnpm) Vitest резолвит по ре�
 2. Проверить оба чека: backend `http://127.0.0.1:8012/api/health` и frontend
    через прокси `http://127.0.0.1:5172/api/health`.
 3. Если в ответе менялись файлы backend/frontend или чек не зелёный —
-   отправить в тот же терминал `npm run devrestart`
-   (`orca terminal send --terminal <handle> --text "npm run devrestart" --enter`)
-   и дождаться обоих health-чеков.
+   сначала прочитать экран терминала (`orca terminal read … --screen`).
+   Терминал держит `npm run dev` на переднем плане: отправленный в него текст
+   уходит в npm/Vite, а не в приглашение оболочки (Vite читает клавиши
+   `r`/`q`). Дальше по состоянию:
+   - в логе `WatchFiles detected changes … Reloading` и HMR, оба чека зелёные —
+     стек уже подхватил правку, перезапуск не нужен;
+   - dev не запущен, на экране приглашение (`PS>`/`$`) — отправить
+     `npm run devrestart` и дождаться обоих health-чеков;
+   - иначе — в живой процесс не печатать: попросить пользователя перезапустить
+     стенд в его терминале.
 4. Если открытого терминала нет — не поднимать стек самому: попросить
    пользователя открыть терминал в Orca одной строкой.
 5. Отвечать только после зелёных чеков. Если код не менялся и стенд жив — не
@@ -191,7 +199,10 @@ GitHub Actions — фоновый второй взгляд. Готовност�
 
 ## Разведка
 
-- Поиск кода и символов — **CodeGraph**, когда в сессии есть `codegraph_explore` (MCP подключён, строка 97). Инструмента нет — работайте обычным поиском по файлам, это полноценная замена для точечных вопросов; CodeGraph выигрывает на кросс-файловых разведках («кто вызывает», «что тянет»), а не на поиске строки.
+- Кросс-файловый вопрос («кто читает поле», «что тянет модуль») — один вызов
+  CodeGraph `tools["codegraph"].codegraph_codegraph_explore`: он возвращает
+  исходник и путь вызовов. Grep/read — для точечной строки или когда
+  инструмента нет в сессии.
 - Внешние best practices — **Exa MCP** (`web_search_exa` / `web_search`).
 - Полная матрица MCP → [`docs/agent-registry.md`](docs/agent-registry.md).
 - После значимых правок кода: `npx @colbymchenry/codegraph sync`. Индекс стареет незаметно — ответы по коду, изменённому после последнего `sync`, берутся из устаревшей выдачи, и это выглядит как правда. Сверить возраст: индекс лежит в `.codegraph/codegraph.db`, если он старше последнего коммита — `sync` ещё не делали.
@@ -222,21 +233,17 @@ GitHub Actions — фоновый второй взгляд. Готовност�
 
 ## Стандарты кода
 
-1. Edge cases — валидация, ошибки, крайние случаи; без placeholders.
-2. Backend — только `AsyncSession`.
-3. Frontend — FSD, без cross-imports между features.
-4. Коммиты — conventional commits на русском (`feat: …`, `fix: …`).
-5. Stock ledger — `StockTransaction` единый источник правды; детали → `docs/project-overview.md`.
-6. Transfer ↔ StockTransaction integrity — `assert_no_invariants_violations` в тестах.
-7. Тесты, которые трогают БД, берут сессию у Cleaner'а пакета (`async with cleaner.session() as db` либо фикстуры `session`/`client`) и **не открывают транзакцию руками** для изоляции: стратегии и guard → [`backend/tests/AGENTS.md`](backend/tests/AGENTS.md), решение → [ADR-0072](docs/adr/0072-izolyaciyu-testovoy-bd-derzhit-cleaner.md). Исключение — миграционные пакеты (`test_migrations.py`, `test_hanger_norm_key_migration_218.py`): они гоняют alembic на своей базе `ktm_mig_*` и открывают транзакции сами, это роль `ScratchDatabase`, а не изоляция теста.
-8. PR закрывает issue только английским `Closes #N` / `Fixes #N`; русское «Закрывает» GitHub не распознаёт.
-9. Проверки PR — `gh pr checks <n> --watch` или `gh run watch`, а не ручной опрос.
+Правила, по которым ревьюер проверяет диф, — в
+[`CODING_STANDARDS.md`](CODING_STANDARDS.md): FSD, `AsyncSession`, ledger,
+изоляция тестов, коммиты и операторские тексты. Реализатору достаточно
+разделов `backend/AGENTS.md` и `frontend/AGENTS.md`; полный список — у ревью.
 
 ## Документация (указатели)
 
 | Файл | Содержание |
 |------|------------|
 | [`docs/context-index.md`](docs/context-index.md) | Карта всей документации |
+| [`CODING_STANDARDS.md`](CODING_STANDARDS.md) | **Стандарты для ревью**: FSD, ledger, тесты, коммиты, операторские тексты |
 | [`docs/project-overview.md`](docs/project-overview.md) | Архитектура, домен, UI-модули |
 | [`docs/GETTING_STARTED.md`](docs/GETTING_STARTED.md) | Установка с нуля |
 | [`docs/testing-guide.md`](docs/testing-guide.md) | Маршрутизатор тестирования |

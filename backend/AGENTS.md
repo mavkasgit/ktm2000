@@ -23,6 +23,23 @@ backend/app/
 - Seed: `npm run db:seed`.
 - API docs: `http://localhost:8012/docs` (dev).
 
+### Правка данных и миграции
+
+- **Dev-данные — прямым SQL.** `npm run db:sql -- "…"` (DSN из `.env.dev`, одна
+  команда за вызов); перед разрушительной правкой — `npm run db:snapshot -- dump
+  <label>`. Alembic-миграция — для схемы и для прод-данных, где нужны версии
+  «до/после» ([`docs/deployment.md`](../docs/deployment.md#изменения-прод-данных-версии-допосле)).
+  Миграция ради текста в dev-БД — лишний круг.
+- **Сид только добавляет.** Сидеры не перезаписывают существующие строки:
+  правка текста сида долетает только до пустой БД, в наполненной правьте данные
+  SQL-ом.
+- **Удалённая уже применённая ревизия.** `alembic stamp` не найдёт файл
+  ревизии: выровняйте `alembic_version` SQL-ом (`update alembic_version set
+  version_num='<предыдущая>'`) или временной заглушкой, затем проверьте
+  `alembic current`.
+- **Ответ API — модель.** Ручка, которую читает клиент, объявляет
+  `response_model`; сырой `dict` пропускает `null` и пропавшие поля.
+
 ## Stock Ledger
 
 Единый источник правды — `StockTransaction` (append-only). Legacy `SpgRemainder`, `Movement` удалены.

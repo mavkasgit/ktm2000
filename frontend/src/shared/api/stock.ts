@@ -501,7 +501,8 @@ export type RemainderImportItem = {
   /** Метры из «Конечное сальдо / Количество»; `quantity` остаётся штуками. */
   source_quantity_m: number | null;
   comment: string | null;
-  status: "valid" | "invalid";
+  /** `skipped` — строка разобрана реестром исключений и в импорт не идёт. */
+  status: "valid" | "invalid" | "skipped";
   errors: string[];
   /** Полный SKU, найденный в исходной строке, если это было частичное совпадение. */
   matched_sku: string | null;
@@ -520,6 +521,12 @@ export type RemainderImportItem = {
   dimensions: Record<string, number> | null;
   /** Подпись габарита для предпросмотра («2,7 м» / «—»). */
   dimensions_label: string;
+  /** Реестр исключений: код причины пропуска — `not_mes`, `no_catalog`, … */
+  skip_reason?: string | null;
+  /** Подпись причины пропуска для оператора (реестр исключений или правило разбора). */
+  skip_reason_label?: string | null;
+  /** Уточнение сервера (единица, заметка реестра) — печатается второй строкой. */
+  skip_note?: string | null;
 };
 
 export const IMPORT_QUALITY_OPTIONS: { value: QualityState; label: string }[] = [
@@ -542,12 +549,14 @@ export type RemainderImportSummary = {
   total: number;
   valid: number;
   invalid: number;
+  /** Разобраны реестром исключений — не ошибка и не импорт. */
+  skipped: number;
   quantity_total: number;
 };
 
 export type RemainderSectionMeta = {
   source_row_number: number;
-  status: "valid" | "invalid";
+  status: "valid" | "invalid" | "skipped";
   target_section_id: number | null;
   target_section_name: string | null;
 };
@@ -577,7 +586,7 @@ export type RemainderImportResponse = {
 
 export type RemainderPreviewQueryParams = {
   search?: string;
-  filter_status?: "all" | "invalid";
+  filter_status?: "all" | "invalid" | "skipped";
   /** Строка сортировки `field:order,field:order` (см. `buildSortParam`). */
   sort?: string;
   limit?: number;

@@ -21,14 +21,12 @@ import {
   DataTableColumnHeader,
   TableCornerResetCell,
   TableCornerResetHeader,
-  TablePaginationFooter,
   DATA_TABLE_STYLES,
   TABLE_ROW_COMPACT,
   toast,
   renderIcon,
 } from "@/shared/ui";
 import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
-import { usePaginatedTableQuery } from "@/shared/hooks/usePaginatedTableQuery";
 import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { saveBlobAsFile } from "@/shared/lib/downloadFile";
@@ -136,7 +134,11 @@ const EMPTY_OPERATIONS_CELLS = new Set(["", "—", "-"]);
 export function getImportItemOperationsServerLabel(item: RemainderImportItem): string {
   const raw = item.completed_operations_raw;
   if (raw != null && EMPTY_OPERATIONS_CELLS.has(raw.trim())) return OPERATIONS_EMPTY_LABEL;
-  if (!item.completed_stages.length) return OPERATIONS_NOT_RECORDED_LABEL;
+  // `?.` — граница с сервером: поле объявлено списком, но ответ без
+  // `completed_stages` (старый бэкенд, null) не должен ронять диалог при
+  // сборке списка фильтра. Отсутствие — не «без операций»: состояние
+  // пустоты несёт `completed_operations_raw`.
+  if (!item.completed_stages?.length) return OPERATIONS_NOT_RECORDED_LABEL;
   return completedOperationsServerLabel(undefined, item.completed_stages);
 }
 
@@ -184,7 +186,18 @@ function getImportItemSectionLabel(
   return sections.find((section) => section.id === sectionId)?.name ?? `#${sectionId}`;
 }
 
+/** Подпись причины пропуска из реестра исключений ОСВ. */
+function getImportItemSkipReason(item: RemainderImportItem): string {
+  return item.skip_reason_label?.trim() || "пропущено по решению каталога";
+}
+
 function getImportItemErrorsLabel(item: RemainderImportItem): string {
+  // Правило повторяет `_preview_errors_label` (`stock/import_service.py`):
+  // пропуск — не ошибка, но колонка объясняет строку, и по этой же подписи
+  // сервер фильтрует `?errors=`. Иначе строка без текста выглядела бы пустой.
+  if (item.status === "skipped") {
+    return `Пропущено: ${getImportItemSkipReason(item)}`;
+  }
   const messages = [...item.warnings, ...item.errors];
   if (messages.length === 0) {
     return item.status === "valid" ? "—" : "Ошибка";
@@ -292,6 +305,14 @@ const headerCellClass = `${DATA_TABLE_STYLES.headerRow} ${DATA_TABLE_STYLES.head
 const summaryHeaderCellClass = `${DATA_TABLE_STYLES.headerRow} ${TABLE_ROW_COMPACT.headerCell}`;
 const summaryCellClass = TABLE_ROW_COMPACT.cell;
 
+/**
+ * Сколько строк предпросмотра просит диалог: лист целиком, без пагинации.
+ * Потолок совпадает с `PREVIEW_ITEMS_MAX_LIMIT` на сервере; больше листа
+ * одного ОСВ не бывает на практике, а строки сверх потолка достаются
+ * поиском/фильтрами (они применяются до нарезки страницы).
+ */
+const PREVIEW_ALL_ROWS_LIMIT = 5000;
+
 export function ImportRemaindersDialog({
   open,
   onOpenChange,
@@ -372,7 +393,7 @@ export function ImportRemaindersDialog({
   const [clearExisting, setClearExisting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const debouncedSearch = useDebouncedValue(searchQuery);
-  const [filterStatus, setFilterStatus] = useState<"all" | "invalid">("all");
+  const [filterStatus, setFilterStatus] = useState<"all" | "invalid" | "skipped">("all");
   // Оверрайды живут по листам: номер строки в разных листах — разные строки,
   // и общая карта при переключении вкладки переписала бы чужой лист.
   const [targetSectionOverridesBySheet, setTargetSectionOverridesBySheet] = useState<
@@ -410,36 +431,11 @@ export function ImportRemaindersDialog({
 
   const sort = buildRemainderPreviewSortParam(sortConfigs);
 
-  const {
-    page,
-    setPage,
-    limit,
-    setLimit,
-    offset,
-    getTotalPages,
-    getRangeLabel,
-    resetPage,
-  } = usePaginatedTableQuery({
-    resetPageDeps: [
-      selectedSheet,
-      rowSelection,
-      importMode,
-      file,
-      clipboardText,
-      debouncedSearch,
-      filterStatus,
-      columnFilters,
-      debouncedColumnSearchQueries,
-      sortConfigs,
-    ],
-  });
-
   const handleSortChange = useCallback(
     (field: RemainderPreviewSortField) => {
       applySort(field);
-      resetPage();
     },
-    [applySort, resetPage],
+    [applySort],
   );
 
   const [error, setError] = useState<string | null>(null);
@@ -459,6 +455,11 @@ export function ImportRemaindersDialog({
   // ── Preview request identity and per-sheet cache ──────────────────────
   // Параметры без `location_id`: ключ кэша не должен зависеть от участка,
   // который сам берётся из ответа предпросмотра.
+  //
+  // Клиентской пагинации нет: лист запрашивается целиком, чтобы оператор видел
+  // все строки (в т.ч. пропущенные) без переключения страниц. Сервер режет
+  // ответ потолком `PREVIEW_ITEMS_MAX_LIMIT` (5000); строки сверх него
+  // достаются поиском и фильтрами — они применяются до нарезки страницы.
   const previewParams = useMemo(
     () => ({
       sheet_index: selectedSheet,
@@ -466,8 +467,8 @@ export function ImportRemaindersDialog({
       search: debouncedSearch.trim() || undefined,
       filter_status: filterStatus,
       sort,
-      limit,
-      offset,
+      limit: PREVIEW_ALL_ROWS_LIMIT,
+      offset: 0,
       ...columnApiParams,
     }),
     [
@@ -476,8 +477,6 @@ export function ImportRemaindersDialog({
       debouncedSearch,
       filterStatus,
       sort,
-      limit,
-      offset,
       columnApiParams,
     ],
   );
@@ -534,7 +533,6 @@ export function ImportRemaindersDialog({
       resetExpansion();
       setSearchQuery("");
       setFilterStatus("all");
-      resetPage();
       setTargetSectionOverridesBySheet({});
       setQualityStateOverridesBySheet({});
       setSortConfigs([]);
@@ -544,7 +542,7 @@ export function ImportRemaindersDialog({
       setMultiOutcomes(null);
       setMultiRunning(false);
     }
-  }, [open, resetExpansion, resetColumnFilters, resetPage, resetPreviewState]);
+  }, [open, resetExpansion, resetColumnFilters, resetPreviewState]);
 
   const getImportSource = (): RemainderImportSource | null => {
     if (importMode === "file" && file) {
@@ -647,9 +645,8 @@ export function ImportRemaindersDialog({
     setError(null);
     setFilterStatus("all");
     setSearchQuery("");
-    resetPage();
     setStep("preview");
-  }, [resetPage, resetPreviewState]);
+  }, [resetPreviewState]);
 
   useImportClipboardPaste({
     enabled: open && step === "upload",
@@ -776,7 +773,6 @@ export function ImportRemaindersDialog({
 
   const previewItems = shownPreview?.items ?? [];
   const previewItemsTotal = shownPreview?.items_total ?? 0;
-  const previewTotalPages = getTotalPages(previewItemsTotal);
 
   // Читатели значения колонок зависят от состояния диалога (переопределения
   // участка и качества, справочник участков), поэтому описание колонок с
@@ -809,10 +805,11 @@ export function ImportRemaindersDialog({
   );
 
   const stats = useMemo(() => {
-    if (!shownPreview) return { total: 0, valid: 0, invalid: 0, qty: 0 };
+    if (!shownPreview) return { total: 0, valid: 0, skipped: 0, invalid: 0, qty: 0 };
     return {
       total: shownPreview.summary.total,
       valid: shownPreview.summary.valid,
+      skipped: shownPreview.summary.skipped ?? 0,
       invalid: shownPreview.summary.invalid,
       qty: shownPreview.summary.quantity_total,
     };
@@ -963,11 +960,27 @@ export function ImportRemaindersDialog({
           label: `OK: ${stats.valid} (${stats.qty})`,
           className: "text-green-700 border-green-200 bg-green-50/50",
         },
+        ...(stats.skipped > 0
+          ? [
+              {
+                label: `Пропущено: ${stats.skipped}`,
+                className: "text-amber-700 border-amber-200 bg-amber-50/50",
+              },
+            ]
+          : []),
         ...(stats.invalid > 0
           ? [
               {
                 label: `Ошибок: ${stats.invalid}`,
                 className: "text-red-700 border-red-200 bg-red-50/50",
+              },
+            ]
+          : []),
+        ...(previewItemsTotal > previewItems.length
+          ? [
+              {
+                label: `Показаны первые ${previewItems.length} из ${previewItemsTotal} — сузьте поиск`,
+                className: "text-amber-700 border-amber-200 bg-amber-50/50",
               },
             ]
           : []),
@@ -1289,16 +1302,16 @@ export function ImportRemaindersDialog({
                     <Select
                       value={filterStatus}
                       onValueChange={(value) => {
-                        setFilterStatus(value as "all" | "invalid");
-                        resetPage();
+                        setFilterStatus(value as "all" | "invalid" | "skipped");
                       }}
                     >
-                      <SelectTrigger className="h-6 text-[11px] w-[108px] font-medium bg-background">
+                      <SelectTrigger className="h-6 text-[11px] w-[128px] font-medium bg-background">
                         <SelectValue placeholder="Все строки" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">Все строки</SelectItem>
                         <SelectItem value="invalid">Только ошибки</SelectItem>
+                        <SelectItem value="skipped">Только пропущенные</SelectItem>
                       </SelectContent>
                     </Select>
                   }
@@ -1363,6 +1376,7 @@ export function ImportRemaindersDialog({
                         const rowKey = item.source_row_number;
                         const isExpanded = isRowExpanded(rowKey);
                         const hasErrors = item.status === "invalid";
+                        const isSkipped = item.status === "skipped";
                         const hasRaw = item.raw_values.length > 0;
 
                         return (
@@ -1370,7 +1384,11 @@ export function ImportRemaindersDialog({
                             <tr
                               onClick={() => hasRaw && toggleRow(rowKey)}
                               className={`border-b transition-colors cursor-pointer hover:bg-muted/30 ${
-                                hasErrors ? "bg-red-50/50 dark:bg-red-950/5" : ""
+                                hasErrors
+                                  ? "bg-red-50/50 dark:bg-red-950/5"
+                                  : isSkipped
+                                    ? "bg-amber-50/40 dark:bg-amber-950/5"
+                                    : ""
                               }`}
                             >
                               <td className="px-1 py-0.5 text-left">
@@ -1395,7 +1413,7 @@ export function ImportRemaindersDialog({
                                 className={`px-1.5 py-0.5 ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
                                 title={item.source_name ?? undefined}
                               >
-                                {item.product_name ?? "—"}
+                                {item.product_name ?? item.source_name ?? "—"}
                               </td>
                               <td className="px-1.5 py-0.5 font-semibold text-foreground tabular-nums text-right">
                                 {fmtQty(item.quantity)}
@@ -1481,8 +1499,23 @@ export function ImportRemaindersDialog({
                                   />
                                 )}
                               </td>
-                              <td className="px-1.5 py-0.5 text-destructive font-medium leading-snug whitespace-pre-line">
-                                {item.errors.map(translateImportError).join(", ") || "—"}
+                              <td
+                                className={`px-1.5 py-0.5 font-medium leading-snug whitespace-pre-line ${
+                                  isSkipped ? "text-amber-700 dark:text-amber-400" : "text-destructive"
+                                }`}
+                              >
+                                {isSkipped ? (
+                                  <>
+                                    {getImportItemErrorsLabel(item)}
+                                    {item.skip_note ? (
+                                      <span className="block text-[10px] font-normal text-muted-foreground">
+                                        {item.skip_note}
+                                      </span>
+                                    ) : null}
+                                  </>
+                                ) : (
+                                  item.errors.map(translateImportError).join(", ") || "—"
+                                )}
                               </td>
                               <TableCornerResetCell />
                             </tr>
@@ -1500,19 +1533,6 @@ export function ImportRemaindersDialog({
                     </tbody>
                   </table>
               </ImportPreview.TableFrame>
-
-              {shownPreview && previewItemsTotal > 0 ? (
-                <TablePaginationFooter
-                  page={page}
-                  totalPages={previewTotalPages}
-                  total={previewItemsTotal}
-                  shownCount={previewItems.length}
-                  limit={limit}
-                  onPageChange={setPage}
-                  onLimitChange={setLimit}
-                  rangeLabel={getRangeLabel(previewItems.length, previewItemsTotal)}
-                />
-              ) : null}
             </ImportPreview.Layout>
           )}
 

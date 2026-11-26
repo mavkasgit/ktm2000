@@ -86,6 +86,14 @@ def load_remainders_default_mapping() -> dict:
 
 _REMAINDERS_DEFAULT_MAPPING: dict = load_remainders_default_mapping()
 
+# Потолок одной страницы предпросмотра остатков. Диалог импорта показывает
+# лист целиком (без клиентской пагинации), поэтому просит страницу этого
+# размера: при старом потолке в 500 строк оператор видел только первую часть
+# ОСВ и не мог добрать остальные. Потолок остаётся, чтобы гигантская выгрузка
+# не положила браузер и ответ; строки за потолком достаются фильтром/поиском —
+# они применяются до нарезки страницы.
+PREVIEW_ITEMS_MAX_LIMIT = 5000
+
 
 # ─── Data classes ──────────────────────────────────────────────────────────────
 
@@ -106,8 +114,11 @@ class RemainderItem:
     warnings: list[str] = field(default_factory=list)
     matched_sku: str | None = None
     completed_operations_raw: str | None = None
-    # NEW: резолвнутые пройденные этапы (поднабор ops_dict)
-    completed_stages: list[dict] | None = None
+    # Резолвнутые пройденные этапы (поднабор ops_dict). Всегда список:
+    # «этапов нет» — это `[]`, а `None` в ответе предпросмотра роняет клиент
+    # (он читает `.length`) и смешивает «не зафиксировано» (это состояние
+    # несёт `completed_operations_raw`) со списком.
+    completed_stages: list[dict] = field(default_factory=list)
     # NEW: имя целевой секции из Excel
     target_section_name: str | None = None
     # NEW: ID целевой секции (None если не найдена или не указана)
@@ -1884,7 +1895,7 @@ def query_remainder_preview_items(
     )
 
     items_total = len(filtered)
-    safe_limit = max(1, min(limit, 500))
+    safe_limit = max(1, min(limit, PREVIEW_ITEMS_MAX_LIMIT))
     safe_offset = max(0, offset)
     page_items = filtered[safe_offset: safe_offset + safe_limit]
 
