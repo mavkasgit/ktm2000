@@ -1210,3 +1210,35 @@ async def test_export_edited_file_applies_updates_and_reexport_shows_them(
     assert after["ЮП-НОВЫЙ-2"]["Кол-во на подвесе"] == 8
     for sku in set(before) - {"ЮП-ОДИН", "ЮП-ФЛАГ"}:
         assert after[sku] == before[sku], f"нетронутая строка {sku} изменилась"
+
+
+async def test_preview_excel_finds_product_by_dash_spelling(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Строка ``ALS-1103`` обновляет существующий ``ALS1103``, а не создаёт дубль."""
+    product = await _make_product(
+        session, sku="ALS1103", name="Старое имя", lengths=[2500.0]
+    )
+    await session.commit()
+
+    content = _xlsx_bytes([
+        _row(sku="ALS-1103", name="Новое имя", lengths="2500"),
+    ])
+    resp = await _upload(client, PREVIEW_URL, content)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["items"][0]["action"] == "update"
+    assert body["stats"]["create"] == 0
+    assert body["stats"]["update"] == 1
+
+    applied = await _upload(client, APPLY_URL, content)
+    assert applied.status_code == 200, applied.text
+
+    rows = (
+        await session.scalars(
+            select(Product).where(Product.sku.in_(["ALS1103", "ALS-1103"]))
+        )
+    ).all()
+    assert [row.sku for row in rows] == ["ALS1103"]
+    await session.refresh(product)
+    assert product.name == "Новое имя"

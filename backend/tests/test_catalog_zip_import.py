@@ -134,3 +134,35 @@ async def test_zip_reimport_keeps_manual_length_rows(
         {"length_mm": 1800.0, "raw_length_mm": None, "is_primary": False},
         {"length_mm": 2400.0, "raw_length_mm": None, "is_primary": False},
     ]
+
+
+async def test_zip_import_updates_existing_product_on_dash_spelling(
+    client: AsyncClient, session: AsyncSession, tmp_path: Path
+) -> None:
+    """Профиль ``ALS-1103`` из ZIP обновляет канонический ``ALS1103``."""
+    product = Product(
+        sku="ALS1103",
+        name="Плинтус",
+        type=ProductType.component,
+        unit="шт",
+        quantity_per_hanger=2,
+    )
+    session.add(product)
+    await session.commit()
+
+    await _upload(
+        client,
+        _make_zip_bytes([("ALS-1103", 3, 2750, "")], tmp_path),
+        tmp_path,
+    )
+
+    rows = (
+        await session.scalars(
+            select(Product).where(Product.sku.in_(["ALS1103", "ALS-1103"]))
+        )
+    ).all()
+    assert [row.sku for row in rows] == ["ALS1103"]
+    assert rows[0].quantity_per_hanger == 3
+    assert await _lengths(client, product.id) == [
+        {"length_mm": 2750.0, "raw_length_mm": None, "is_primary": True}
+    ]
