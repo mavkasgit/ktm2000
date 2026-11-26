@@ -13,6 +13,7 @@
 | `#461-aliases-1c` | 2026-11-25 | 49 арт. | правка каталога под 1С: алиасы 14, нормализации длин 22, добавления длин 9, переименования 13 | `backup_ktm2000_prod_2026-11-25_20-26-34.zip` | `backup_ktm2000_prod_2026-11-25_20-51-17.zip` | accepted |
 | `#463-081-perimeter` | 2026-11-26 | 1 арт., attributes.perimeter_mm, attributes.quantity_per_hanger | Периметр ЮП-081 в БД 43,8 мм, на архивном чертеже РП/ЮП-081.jpg — 44,8 мм (Δ1,0). Решение заказчика: исправить периметр в БД по чертежу. | `backup_ktm2000_prod_2026-11-25_22-26-31.zip` | `backup_ktm2000_prod_2026-11-25_22-26-53.zip` | accepted |
 | `#463-1880-placeholder` | 2026-11-26 | 1 арт. | Слот photo_full у ЮП-1880 занят файлом-заглушкой «БЕЗ ФОТО» (7 386 Б). Заглушка не изображение изделия: она маскирует пробел и ломает сверку «разметка ↔ карточка». Решение заказ… | `backup_ktm2000_prod_2026-11-25_22-05-49.zip` | `backup_ktm2000_prod_2026-11-25_22-06-11.zip` | accepted |
+| `#463-2972-length-2700` | 2026-11-26 | 1 арт., product_lengths, attributes.quantity_per_hanger | Строка 26 листа «Склад сырой» ОСВ просит сырьё 2,75 м у ЮП-2972, а в реестре длин прода была только 3000. Добавлена нормальная длина 2700 мм с сырьевой 2750 мм; основная 3000 (3… | `backup_ktm2000_prod_2026-11-26_05-28-10.zip` | `backup_ktm2000_prod_2026-11-26_05-28-45.zip` | applied |
 | `#463-perimeters-3077-7121` | 2026-11-26 | 2 арт., attributes.perimeter_mm | Сверка показала расхождение периметра с чертежом: ЮП-3077 93,5 против 93 и АТ-7121 75,2 против 75. Оба размера взяты из штампа чертежа; плакаты в расчёте не участвуют. | `backup_ktm2000_prod_2026-11-25_22-51-15.zip` | `backup_ktm2000_prod_2026-11-25_22-51-40.zip` | accepted |
 | `#463-renames-leftover` | 2026-11-26 | 7 арт., name, aliases | После #461 семь артикулов остались со старым именем: #461 переименовывал только те, что были в файле 1С. Имя приводится к тому же правилу, что и переименованные соседи: «У1010»… | `backup_ktm2000_prod_2026-11-25_22-28-30.zip` | `backup_ktm2000_prod_2026-11-25_22-28-52.zip` | accepted |
 | `#463-styk-26` | 2026-11-26 | 2 арт., name, aliases | Имя «Стык Т-образный 23мм» у 325 и ЮП-2910 противоречит геометрии: КТМ/325.pdf и плакат дают сечение 26x8, P=69,3; в БД mount_width=26. 23 мм — издание 2021 года (23,2x8,5, P=64… | `backup_ktm2000_prod_2026-11-25_22-34-57.zip` | `backup_ktm2000_prod_2026-11-25_22-35-18.zip` | accepted |
@@ -22,6 +23,7 @@
 - `#461-aliases-1c` — data/storage-prod/backups/changesets/#461-aliases-1c/
 - `#463-081-perimeter` — data/storage-prod/backups/changesets/#463-081-perimeter/
 - `#463-1880-placeholder` — data/storage-prod/backups/changesets/#463-1880-placeholder/
+- `#463-2972-length-2700` — data/storage-prod/backups/changesets/#463-2972-length-2700/
 - `#463-perimeters-3077-7121` — data/storage-prod/backups/changesets/#463-perimeters-3077-7121/
 - `#463-renames-leftover` — data/storage-prod/backups/changesets/#463-renames-leftover/
 - `#463-styk-26` — data/storage-prod/backups/changesets/#463-styk-26/
