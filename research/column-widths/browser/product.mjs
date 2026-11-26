@@ -1,19 +1,19 @@
 /**
- * H4 на фактическом CSS предпросмотра (#483).
+ * H4 на фактическом CSS предпросмотра (#483), **обе переносимые колонки**.
  *
- * Стенд H4 (#479) проверял контракт исследования: `11px "Inter"`, вес 400,
- * `line-height: 20px`, `overflow-wrap: normal`. Продукт живёт на другом:
+ * Под флагом «Наименование» и «Ошибки» переносятся (основной сценарий спеки,
+ * `clamp = ∞`), и ширина каждой участвует в высоте строки. Продукт живёт на
+ * своём CSS:
  *
- * - системный стек `--font-sans` Tailwind v4 (никакого webfont не грузится);
- * - ячейка «Ошибок» — `font-medium leading-snug`: вес 500, `line-height`
- *   1.375 × 11 = 15.125 px;
- * - строка таблицы не выше 29 px: `py-0.5` (2+2) + control `h-6` (24) + 1 px
- *   бордер; текст ошибок выше этого ритма растягивает строку.
+ * - системный стек `--font-sans` Tailwind v4 (webfont не грузится);
+ * - «Ошибки» — `font-medium leading-snug`: вес 500, `line-height` 15.125 px;
+ * - «Наименование» — обычный вес 400 и наследуемый `line-height: 1.5`
+ *   (16.5 px при 11 px), `whitespace-pre-line` вместо `truncate`;
+ * - строка не ниже 29 px: `py-0.5` (2+2) + control `h-6` (24) + 1 px бордер.
  *
- * Модель обязана считать теми же числами и тем же шрифтом, иначе
- * `lines × lineHeight` разойдётся с CSS и виртуализатор получит ложную высоту.
- * Здесь та же строка меряется дважды: `pretext` (canvas с computed-стеком и
- * весом 500) и реальный DOM.
+ * Каждая строка меряется дважды по каждой колонке: `pretext` (canvas с
+ * computed-стеком и весом) против реального DOM. Высота строки — максимум по
+ * колонкам со своими `line-height`, а не один общий.
  */
 import { PROFILES, generateSheet } from "../lib/generator.mjs";
 import { CELL_PADDING_PX, buildColumns } from "../lib/columns.mjs";
@@ -21,10 +21,6 @@ import { FONT_PX } from "../lib/measurers.mjs";
 
 /** Строка таблицы: `py-0.5` (4) + control `h-6` (24) + 1 px бордер снизу. */
 export const PRODUCT_MIN_ROW_HEIGHT_PX = 29;
-/** `leading-snug` = 1.375 при `text-[11px]`. */
-export const PRODUCT_LINE_HEIGHT_PX = 1.375 * FONT_PX;
-/** Вес ячейки «Ошибок» (`font-medium`). */
-export const PRODUCT_ERRORS_FONT_WEIGHT = 500;
 /** `py-0.5` (2+2) + 1 px `border-b`. */
 export const PRODUCT_ROW_PADDING_PX = 5;
 
@@ -36,9 +32,14 @@ const HEIGHT_TOLERANCE_PX = 0.5;
 
 const SAMPLE = "АБВГДабвгдЁё 0123456789 .,—№ %";
 
-/** Ячейки «Ошибок» из продуктовой политики: перенос без потолка строк. */
+const PREVIEW_COLUMNS = buildColumns(11);
+const NAME_COLUMN = {
+  ...PREVIEW_COLUMNS.find((column) => column.id === "source_name"),
+  wrap: true,
+  clamp: null,
+};
 const ERROR_COLUMN = {
-  ...buildColumns(11).find((column) => column.id === "errors"),
+  ...PREVIEW_COLUMNS.find((column) => column.id === "errors"),
   clamp: null,
 };
 
@@ -62,14 +63,25 @@ function summarize(stats) {
   };
 }
 
+function mergeStats(target, source) {
+  target.cells += source.cells;
+  target.lineMismatch += source.lineMismatch;
+  target.heightMismatch += source.heightMismatch;
+  target.widthMismatch += source.widthMismatch;
+  target.maxLineDelta = Math.max(target.maxLineDelta, source.maxLineDelta);
+  target.maxAbsHeightDelta = Math.max(
+    target.maxAbsHeightDelta,
+    source.maxAbsHeightDelta,
+  );
+}
+
 /**
- * pretext-адаптер с параметрами CSS продукта: computed-стек семейств, вес 500,
- * размер 11 px. `fontFamily` берётся у самой ячейки — canvas резолвит стек так
- * же, как DOM, поэтому модель не привязана к конкретному установленному шрифту.
+ * pretext-адаптер: computed-стек семейств + размер + вес конкретной колонки.
+ * `fontFamily` берётся у самой ячейки — canvas резолвит стек так же, как DOM.
  */
-async function createProductMeasurer(fontFamily) {
+async function createProductMeasurer(fontFamily, weight, sizePx) {
   const pretext = await import("@chenglou/pretext");
-  const cssFont = `${PRODUCT_ERRORS_FONT_WEIGHT} ${FONT_PX}px ${fontFamily}`;
+  const cssFont = `${weight} ${sizePx}px ${fontFamily}`;
   return {
     cssFont,
     prepare(text) {
@@ -95,36 +107,39 @@ async function createProductMeasurer(fontFamily) {
       if (!prepared.text) return 1;
       return Math.max(1, pretext.measureLineStats(prepared.prepared, usable).lineCount);
     },
-    clearCache() {
-      pretext.clearCache();
-    },
   };
 }
 
-function renderTable(width, values) {
+function renderTable(width, nameValues, errorValues) {
   const table = document.createElement("table");
   table.className = "product-table";
-  // Ширина таблицы — ровно сумма колонок: content + 12 padding + control 24.
-  table.style.width = `${width + CELL_PADDING_PX + 24}px`;
+  // Сумма колонок: name + errors + control 24.
+  table.style.width = `${width * 2 + CELL_PADDING_PX * 2 + 24}px`;
 
   const colgroup = document.createElement("colgroup");
-  const contentCol = document.createElement("col");
-  contentCol.style.width = `${width + CELL_PADDING_PX}px`;
+  for (const column of ["name", "errors"]) {
+    const col = document.createElement("col");
+    col.style.width = `${width + CELL_PADDING_PX}px`;
+    colgroup.appendChild(col);
+  }
   const controlCol = document.createElement("col");
   controlCol.style.width = "24px";
-  colgroup.append(contentCol, controlCol);
+  colgroup.appendChild(controlCol);
   table.appendChild(colgroup);
 
   const tbody = document.createElement("tbody");
-  for (const value of values) {
+  for (let index = 0; index < nameValues.length; index += 1) {
     const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.className = "errors";
-    td.textContent = value ?? "";
+    const name = document.createElement("td");
+    name.className = "name";
+    name.textContent = nameValues[index] ?? "";
+    const errors = document.createElement("td");
+    errors.className = "errors";
+    errors.textContent = errorValues[index] ?? "";
     const control = document.createElement("td");
     control.className = "control";
     control.innerHTML = '<span class="control-box"></span>';
-    tr.append(td, control);
+    tr.append(name, errors, control);
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
@@ -143,26 +158,53 @@ function domLineCount(node) {
   return tops.size;
 }
 
+function contentWidthOf(td) {
+  const style = getComputedStyle(td);
+  return (
+    td.getBoundingClientRect().width -
+    Number.parseFloat(style.paddingLeft) -
+    Number.parseFloat(style.paddingRight)
+  );
+}
+
+function readCellFont(className) {
+  const probeTable = document.createElement("table");
+  probeTable.className = "product-table";
+  probeTable.innerHTML = `<tbody><tr><td class="${className}"></td></tr></tbody>`;
+  const cell = probeTable.querySelector("td");
+  cell.textContent = SAMPLE;
+  document.body.appendChild(probeTable);
+  const style = getComputedStyle(cell);
+  const font = {
+    family: style.fontFamily,
+    weight: Number(style.fontWeight) || 400,
+    sizePx: Number.parseFloat(style.fontSize) || FONT_PX,
+    lineHeightPx: Number.parseFloat(style.lineHeight),
+  };
+  probeTable.remove();
+  return font;
+}
+
 async function run() {
   const startedAt = new Date().toISOString();
   const status = document.getElementById("status");
   await document.fonts.ready;
 
-  const probeTable = document.createElement("table");
-  probeTable.className = "product-table";
-  probeTable.innerHTML = '<tbody><tr><td class="errors"></td></tr></tbody>';
-  const probeCell = probeTable.querySelector("td");
-  probeCell.textContent = SAMPLE;
-  document.body.appendChild(probeTable);
-  const style = getComputedStyle(probeCell);
-  const fontFamily = style.fontFamily;
-  const fontWeight = Number(style.fontWeight);
-  const lineHeight = Number.parseFloat(style.lineHeight);
-  probeTable.remove();
-
-  const measurer = await createProductMeasurer(fontFamily);
+  const nameFont = readCellFont("name");
+  const errorsFont = readCellFont("errors");
+  const nameMeasurer = await createProductMeasurer(
+    nameFont.family,
+    nameFont.weight,
+    nameFont.sizePx,
+  );
+  const errorsMeasurer = await createProductMeasurer(
+    errorsFont.family,
+    errorsFont.weight,
+    errorsFont.sizePx,
+  );
 
   const byProfile = {};
+  const byColumn = { name: emptyStats(), errors: emptyStats() };
   const overall = emptyStats();
   const samples = [];
 
@@ -170,74 +212,78 @@ async function run() {
     const sheet = generateSheet({
       profile,
       rows: ROWS,
-      columns: [ERROR_COLUMN],
+      columns: [NAME_COLUMN, ERROR_COLUMN],
       seed: SEED,
     });
-    const values = sheet.rows.map((row) => row.values[ERROR_COLUMN.id] ?? "");
+    const nameValues = sheet.rows.map((row) => row.values[NAME_COLUMN.id] ?? "");
+    const errorValues = sheet.rows.map((row) => row.values[ERROR_COLUMN.id] ?? "");
     const profileStats = emptyStats();
 
     for (const width of WIDTHS) {
-      const table = renderTable(width, values);
+      const table = renderTable(width, nameValues, errorValues);
       document.body.appendChild(table);
       void table.offsetHeight;
 
       const rows = table.tBodies[0].rows;
       for (let index = 0; index < rows.length; index += 1) {
         const tr = rows[index];
-        const td = tr.cells[0];
-        const text = values[index] ?? "";
-        if (!text) continue;
-
-        const cellStyle = getComputedStyle(td);
-        const contentWidth =
-          td.getBoundingClientRect().width -
-          Number.parseFloat(cellStyle.paddingLeft) -
-          Number.parseFloat(cellStyle.paddingRight);
-        const widthOk = Math.abs(contentWidth - width) <= 0.51;
+        const nameCell = tr.cells[0];
+        const errorCell = tr.cells[1];
+        const nameText = nameValues[index] ?? "";
+        const errorText = errorValues[index] ?? "";
+        const nameWidth = contentWidthOf(nameCell);
+        const errorWidth = contentWidthOf(errorCell);
+        const widthOk =
+          Math.abs(nameWidth - width) <= 0.51 &&
+          Math.abs(errorWidth - width) <= 0.51;
         if (!widthOk && samples.length < 40) {
-          samples.push({ profile, width, contentWidth, kind: "width" });
+          samples.push({ profile, width, nameWidth, errorWidth, kind: "width" });
         }
 
-        const prepared = measurer.prepare(text);
-        const predictedLines = measurer.lineCount(prepared, contentWidth);
-        const domLines = domLineCount(td);
+        const preparedName = nameMeasurer.prepare(nameText);
+        const preparedErrors = errorsMeasurer.prepare(errorText);
+        const nameLines = nameText ? nameMeasurer.lineCount(preparedName, nameWidth) : 0;
+        const errorLines = errorText
+          ? errorsMeasurer.lineCount(preparedErrors, errorWidth)
+          : 0;
+        const domNameLines = nameText ? domLineCount(nameCell) : 0;
+        const domErrorLines = errorText ? domLineCount(errorCell) : 0;
         const predictedHeight = Math.max(
           PRODUCT_MIN_ROW_HEIGHT_PX,
-          predictedLines * lineHeight + PRODUCT_ROW_PADDING_PX,
+          Math.max(
+            nameLines * nameFont.lineHeightPx,
+            errorLines * errorsFont.lineHeightPx,
+          ) + PRODUCT_ROW_PADDING_PX,
         );
         const domHeight = tr.getBoundingClientRect().height;
-        const lineMatch = predictedLines === domLines;
-        const heightMatch = Math.abs(predictedHeight - domHeight) <= HEIGHT_TOLERANCE_PX;
+
+        for (const [column, predicted, dom] of [
+          ["name", nameLines, domNameLines],
+          ["errors", errorLines, domErrorLines],
+        ]) {
+          const stats = byColumn[column];
+          const matches = predicted === dom;
+          stats.cells += 1;
+          if (!matches) {
+            stats.lineMismatch += 1;
+            stats.maxLineDelta = Math.max(stats.maxLineDelta, Math.abs(predicted - dom));
+          }
+          if (!widthOk) stats.widthMismatch += 1;
+          if (!matches && samples.length < 40) {
+            samples.push({ profile, width, column, nameText: nameText.slice(0, 80), errorText: errorText.slice(0, 80), predicted, dom });
+          }
+        }
 
         for (const target of [overall, profileStats]) {
           target.cells += 1;
           if (!widthOk) target.widthMismatch += 1;
-          if (!lineMatch) {
-            target.lineMismatch += 1;
-            target.maxLineDelta = Math.max(
-              target.maxLineDelta,
-              Math.abs(predictedLines - domLines),
-            );
-          }
-          if (!heightMatch) {
+          if (Math.abs(predictedHeight - domHeight) > HEIGHT_TOLERANCE_PX) {
             target.heightMismatch += 1;
             target.maxAbsHeightDelta = Math.max(
               target.maxAbsHeightDelta,
               Math.abs(predictedHeight - domHeight),
             );
           }
-        }
-        if (!lineMatch && samples.length < 40) {
-          samples.push({
-            profile,
-            width,
-            text,
-            predictedLines,
-            domLines,
-            predictedHeight,
-            domHeight,
-            maxWordWidth: prepared.maxWordWidth,
-          });
         }
       }
       table.remove();
@@ -247,7 +293,14 @@ async function run() {
     if (status) status.textContent = `Профиль ${profile}: готово`;
   }
 
+  mergeStats(overall, byColumn.name);
+  mergeStats(overall, byColumn.errors);
   const summary = summarize(overall);
+  const byColumnSummary = {
+    name: summarize(byColumn.name),
+    errors: summarize(byColumn.errors),
+  };
+
   const result = {
     meta: {
       ticket: 483,
@@ -257,14 +310,13 @@ async function run() {
       rows: ROWS,
       widths: WIDTHS,
       profiles: PROFILES,
-      cell: "errors (font-medium 500, leading-snug)",
-      fontPx: FONT_PX,
-      fontWeight,
-      fontFamily,
-      lineHeight,
+      columns: {
+        name: { ...nameFont, cell: "source_name, перенос (whitespace-pre-line)" },
+        errors: { ...errorsFont, cell: "errors, font-medium leading-snug" },
+      },
       minRowHeightPx: PRODUCT_MIN_ROW_HEIGHT_PX,
       rowPaddingPx: PRODUCT_ROW_PADDING_PX,
-      cssFont: measurer.cssFont,
+      cssFonts: { name: nameMeasurer.cssFont, errors: errorsMeasurer.cssFont },
       overflowWrap: "normal",
       devicePixelRatio: window.devicePixelRatio,
       userAgent: navigator.userAgent,
@@ -279,6 +331,7 @@ async function run() {
       widthMismatch: summary.widthMismatch,
       maxLineDelta: summary.maxLineDelta,
       maxAbsHeightDelta: summary.maxAbsHeightDelta,
+      byColumn: byColumnSummary,
       pass:
         summary.lineMismatchRate < H4_THRESHOLD &&
         summary.heightMismatchRate < H4_THRESHOLD,

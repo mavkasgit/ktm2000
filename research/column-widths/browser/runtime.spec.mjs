@@ -57,7 +57,7 @@ test("prepare + search укладываются в порог §15 (CPU 4×)", a
   const line = (label, summary) =>
     `${label}: медиана ${summary.median} мс, p95 ${summary.p95} мс, max ${summary.max} мс`;
   const lines = [
-    `seed=${meta.seed} rows=${meta.rows} cols=${meta.columnCount} reps=${meta.reps} CPU=${meta.cpuThrottling}× DPR=${meta.devicePixelRatio}`,
+    `seed=${meta.seed} rows=${meta.rows} fitRows=${meta.fitRows} cols=${meta.columnCount} reps=${meta.reps} CPU=${meta.cpuThrottling}× DPR=${meta.devicePixelRatio}`,
     line("prepare", overall.prepare),
     line("search (включая buildCostModel)", overall.search),
     line("итого", overall.total),
@@ -69,7 +69,7 @@ test("prepare + search укладываются в порог §15 (CPU 4×)", a
     lines.push(
       `  ${config.profile} @ ${config.tableWidth}: prepare ${config.summary.prepare.median} / ` +
         `search ${config.summary.search.median} / итого ${config.summary.total.median} мс (p95 ${config.summary.total.p95}), ` +
-        `эквивалентность полной подготовке: Δwidth ${config.diagnostics.equivalence.maxWidthDeltaPx} px`,
+        `высота ${config.diagnostics.heights.deltaVsCurrentFixPct}% (к фиксу), Δwidth ${config.diagnostics.equivalence.maxWidthDeltaPx} px`,
     );
   }
   console.log(lines.join("\n"));

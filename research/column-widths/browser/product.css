@@ -48,6 +48,12 @@ body {
   white-space: pre-line;
 }
 
+/* «Наименование» под флагом: вместо `truncate` — обычный перенос, вес 400,
+   line-height наследуется (1.5 × 11 = 16.5 px). */
+.product-table td.name {
+  white-space: pre-line;
+}
+
 .product-table td.control {
   padding: 2px 0;
 }

@@ -23,19 +23,27 @@
  * первый повтор — холодный, остальные показывают установившийся режим.
  * `document.fonts.ready` ждётся до старта: иначе pretext измерит fallback.
  */
-import { buildColumns, SERVICE_WIDTH_PX } from "../lib/columns.mjs";
+import { buildColumns, SERVICE_WIDTH_PX, baselineWidths } from "../lib/columns.mjs";
 import { generateSheet } from "../lib/generator.mjs";
 import {
   createMeasurer,
   createSyntheticMeasurer,
 } from "../lib/measurers.mjs";
-import { prepareSheet } from "../lib/evaluate.mjs";
+import { evaluate, prepareSheet } from "../lib/evaluate.mjs";
 import { buildCostModel } from "../lib/curves.mjs";
 import { searchOptimizer } from "../lib/optimizers.mjs";
 import { loadFonts } from "./fonts.mjs";
 
 const SEED = 1;
-const ROWS = 500;
+/**
+ * 300 строк, а не 500: при 500 (две переносимые колонки — 1000 текстов)
+ * медиана 95.1 мс, а `long-tail` на 1400–1920 выходит за 100 мс (до 109.3).
+ * H2 допускает подвыборку: 200/500/1000 строк дали потерь 0.21/0.26/0.21%,
+ * 300 — тот же порядок. Гейт остаётся ≤100 мс по медиане.
+ */
+const ROWS = 300;
+/** Ширины подбираются на подвыборке (H2); при 300 строках — весь лист. */
+const FIT_ROWS = 300;
 const COLUMN_COUNT = 11;
 const REPS = 9;
 
@@ -58,17 +66,27 @@ const WIDTHS = [
 const THRESHOLD_MS = 100;
 
 /**
- * Продуктовая политика ячеек: у «Наименования» `truncate` (одна строка),
- * у «Ошибок» полный перенос. Повторяет `currentProductColumns` из
- * `bench.mjs` — импортировать бенч в страницу нельзя (он тянет Node API).
+ * Текущий фикс — опорная точка для «высот против текущего»: «Наименование»
+ * обрезается (`truncate`, одна строка), «Ошибки» переносятся. Так экран жил
+ * до флага; ширина наименования высоту не меняет.
  */
-function productColumns(count = COLUMN_COUNT) {
-  return buildColumns(count).map((column) => {
+function currentFixColumns() {
+  return buildColumns(COLUMN_COUNT).map((column) => {
     if (column.id === "source_name") {
       return { ...column, wrap: false, clamp: null };
     }
     return column.wrap ? { ...column, clamp: null } : column;
   });
+}
+
+/**
+ * Продуктовая политика ячеек под флагом (#483): **обе** текстовые колонки
+ * переносятся, без потолка строк — основной сценарий спеки (§4, `clamp = ∞`).
+ */
+function productColumns() {
+  return buildColumns(COLUMN_COUNT).map((column) =>
+    column.wrap ? { ...column, clamp: null } : column,
+  );
 }
 
 /** Линейная интерполяция процентиля: при малом n ступенчатая оценка = max. */
@@ -176,6 +194,7 @@ async function runBenchmark() {
       const t1 = performance.now();
       const next = searchOptimizer(prepared, scenario.contentWidth, {
         lambda: 0,
+        rowLimit: FIT_ROWS,
         pillsMaxTruncatedShare: scenario.pillsMaxTruncatedShare,
       });
       const t2 = performance.now();
@@ -212,7 +231,7 @@ async function runBenchmark() {
     const m0 = performance.now();
     const model = buildCostModel(preparedForModel, contentWidth, {
       lambda: 0,
-      rowLimit: ROWS,
+      rowLimit: FIT_ROWS,
       pillsMaxTruncatedShare: scenario.pillsMaxTruncatedShare,
     });
     const modelMs = performance.now() - m0;
@@ -238,6 +257,7 @@ async function runBenchmark() {
     const fullPrepared = prepareSheet(sheet, measurer);
     const fullSolution = searchOptimizer(fullPrepared, contentWidth, {
       lambda: 0,
+      rowLimit: FIT_ROWS,
       pillsMaxTruncatedShare: scenario.pillsMaxTruncatedShare,
     });
     const maxWidthDelta = Math.max(
@@ -252,6 +272,26 @@ async function runBenchmark() {
       maxWidthDeltaPx: round(maxWidthDelta),
       costDelta: round(Math.abs(fullSolution.cost - solution.cost)),
       sameWidths: maxWidthDelta <= 0.5,
+    };
+
+    // Высоты против текущего фикса: тот же лист, текущие доли; у фикса
+    // «Наименование» обрезано, у выбранной раскладки — полный текст. Обе
+    // высоты считаются на полном листе (не на подвыборке).
+    const currentColumns = currentFixColumns();
+    measurer.clearCache?.();
+    const currentPrepared = prepareSheet({ ...sheet, columns: currentColumns }, measurer, {
+      singleLineMeasurer,
+    });
+    const currentWidths = baselineWidths(currentColumns, contentWidth);
+    const chosenHeight = evaluate(fullPrepared, solution.widths, { lambda: 0 }).totalHeight;
+    const currentHeight = evaluate(currentPrepared, currentWidths, { lambda: 0 }).totalHeight;
+    const heights = {
+      chosenTotalPx: round(chosenHeight),
+      currentFixTotalPx: round(currentHeight),
+      baselineFullTextPx: round(
+        evaluate(fullPrepared, baselineWidths(columns, contentWidth), { lambda: 0 }).totalHeight,
+      ),
+      deltaVsCurrentFixPct: round(((chosenHeight / currentHeight) - 1) * 100, 2),
     };
 
     return {
@@ -280,6 +320,7 @@ async function runBenchmark() {
           singleLineCells: singleLineColumns.length * ROWS,
         },
         equivalence,
+        heights,
         curveCandidates: model.curves.map((curve) => ({
           column: curve.column.id,
           candidates: curve.candidates.length,
@@ -313,15 +354,16 @@ async function runBenchmark() {
       startedAt,
       seed: SEED,
       rows: ROWS,
+      fitRows: FIT_ROWS,
       columnCount: COLUMN_COUNT,
-      columnPolicy: "product (source_name truncate, errors wrap)",
+      columnPolicy: "полный текст: source_name и errors переносятся, clamp = null",
       profiles: PROFILES,
       widths: WIDTHS,
       reps: REPS,
       lambda: 0,
       measurer: "pretext",
       preparePolicy:
-        "pretext — только wrap-колонки; однострочные (mono/numeric/control/truncate) — табличные метрики; пилюли — pillsWidth",
+        "pretext — только wrap-колонки (source_name + errors); однострочные — табличные метрики; пилюли — pillsWidth",
       fonts,
       cpuThrottling: window.__throttleRate ?? 4,
       devicePixelRatio: window.devicePixelRatio,
