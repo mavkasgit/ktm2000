@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback, Fragment, memo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useResizeObserver } from "@siberiacancode/reactuse";
 import { AlertCircle, CheckCircle, Download, Loader2 } from "lucide-react";
 
 import {
@@ -1178,19 +1179,20 @@ export function ImportRemaindersDialog({
 
   // ── Оптимальные ширины колонок (#483, за флагом) ───────────────────────
   // Ширина контейнера — единственный вход, который пересчитывает раскладку.
-  // Слушаем после монтирования рамки таблицы (шаг `preview`); сам пересчёт
-  // дебаунсит хук.
+  // Наблюдаем рамку таблицы (шаг `preview`); сам пересчёт дебаунсит хук.
+  // `useResizeObserver` из reactuse: свой `new ResizeObserver` запрещён
+  // (reactuse-diff). Берём `clientWidth` узла, а не `contentRect`, — ширины
+  // таблицы считаются по внешней рамке скролла.
   const [previewWidth, setPreviewWidth] = useState(0);
-  useEffect(() => {
-    const node = scrollContainerRef.current;
-    if (!node) return;
-    const update = () => setPreviewWidth(node.clientWidth);
-    update();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(update);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [step]);
+  useResizeObserver(scrollContainerRef, {
+    enabled: step === "preview",
+    onChange: () => {
+      const width = scrollContainerRef.current?.clientWidth ?? 0;
+      if (width > 0) {
+        setPreviewWidth((previous) => (previous === width ? previous : width));
+      }
+    },
+  });
 
   const optimalWidths = useOptimalColumnWidths({
     enabled: OPTIMAL_COLUMN_WIDTHS_ENABLED,

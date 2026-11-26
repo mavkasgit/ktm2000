@@ -248,7 +248,7 @@ export function pillsFloorWidth(
   cellPaddingPx: number = PREVIEW_CELL_PADDING_PX,
 ): number {
   if (pillWidths.length === 0) return minPx;
-  const sorted = [...pillWidths].sort((a, b) => a - b);
+  const sorted = pillWidths.toSorted((a, b) => a - b);
   const allowed = Math.floor(limitShare * sorted.length + 1e-9);
   const index = Math.max(0, sorted.length - 1 - allowed);
   return Math.max(minPx, sorted[index] + cellPaddingPx);
