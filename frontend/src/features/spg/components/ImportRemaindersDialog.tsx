@@ -42,6 +42,7 @@ import { isOptimalColumnWidthsEnabled } from "../lib/optimalColumnWidthsFlag";
 import {
   previewErrorsCellText,
   previewErrorsText,
+  previewNameCellClass,
 } from "../lib/remainderPreviewErrors";
 import { PREVIEW_MIN_ROW_HEIGHT_PX } from "../lib/previewColumnWidths";
 import { useOptimalColumnWidths } from "../lib/useOptimalColumnWidths";
@@ -370,7 +371,7 @@ const PreviewRow = memo(function PreviewRow({
           ) : null}
         </td>
         <td
-          className={`px-1.5 py-0.5 ${nameWraps ? "whitespace-pre-line" : "truncate"} ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
+          className={`px-1.5 py-0.5 ${previewNameCellClass(nameWraps)} ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
           title={item.source_name ?? item.product_name ?? undefined}
         >
           {item.product_name ?? item.source_name ?? "—"}

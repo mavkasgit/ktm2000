@@ -31,6 +31,15 @@ export function previewErrorsText(item: RemainderImportItem): string {
 }
 
 /**
+ * Класс ячейки «Наименование»: под флагом #483 — перенос
+ * (`whitespace-pre-line`, ширина посчитана, высота предсказана), без флага —
+ * прежний `truncate` в одну строку.
+ */
+export function previewNameCellClass(nameWraps: boolean): string {
+  return nameWraps ? "whitespace-pre-line" : "truncate";
+}
+
+/**
  * Текст, который печатает ячейка «Наименование»: имя каталога, иначе имя из
  * 1С, иначе прочерк. Модель считает перенос по этому же тексту.
  */
