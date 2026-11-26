@@ -7,18 +7,22 @@
 """
 from __future__ import annotations
 
+import pytest
 from app.services.import_normalization import (
     SkuEntry,
     match_sku_cell,
     match_sku_loose,
     match_sku_numeric,
     match_sku_parts,
+    normalize_sku,
+    normalize_sku_sql,
     numeric_sku_key,
     sku_compound_parts,
     sku_entry,
     sku_loose,
     sku_tail,
 )
+from sqlalchemy import literal, select
 
 
 def test_compound_parts_keeps_cell_order():
@@ -225,3 +229,17 @@ def test_loose_step_is_a_public_matcher():
     ambiguous = match_sku_loose("юп1", _catalog("ЮП 1", "ЮП-1"))
     assert ambiguous.rejected is True
     assert ambiguous.ambiguous_indexes == (0, 1)
+
+
+@pytest.mark.asyncio
+async def test_normalize_sku_sql_matches_python_rule(session) -> None:
+    """SQL-клон ``normalize_sku`` не расходится с Python на тех же входах.
+
+    Предфильтр остатков выбирает кандидатов в SQL, решение принимает Python:
+    если клоны разойдутся, кандидат с типографским тире или NBSP просто не
+    доедет до матчера. Дефис между буквой и цифрой здесь не снимается — это
+    правило ``sku_loose``, а не нормализации.
+    """
+    for value in ("  ЮП–1875\u00A0 ", "ALS-1103", " 12-34 ", "юп 1875", "ALS\t1103"):
+        sql_value = await session.scalar(select(normalize_sku_sql(literal(value))))
+        assert sql_value == normalize_sku(value), value
