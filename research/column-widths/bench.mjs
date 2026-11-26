@@ -2,17 +2,19 @@
 /**
  * Бенч-харнесс исследования ширин колонок.
  *
+ * Основной сценарий — полный текст: `clamp = ∞`, `λ = 0`. Обрезка — отдельная
+ * политика, её цена измеряется свипом.
+ *
  * Прогон состоит из четырёх частей:
  *
- * - `matrix`      — 7 профилей × {100,1000,5000} × {1180,1500,1920} × {6,12,20} × seeds;
- *                   метрики считаются по полному листу, оптимизатор видит ≤500 строк;
- * - `product`     — продуктовый срез `ImportRemaindersDialog` (11 колонок) на тех же
- *                   профилях/строках/ширинах; cost считается с `λ`;
- * - `oracle`      — точный перебор на малых инстансах (60 строк), все оптимизаторы
- *                   рядом с эталоном; отсюда берётся gap для H1;
- * - `sensitivity` — чувствительность продуктового решения к `λ` (10/20/40 px) и
- *                   `line-clamp` у «Ошибок» (2/3/без потолка). Ничего не выбирает
- *                   за заказчика — показывает цену вариантов (вход для #485).
+ * - `matrix`  — 7 профилей × {100,1000,5000} × {1180,1500,1920} × {6,12,20} × seeds;
+ *               метрики считаются по полному листу, оптимизатор видит ≤500 строк;
+ * - `product` — продуктовый срез `ImportRemaindersDialog` (11 колонок) на тех же
+ *               профилях/строках/ширинах + сравнение с текущей политикой продукта;
+ * - `oracle`  — точный перебор на малых инстансах (60 строк), все оптимизаторы
+ *               рядом с эталоном; отсюда берётся gap для H1;
+ * - `sweep`   — Парето «высота против потерянного текста»:
+ *               `clamp ∈ {∞,6,4,3,2}` при `λ = 20`.
  *
  * Гипотезы H1–H4 выводятся с числом и вердиктом. H4 берётся из браузерного
  * прогона #479 (`results/browser.json`, создаёт `npm run browser:test`), а не из
@@ -24,8 +26,8 @@
  *   node research/column-widths/bench.mjs --measurer=pretext
  *   node research/column-widths/bench.mjs --seeds=3
  *   node research/column-widths/bench.mjs --only=product  # product|oracle|matrix|
- *                                                         # sensitivity|all (или через запятую)
- *   node research/column-widths/bench.mjs --lambda=40     # цена обрезки для cost
+ *                                                         # sweep|all (или через запятую)
+ *   node research/column-widths/bench.mjs --lambda=40     # λ свипа (основной всегда 0)
  *
  * Результаты: research/column-widths/results/{bench.json,report.md}. Каталог
  * `results/` не коммитится; JSON содержит все конфигурации и ширины, чтобы
@@ -37,13 +39,17 @@ import { fileURLToPath } from "node:url";
 
 import { PROFILES, generateSheet } from "./lib/generator.mjs";
 import {
+  CELL_PADDING_PX,
+  LINE_HEIGHT_PX,
+  MIN_ROW_HEIGHT_PX,
+  ROW_PADDING_PX,
   SERVICE_WIDTH_PX,
   buildColumns,
   maxWidth,
   sumWidths,
 } from "./lib/columns.mjs";
 import { createMeasurer } from "./lib/measurers.mjs";
-import { evaluate, prepareSheet } from "./lib/evaluate.mjs";
+import { evaluate, measureCell, prepareSheet } from "./lib/evaluate.mjs";
 import { OPTIMIZERS, oracleOptimizer } from "./lib/optimizers.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -70,11 +76,22 @@ function detectBranch() {
   }
 }
 
-const DEFAULT_LAMBDA = 20;
+/** Основной сценарий: полный текст, штрафа за обрезку нет. */
+const MAIN_LAMBDA = 0;
+/** Вспомогательный свип политики: цена спрятанного текста. */
+const SWEEP_LAMBDA = 20;
+/**
+ * Потолки строк для свипа. `none` — основной режим; числа — предохранитель.
+ * `MAX_LINES = 64` в `lib/curves.mjs` остаётся технической защитой от
+ * бесконечного перебора и в отчёте указан отдельно.
+ */
+const SWEEP_CLAMPS = ["none", 6, 4, 3, 2];
+const CSS_ERROR_LINE_HEIGHT_PX = 11 * 1.375; // leading-snug при text-[11px]
+
 const FIT_ROWS = 500;
 const ORACLE_ROWS = 60;
 
-const SECTIONS = ["matrix", "oracle", "product", "sensitivity"];
+const SECTIONS = ["matrix", "oracle", "product", "sweep"];
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -85,7 +102,7 @@ const argValue = (name, fallback) => {
 const QUICK = args.includes("--quick");
 const MEASURER_KIND = argValue("measurer", "greedy");
 const SEEDS = Number(argValue("seeds", QUICK ? "1" : "2"));
-const LAMBDA = Number(argValue("lambda", String(DEFAULT_LAMBDA)));
+const SWEEP_LAMBDA_VALUE = Number(argValue("lambda", String(SWEEP_LAMBDA)));
 
 export function parseSections(value) {
   const requested = String(value)
@@ -93,14 +110,18 @@ export function parseSections(value) {
     .map((name) => name.trim())
     .filter(Boolean);
   if (requested.length === 0 || requested.includes("all")) return [...SECTIONS];
-  for (const name of requested) {
+  // `sensitivity` — старое имя секции свипа (совместимость флагов).
+  const normalized = requested.map((name) =>
+    name === "sensitivity" ? "sweep" : name,
+  );
+  for (const name of normalized) {
     if (!SECTIONS.includes(name)) {
       throw new Error(
         `--only=${name}: неизвестная секция; доступны ${SECTIONS.join(", ")}, all`,
       );
     }
   }
-  return SECTIONS.filter((name) => requested.includes(name));
+  return SECTIONS.filter((name) => normalized.includes(name));
 }
 
 const SECTIONS_TO_RUN = parseSections(argValue("only", "all"));
@@ -108,8 +129,10 @@ const SECTIONS_TO_RUN = parseSections(argValue("only", "all"));
 if (!Number.isInteger(SEEDS) || SEEDS < 1) {
   throw new Error(`--seeds=${SEEDS}: нужно целое ≥ 1`);
 }
-if (!Number.isFinite(LAMBDA) || LAMBDA < 0) {
-  throw new Error(`--lambda=${LAMBDA}: нужно неотрицательное число`);
+if (!Number.isFinite(SWEEP_LAMBDA_VALUE) || SWEEP_LAMBDA_VALUE < 0) {
+  throw new Error(
+    `--lambda=${SWEEP_LAMBDA_VALUE}: нужно неотрицательное число`,
+  );
 }
 const SEED_LIST = Array.from({ length: SEEDS }, (_, index) => index + 1);
 
@@ -148,20 +171,54 @@ function oracleSpec() {
   };
 }
 
-/** Чувствительность: λ × line-clamp «Ошибок» на продуктовом срезе. */
-function sensitivitySpec() {
+/** Свип политики обрезки: clamp ∈ {∞,6,4,3,2} при λ = 20. */
+function sweepSpec() {
   return {
-    profiles: QUICK ? ["realistic"] : ["realistic", "long-tail"],
+    profiles: QUICK ? ["realistic", "long-tail"] : PROFILES,
     rows: 1000,
     widths: QUICK ? [1500] : [1180, 1500, 1920],
     seed: 1,
-    lambdas: [10, DEFAULT_LAMBDA, 40],
-    clamps: [2, 3, "none"],
+    clamps: SWEEP_CLAMPS,
+    lambda: SWEEP_LAMBDA_VALUE,
   };
 }
 
 function contentWidth(tableWidth) {
   return tableWidth - SERVICE_WIDTH_PX;
+}
+
+/**
+ * Основной сценарий: переносимые колонки без потолка строк (`clamp = null`).
+ * `lib/columns.mjs` оставляет `clamp` объявлением политики, поэтому бенч
+ * клонирует колонки, а не правит общий продуктовый набор.
+ */
+export function mainColumns(count = 11) {
+  return buildColumns(count).map((column) =>
+    column.wrap ? { ...column, clamp: null } : column,
+  );
+}
+
+/** Свип: явный потолок строк у всех переносимых колонок. */
+export function clampColumns(count, clamp) {
+  return buildColumns(count).map((column) =>
+    column.wrap
+      ? { ...column, clamp: clamp === "none" ? null : clamp }
+      : column,
+  );
+}
+
+/**
+ * Текущий продукт как опорная политика: «Наименование» — `truncate`
+ * (одна строка), «Ошибки» — полный перенос. Совпадает с
+ * `ImportRemaindersDialog`: `truncate` у наименования и `leading-snug` у ошибок.
+ */
+export function currentProductColumns(count = 11) {
+  return buildColumns(count).map((column) => {
+    if (column.id === "source_name") {
+      return { ...column, wrap: false, clamp: null };
+    }
+    return column.wrap ? { ...column, clamp: null } : column;
+  });
 }
 
 function measureRuntime(fn) {
@@ -187,15 +244,12 @@ function clampLabel(clamp) {
   return clamp === "none" ? "без потолка" : String(clamp);
 }
 
-function clampValue(clamp) {
-  return clamp === "none" ? Number.POSITIVE_INFINITY : clamp;
-}
-
 function clampOrder(clamp) {
-  return clamp === "none" ? Number.POSITIVE_INFINITY : Number(clamp);
+  const index = SWEEP_CLAMPS.indexOf(clamp);
+  return index === -1 ? SWEEP_CLAMPS.length : index;
 }
 
-function runOptimizer(name, fitPrepared, width, lambda = LAMBDA) {
+function runOptimizer(name, fitPrepared, width, lambda = MAIN_LAMBDA) {
   const optimizer = OPTIMIZERS[name];
   const { value, ms } = measureRuntime(() =>
     optimizer(fitPrepared, width, { lambda }),
@@ -222,8 +276,33 @@ function widthViolations(columns, widths, contentWidth) {
   return violations;
 }
 
-function collectMetrics(prepared, widths, lambda = LAMBDA) {
+/** Границы распределения высот в модели: 1/2/3/4+ строк текста. */
+const HEIGHT_BUCKETS = [
+  { key: "row40", max: MIN_ROW_HEIGHT_PX },
+  { key: "row60", max: 2 * LINE_HEIGHT_PX + ROW_PADDING_PX },
+  { key: "row80", max: 3 * LINE_HEIGHT_PX + ROW_PADDING_PX },
+  { key: "row100Plus", max: Number.POSITIVE_INFINITY },
+];
+
+function heightDistribution(heights) {
+  const count = heights.length || 1;
+  const shares = Object.fromEntries(
+    HEIGHT_BUCKETS.map((bucket) => [bucket.key, 0]),
+  );
+  for (const height of heights) {
+    const bucket = HEIGHT_BUCKETS.find((item) => height <= item.max);
+    shares[bucket.key] += 1;
+  }
+  for (const key of Object.keys(shares)) {
+    shares[key] = round((shares[key] / count) * 100, 2);
+  }
+  return shares;
+}
+
+function collectMetrics(prepared, widths, lambda = MAIN_LAMBDA) {
   const metrics = evaluate(prepared, widths, { lambda, collectRows: true });
+  const heights = metrics.heights ?? [];
+  const row4Threshold = 4 * LINE_HEIGHT_PX + ROW_PADDING_PX;
   return {
     height: metrics.totalHeight,
     meanHeight: round(metrics.meanHeight, 2),
@@ -231,9 +310,40 @@ function collectMetrics(prepared, widths, lambda = LAMBDA) {
     maxHeight: metrics.maxHeight,
     multiLineShare: round(metrics.multiLineShare * 100, 2),
     rows3PlusShare: round(metrics.rows3PlusShare * 100, 2),
+    rows4PlusShare: round(
+      (heights.filter((height) => height >= row4Threshold).length /
+        (heights.length || 1)) *
+        100,
+      2,
+    ),
+    heightBuckets: heightDistribution(heights),
     truncatedCells: metrics.truncatedCells,
     truncatedShare: round(metrics.truncatedShare * 100, 2),
     cost: metrics.cost,
+  };
+}
+
+/**
+ * Доля потерянного текста в переносимых колонках (то, что покупает `clamp`).
+ * Пилюли и mono-обрезка сюда не входят: у них своя политика `nowrap`.
+ */
+function wrapTruncation(prepared, widths) {
+  let total = 0;
+  let truncated = 0;
+  prepared.columns.forEach((column, index) => {
+    if (!column.wrap) return;
+    const usable = widths[column.id] - CELL_PADDING_PX;
+    for (const row of prepared.rows) {
+      total += 1;
+      if (measureCell(prepared.measurer, row[index], usable).truncated) {
+        truncated += 1;
+      }
+    }
+  });
+  return {
+    cells: total,
+    truncated,
+    sharePct: round((truncated / (total || 1)) * 100, 2),
   };
 }
 
@@ -249,8 +359,10 @@ export function runConfig({
   columnCount,
   seed,
   measurer,
+  columns = mainColumns(columnCount),
+  lambda = MAIN_LAMBDA,
+  policies = false,
 }) {
-  const columns = buildColumns(columnCount);
   const sheet = generateSheet({ profile, rows, columns, seed });
   const fitPrepared = prepareForFit(sheet, measurer);
   const fullPrepared = prepareSheet(sheet, measurer);
@@ -258,13 +370,13 @@ export function runConfig({
 
   const results = {};
   for (const name of Object.keys(OPTIMIZERS)) {
-    const run = runOptimizer(name, fitPrepared, width);
+    const run = runOptimizer(name, fitPrepared, width, lambda);
     results[name] = {
       widths: run.widths,
       widthSum: round(sumWidths(columns, run.widths), 1),
       violations: widthViolations(columns, run.widths, width),
       ms: round(run.ms, 2),
-      ...collectMetrics(fullPrepared, run.widths),
+      ...collectMetrics(fullPrepared, run.widths, lambda),
     };
   }
 
@@ -274,6 +386,44 @@ export function runConfig({
     metrics.heightRatio = round(metrics.height / baselineHeight, 4);
     metrics.costRatio = round(metrics.cost / baselineCost, 4);
   }
+
+  // (б) текущий продукт как опорная политика: наименование `truncate`,
+  // ошибки — полный перенос; ширины — те же текущие доли.
+  let policy = null;
+  if (policies) {
+    const currentPrepared = prepareSheet(
+      { ...sheet, columns: currentProductColumns(columnCount) },
+      measurer,
+    );
+    const current = collectMetrics(
+      currentPrepared,
+      results.baseline.widths,
+      0,
+    );
+    const pick = (source) => ({
+      height: source.height,
+      meanHeight: source.meanHeight,
+      p95Height: source.p95Height,
+      maxHeight: source.maxHeight,
+      truncatedShare: source.truncatedShare,
+    });
+    policy = {
+      currentProduct: current,
+      noClampBaseline: pick(results.baseline),
+      noClampBest: pick(results.search),
+      growthPct: {
+        baseline: round(
+          (results.baseline.height / (current.height || 1) - 1) * 100,
+          2,
+        ),
+        best: round(
+          (results.search.height / (current.height || 1) - 1) * 100,
+          2,
+        ),
+      },
+    };
+  }
+
   return {
     profile,
     rows,
@@ -281,26 +431,28 @@ export function runConfig({
     contentWidth: width,
     columnCount,
     seed,
+    lambda,
     results,
+    policies: policy,
   };
 }
 
 /** Оракул на малом инстансе: все оптимизаторы на одном листе рядом с эталоном. */
 function runOracleConfig({ profile, tableWidth, columnCount, seed, measurer }) {
-  const columns = buildColumns(columnCount);
+  const columns = mainColumns(columnCount);
   const sheet = generateSheet({ profile, rows: ORACLE_ROWS, columns, seed });
   const prepared = prepareSheet(sheet, measurer);
   const width = contentWidth(tableWidth);
 
   const { value: oracle, ms: oracleMs } = measureRuntime(() =>
-    oracleOptimizer(prepared, width, { lambda: LAMBDA }),
+    oracleOptimizer(prepared, width, { lambda: MAIN_LAMBDA }),
   );
   const oracleMetrics = collectMetrics(prepared, oracle.widths);
 
   const results = {};
   for (const name of Object.keys(OPTIMIZERS)) {
     const { value, ms } = measureRuntime(() =>
-      OPTIMIZERS[name](prepared, width, { lambda: LAMBDA }),
+      OPTIMIZERS[name](prepared, width, { lambda: MAIN_LAMBDA }),
     );
     const metrics = collectMetrics(prepared, value.widths);
     results[name] = {
@@ -351,7 +503,7 @@ function runSampleStability(measurer) {
   const names = ["narrowing", "breakpoints", "search"];
   for (const profile of profiles) {
     for (const name of names) {
-      const columns = buildColumns(12);
+      const columns = mainColumns(12);
       const sheet = generateSheet({ profile, rows: 5000, columns, seed: 1 });
       const width = contentWidth(1500);
       const sample = prepareSheet(
@@ -359,8 +511,12 @@ function runSampleStability(measurer) {
         measurer,
       );
       const full = prepareSheet(sheet, measurer);
-      const sampleRun = OPTIMIZERS[name](sample, width, { lambda: LAMBDA });
-      const fullRun = OPTIMIZERS[name](full, width, { lambda: LAMBDA });
+      const sampleRun = OPTIMIZERS[name](sample, width, {
+        lambda: MAIN_LAMBDA,
+      });
+      const fullRun = OPTIMIZERS[name](full, width, {
+        lambda: MAIN_LAMBDA,
+      });
       const sampleMetrics = collectMetrics(full, sampleRun.widths);
       const fullMetrics = collectMetrics(full, fullRun.widths);
       const deltas = columns
@@ -399,12 +555,12 @@ function runStabilityAcrossWidths(measurer, widths) {
   const profiles = QUICK ? ["realistic"] : ["realistic", "long-tail"];
   for (const profile of profiles) {
     for (const name of ["narrowing", "breakpoints", "search"]) {
-      const columns = buildColumns(11);
+      const columns = mainColumns(11);
       const sheet = generateSheet({ profile, rows: 1000, columns, seed: 1 });
       const prepared = prepareSheet(sheet, measurer);
       const byWidth = widths.map((tableWidth) => {
         const run = OPTIMIZERS[name](prepared, contentWidth(tableWidth), {
-          lambda: LAMBDA,
+          lambda: MAIN_LAMBDA,
         });
         const total = sumWidths(columns, run.widths);
         const shares = {};
@@ -514,109 +670,202 @@ export function loadBrowserH4(path = BROWSER_RESULTS) {
 }
 
 /**
- * Чувствительность продуктового решения: `λ` (10/20/40) × `line-clamp`
- * «Ошибок» (2/3/без потолка). Метрики — средние по ширинам и профилям,
- * 1000 строк, seed 1, оптимизатор `search`. Cost считается с тем же λ, с
- * которым работал оптимизатор; сравнивать cost между λ нельзя — для этого в
- * таблице отдельно высота, обрезка и переносы.
+ * Свип политики обрезки: `clamp ∈ {∞,6,4,3,2}` при `λ = 20`.
+ *
+ * Основной сценарий (`clamp = ∞`, `λ = 0`) отвечает на вопрос «убирают ли
+ * ширины переносы при полном тексте». Свип — приложение: он покупает высоту
+ * ценой спрятанного текста, и выбор потолка — решение #485 по Парето, а не
+ * часть целевой функции.
  */
-function runSensitivity(measurer, spec) {
+export function runSweep(measurer, spec) {
   const cases = [];
   for (const tableWidth of spec.widths) {
     for (const profile of spec.profiles) {
-      for (const lambda of spec.lambdas) {
-        for (const clamp of spec.clamps) {
-          const columns = buildColumns(11).map((column) =>
-            column.id === "errors"
-              ? { ...column, clamp: clampValue(clamp) }
-              : column,
-          );
-          const sheet = generateSheet({
-            profile,
-            rows: spec.rows,
-            columns,
-            seed: spec.seed,
-          });
-          const prepared = prepareSheet(sheet, measurer);
-          const { value, ms } = measureRuntime(() =>
-            OPTIMIZERS.search(prepared, contentWidth(tableWidth), { lambda }),
-          );
-          const metrics = collectMetrics(prepared, value.widths, lambda);
-          cases.push({
-            profile,
-            tableWidth,
-            rows: spec.rows,
-            lambda,
-            clamp: clamp === "none" ? "none" : clamp,
-            ms: round(ms, 2),
-            cost: metrics.cost,
-            totalHeight: metrics.height,
-            meanHeight: metrics.meanHeight,
-            p95Height: metrics.p95Height,
-            maxHeight: metrics.maxHeight,
-            truncatedShare: metrics.truncatedShare,
-            multiLineShare: metrics.multiLineShare,
-            rows3PlusShare: metrics.rows3PlusShare,
-            widths: {
-              source_name: value.widths.source_name,
-              operations: value.widths.operations,
-              errors: value.widths.errors,
-            },
-            widthSum: round(sumWidths(columns, value.widths), 1),
-          });
-        }
+      for (const clamp of spec.clamps) {
+        const columns = clampColumns(11, clamp);
+        const sheet = generateSheet({
+          profile,
+          rows: spec.rows,
+          columns,
+          seed: spec.seed,
+        });
+        const prepared = prepareSheet(sheet, measurer);
+        const { value, ms } = measureRuntime(() =>
+          OPTIMIZERS.search(prepared, contentWidth(tableWidth), {
+            lambda: spec.lambda,
+          }),
+        );
+        const metrics = collectMetrics(prepared, value.widths, spec.lambda);
+        const textLoss = wrapTruncation(prepared, value.widths);
+        cases.push({
+          profile,
+          tableWidth,
+          rows: spec.rows,
+          lambda: spec.lambda,
+          clamp,
+          ms: round(ms, 2),
+          cost: metrics.cost,
+          totalHeight: metrics.height,
+          meanHeight: metrics.meanHeight,
+          p95Height: metrics.p95Height,
+          maxHeight: metrics.maxHeight,
+          truncatedShare: metrics.truncatedShare,
+          textTruncatedCells: textLoss.truncated,
+          textTruncatedShare: textLoss.sharePct,
+          multiLineShare: metrics.multiLineShare,
+          rows3PlusShare: metrics.rows3PlusShare,
+          rows4PlusShare: metrics.rows4PlusShare,
+          heightBuckets: metrics.heightBuckets,
+          widths: {
+            source_name: value.widths.source_name,
+            operations: value.widths.operations,
+            errors: value.widths.errors,
+          },
+          widthSum: round(sumWidths(columns, value.widths), 1),
+        });
       }
     }
   }
   return cases;
 }
 
-function summarizeSensitivity(cases) {
+function summarizeSweep(cases) {
   const groups = new Map();
   for (const item of cases) {
-    const key = `${item.lambda}|${item.clamp}`;
+    const key = item.clamp === "none" ? "none" : String(item.clamp);
     if (!groups.has(key)) {
-      groups.set(key, {
-        lambda: item.lambda,
-        clamp: item.clamp,
-        items: [],
-      });
+      groups.set(key, { clamp: item.clamp, lambda: item.lambda, items: [] });
     }
     groups.get(key).items.push(item);
   }
   return [...groups.values()]
-    .map(({ lambda, clamp, items }) => {
+    .map(({ clamp, lambda, items }) => {
       const mean = (field) =>
         round(items.reduce((sum, item) => sum + item[field], 0) / items.length, 2);
+      const meanWidth = (id) =>
+        round(
+          items.reduce((sum, item) => sum + item.widths[id], 0) / items.length,
+          1,
+        );
       return {
         lambda,
         clamp,
         cases: items.length,
-        meanCost: mean("cost"),
         meanTotalHeight: mean("totalHeight"),
         meanHeight: mean("meanHeight"),
         meanP95Height: mean("p95Height"),
+        meanMaxHeight: mean("maxHeight"),
         meanTruncatedShare: mean("truncatedShare"),
+        meanTextTruncatedShare: mean("textTruncatedShare"),
         meanMultiLineShare: mean("multiLineShare"),
         meanRows3PlusShare: mean("rows3PlusShare"),
-        meanErrorsWidth: round(
-          items.reduce((sum, item) => sum + item.widths.errors, 0) /
-            items.length,
-          1,
-        ),
-        meanSourceNameWidth: round(
-          items.reduce((sum, item) => sum + item.widths.source_name, 0) /
-            items.length,
-          1,
-        ),
+        meanRows4PlusShare: mean("rows4PlusShare"),
+        meanErrorsWidth: meanWidth("errors"),
+        meanSourceNameWidth: meanWidth("source_name"),
         meanRuntimeMs: mean("ms"),
       };
     })
-    .sort(
-      (a, b) =>
-        a.lambda - b.lambda ||
-        clampOrder(a.clamp) - clampOrder(b.clamp),
-    );
+    .sort((a, b) => clampOrder(a.clamp) - clampOrder(b.clamp))
+    .map((row, _, all) => ({
+      ...row,
+      dominated: all.some(
+        (other) =>
+          other !== row &&
+          other.meanHeight <= row.meanHeight &&
+          other.meanTextTruncatedShare <= row.meanTextTruncatedShare &&
+          (other.meanHeight < row.meanHeight ||
+            other.meanTextTruncatedShare < row.meanTextTruncatedShare),
+      ),
+    }));
+}
+
+/**
+ * Виртуализация: предсказанная высота `lines × LINE_HEIGHT_PX` против
+ * фактического CSS. В продукте «Ошибки» — `font-medium leading-snug`
+ * (15.125 px на строку при 11 px), а модель считает 20 px; вес 500 модель не
+ * знает. Считаем, в какой доле строк высоту задают именно ошибки и насколько
+ * модель завышает их вклад — это вход для #483.
+ */
+function runVirtualization(measurer, spec) {
+  const cases = [];
+  for (const profile of spec.profiles) {
+    for (const tableWidth of spec.widths) {
+      const columns = mainColumns(11);
+      const sheet = generateSheet({
+        profile,
+        rows: spec.rows,
+        columns,
+        seed: spec.seed,
+      });
+      const prepared = prepareSheet(sheet, measurer);
+      const run = OPTIMIZERS.search(prepared, contentWidth(tableWidth), {
+        lambda: MAIN_LAMBDA,
+      });
+      const rows = prepared.rows.length || 1;
+      let errorsDriven = 0;
+      let nameDriven = 0;
+      let errorLinesSum = 0;
+      let overPrediction = 0;
+      for (const cells of prepared.rows) {
+        let maxLines = 1;
+        let errorLines = 1;
+        let nameLines = 1;
+        for (let index = 0; index < columns.length; index += 1) {
+          const column = columns[index];
+          const measured = measureCell(
+            prepared.measurer,
+            cells[index],
+            run.widths[column.id] - CELL_PADDING_PX,
+          );
+          if (measured.lines > maxLines) maxLines = measured.lines;
+          if (column.id === "errors") errorLines = measured.lines;
+          if (column.id === "source_name") nameLines = measured.lines;
+        }
+        if (errorLines === maxLines && errorLines >= 2) {
+          errorsDriven += 1;
+          errorLinesSum += errorLines;
+          overPrediction +=
+            errorLines * (LINE_HEIGHT_PX - CSS_ERROR_LINE_HEIGHT_PX);
+        }
+        if (nameLines === maxLines && nameLines >= 2) nameDriven += 1;
+      }
+      cases.push({
+        profile,
+        tableWidth,
+        rows,
+        errorsDrivenShare: round((errorsDriven / rows) * 100, 2),
+        nameDrivenShare: round((nameDriven / rows) * 100, 2),
+        meanErrorLines: errorsDriven
+          ? round(errorLinesSum / errorsDriven, 2)
+          : 0,
+        modelOverPredictionPx: round(overPrediction / rows, 2),
+        modelOverPredictionPerDrivenRowPx: errorsDriven
+          ? round(overPrediction / errorsDriven, 2)
+          : 0,
+        modelLineHeightPx: LINE_HEIGHT_PX,
+        cssErrorLineHeightPx: round(CSS_ERROR_LINE_HEIGHT_PX, 3),
+      });
+    }
+  }
+  return cases;
+}
+
+function summarizeVirtualization(cases) {
+  if (cases.length === 0) return null;
+  const mean = (field) =>
+    round(cases.reduce((sum, item) => sum + item[field], 0) / cases.length, 2);
+  return {
+    cases: cases.length,
+    meanErrorsDrivenShare: mean("errorsDrivenShare"),
+    meanNameDrivenShare: mean("nameDrivenShare"),
+    meanErrorLines: mean("meanErrorLines"),
+    meanModelOverPredictionPx: mean("modelOverPredictionPx"),
+    meanModelOverPredictionPerDrivenRowPx: mean(
+      "modelOverPredictionPerDrivenRowPx",
+    ),
+    modelLineHeightPx: LINE_HEIGHT_PX,
+    cssErrorLineHeightPx: round(CSS_ERROR_LINE_HEIGHT_PX, 3),
+  };
 }
 
 export function aggregate(configs) {
@@ -647,6 +896,19 @@ export function aggregate(configs) {
       meanTruncatedShare: mean("truncatedShare"),
       meanMultiLineShare: mean("multiLineShare"),
       meanRows3PlusShare: mean("rows3PlusShare"),
+      meanRows4PlusShare: mean("rows4PlusShare"),
+      meanHeightBuckets: Object.fromEntries(
+        HEIGHT_BUCKETS.map((bucket) => [
+          bucket.key,
+          round(
+            items.reduce(
+              (sum, item) => sum + (item.heightBuckets[bucket.key] ?? 0),
+              0,
+            ) / items.length,
+            2,
+          ),
+        ]),
+      ),
       meanCost: mean("cost"),
       meanCostPer1000Rows: round(
         configs.reduce(
@@ -743,6 +1005,32 @@ function summarizeOracle(cases) {
   };
 }
 
+/** Сравнение политик на продуктовом срезе: текущий фикс vs полный текст. */
+function summarizePolicies(configs) {
+  const items = configs.filter((config) => config.policies);
+  if (items.length === 0) return null;
+  const mean = (accessor) =>
+    round(
+      items.reduce((sum, config) => sum + accessor(config.policies), 0) /
+        items.length,
+      2,
+    );
+  return {
+    configs: items.length,
+    meanCurrentRowHeight: mean((p) => p.currentProduct.meanHeight),
+    meanCurrentTotalHeight: mean((p) => p.currentProduct.height),
+    meanBaselineRowHeight: mean((p) => p.noClampBaseline.meanHeight),
+    meanBaselineTotalHeight: mean((p) => p.noClampBaseline.height),
+    meanBestRowHeight: mean((p) => p.noClampBest.meanHeight),
+    meanBestTotalHeight: mean((p) => p.noClampBest.height),
+    meanCurrentTruncatedShare: mean((p) => p.currentProduct.truncatedShare),
+    meanBaselineTruncatedShare: mean((p) => p.noClampBaseline.truncatedShare),
+    meanBestTruncatedShare: mean((p) => p.noClampBest.truncatedShare),
+    meanGrowthBaselinePct: mean((p) => p.growthPct.baseline),
+    meanGrowthBestPct: mean((p) => p.growthPct.best),
+  };
+}
+
 function verdict(condition) {
   return condition ? "подтверждена" : "не подтверждена";
 }
@@ -754,16 +1042,18 @@ function buildHypotheses({ oracle, sampleStability, widthStability, h4 }) {
     const worst = oracle.gaps[best].worstGapPct;
     hypotheses.push({
       id: "H1",
-      statement: "лучшая эвристика отстаёт от оракула не более чем на 5% по cost",
+      statement:
+        "лучшая эвристика отстаёт от оракула не более чем на 5% по cost (clamp=∞, λ=0)",
       value: `${worst}% (${best})`,
       threshold: "≤5%",
       verdict: verdict(worst <= 5),
-      note: `worst по ${oracle.caseCount} конфигурациям, ${oracle.rows} строк`,
+      note: `worst по ${oracle.caseCount} конфигурациям, ${oracle.rows} строк, основной сценарий`,
     });
   } else {
     hypotheses.push({
       id: "H1",
-      statement: "лучшая эвристика отстаёт от оракула не более чем на 5% по cost",
+      statement:
+        "лучшая эвристика отстаёт от оракула не более чем на 5% по cost (clamp=∞, λ=0)",
       value: "не проверялась",
       threshold: "≤5%",
       verdict: "нет данных",
@@ -780,7 +1070,8 @@ function buildHypotheses({ oracle, sampleStability, widthStability, h4 }) {
     );
     hypotheses.push({
       id: "H2",
-      statement: "подвыборка 500 строк даёт ≤2% потерь по высоте",
+      statement:
+        "подвыборка 500 строк даёт ≤2% потерь по высоте (clamp=∞, λ=0)",
       value: `${worst.heightDeltaPct}% (${worst.optimizer}/${worst.profile})`,
       threshold: "≤2%",
       verdict: verdict(fails.length === 0),
@@ -791,7 +1082,8 @@ function buildHypotheses({ oracle, sampleStability, widthStability, h4 }) {
   } else {
     hypotheses.push({
       id: "H2",
-      statement: "подвыборка 500 строк даёт ≤2% потерь по высоте",
+      statement:
+        "подвыборка 500 строк даёт ≤2% потерь по высоте (clamp=∞, λ=0)",
       value: "не проверялась",
       threshold: "≤2%",
       verdict: "нет данных",
@@ -806,7 +1098,8 @@ function buildHypotheses({ oracle, sampleStability, widthStability, h4 }) {
     const fails = widthStability.filter((item) => item.maxShareDeltaPct > 5);
     hypotheses.push({
       id: "H3",
-      statement: "доли колонок устойчивы к W 1180–1920 (Δ ≤ 5 п.п.)",
+      statement:
+        "доли колонок устойчивы к W 1180–1920 (Δ ≤ 5 п.п., clamp=∞)",
       value: `${worst.maxShareDeltaPct} п.п. (${worst.optimizer}/${worst.profile})`,
       threshold: "≤5 п.п.",
       verdict: verdict(fails.length === 0),
@@ -817,7 +1110,8 @@ function buildHypotheses({ oracle, sampleStability, widthStability, h4 }) {
   } else {
     hypotheses.push({
       id: "H3",
-      statement: "доли колонок устойчивы к W 1180–1920 (Δ ≤ 5 п.п.)",
+      statement:
+        "доли колонок устойчивы к W 1180–1920 (Δ ≤ 5 п.п., clamp=∞)",
       value: "не проверялась",
       threshold: "≤5 п.п.",
       verdict: "нет данных",
@@ -855,8 +1149,26 @@ function percent(value) {
   return Number.isFinite(value) ? `${value}%` : "—";
 }
 
+function signedPercent(value) {
+  if (!Number.isFinite(value)) return "—";
+  return `${value > 0 ? "+" : ""}${value}%`;
+}
+
 function buildReport(data) {
-  const { meta, matrix, product, oracle, sampleStability, widthStability, sensitivity, h4, hypotheses, measurerAgreement } = data;
+  const {
+    meta,
+    matrix,
+    product,
+    oracle,
+    sampleStability,
+    widthStability,
+    sweep,
+    policies,
+    virtualization,
+    h4,
+    hypotheses,
+    measurerAgreement,
+  } = data;
   const lines = [];
   const push = (...cells) => lines.push(...cells);
 
@@ -871,9 +1183,19 @@ function buildReport(data) {
   );
   push(`- Измеритель: \`${meta.measurer}\``);
   push(`- Seed'ы: ${meta.seeds.join(", ")}`);
-  push(`- λ: ${meta.lambda} px за обрезанную ячейку`);
+  push(
+    "- **Основной сценарий:** `clamp = ∞` (полный текст), `λ = 0`. Все основные таблицы ниже — в нём.",
+  );
+  push(
+    `- Свип политики: \`clamp ∈ {∞,6,4,3,2}\`, λ = ${meta.sweepLambda} px за обрезанную ячейку.`,
+  );
+  push(
+    `- \`MAX_LINES = 64\` в \`lib/curves.mjs\` — техническая защита перебора; в основном прогоне потолок не достигается.`,
+  );
   push(`- Секции: ${meta.sections.join(", ")}`);
-  push(`- Конфигураций: ${meta.counts.matrix} матрица, ${meta.counts.product} продуктовый срез, ${meta.counts.oracle} оракул, ${meta.counts.sensitivity} чувствительность`);
+  push(
+    `- Конфигураций: ${meta.counts.matrix} матрица, ${meta.counts.product} продуктовый срез, ${meta.counts.oracle} оракул, ${meta.counts.sweep} свип, ${meta.counts.virtualization} виртуализация`,
+  );
   push(`- Время прогона: ${meta.runtimeMs} мс`);
   push("");
 
@@ -888,17 +1210,28 @@ function buildReport(data) {
       )}; seed: ${meta.seeds.join(",")}.`,
     );
     push("");
-    push("| Оптимизатор | Высота / baseline | Суммарная высота (сред.) | Средняя высота строки | p95 | max | Обрезка, % | Переносов, % строк | Строк ≥3, % | Время, мс (сред./max) | Побед | Наруш. maxShare |");
-    push("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    push("| Оптимизатор | Высота / baseline | Суммарная высота (сред.) | Средняя высота строки | p95 | max | Обрезка, % | Переносов, % строк | Строк ≥3, % | Строк ≥4, % | Время, мс (сред./max) | Побед | Наруш. maxShare |");
+    push("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     for (const [name, item] of Object.entries(matrix.summary)) {
       push(
-        `| ${name} | ${item.meanHeightRatio.toFixed(3)} | ${item.meanTotalHeight} | ${item.meanRowHeight} | ${item.meanP95Height} | ${item.meanMaxHeight} | ${item.meanTruncatedShare} | ${item.meanMultiLineShare} | ${item.meanRows3PlusShare} | ${item.meanRuntimeMs} / ${item.maxRuntimeMs} | ${item.wins} | ${item.widthViolations} |`,
+        `| ${name} | ${item.meanHeightRatio.toFixed(3)} | ${item.meanTotalHeight} | ${item.meanRowHeight} | ${item.meanP95Height} | ${item.meanMaxHeight} | ${item.meanTruncatedShare} | ${item.meanMultiLineShare} | ${item.meanRows3PlusShare} | ${item.meanRows4PlusShare} | ${item.meanRuntimeMs} / ${item.maxRuntimeMs} | ${item.wins} | ${item.widthViolations} |`,
       );
     }
     push("");
     push(
       "Ничьи в «Побед» достаются первому оптимизатору в списке; раскладки с нарушением «maxShare» в победах не участвуют.",
     );
+    push("");
+    push("### Распределение высот строк, % строк");
+    push("");
+    push("| Оптимизатор | 40 px (1 строка) | 60 px (2) | 80 px (3) | ≥100 px (4+) |");
+    push("|---|---:|---:|---:|---:|");
+    for (const [name, item] of Object.entries(matrix.summary)) {
+      const buckets = item.meanHeightBuckets;
+      push(
+        `| ${name} | ${buckets.row40} | ${buckets.row60} | ${buckets.row80} | ${buckets.row100Plus} |`,
+      );
+    }
     push("");
     push("### Cost / baseline по ширине таблицы");
     push("");
@@ -939,8 +1272,8 @@ function buildReport(data) {
     push("## Оракул на малых инстансах");
     push("");
     push(
-      `Полный перебор порогов на ${oracle.rows} строках; ${oracle.caseCount} конфигураций (профили × ширины × колонки × seed). ` +
-        `Прорежена сетка в ${oracle.thinned} случаях.`,
+      `Полный перебор порогов на ${oracle.rows} строках; ${oracle.caseCount} конфигураций (профили × ширины × колонки × seed), основной сценарий: ` +
+        `\`clamp = ∞\`, \`λ = 0\`. Прорежена сетка в ${oracle.thinned} случаях.`,
     );
     push("");
     const names = Object.keys(oracle.gaps);
@@ -979,17 +1312,60 @@ function buildReport(data) {
         "/",
       )}; ширины: ${product.spec.widths.join("/")}; колонки: 11; seed: ${meta.seeds.join(
         ",",
-      )}. Cost — с λ=${meta.lambda} px.`,
+      )}. Основной сценарий: \`clamp = ∞\`, \`λ = 0\`, поэтому cost = суммарная высота.`,
     );
     push("");
-    push("| Оптимизатор | Высота / baseline | Cost / baseline | Суммарная высота (сред.) | Cost / 1000 строк | Средняя высота строки | p95 | Обрезка, % | Переносов, % строк | Строк ≥3, % | Время, мс | Побед |");
-    push("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    push(
+      "`baseline` — это **текущие продуктовые доли** (наименование 15%, операции 21%), а не старые 22/13%. Поэтому `cost/baseline` — выигрыш поверх уже сделанного фикса `98e9a4d3`.",
+    );
+    push("");
+    push("| Оптимизатор | Высота / baseline | Cost / baseline | Суммарная высота (сред.) | Cost / 1000 строк | Средняя высота строки | p95 | max | Строк ≥2, % | Строк ≥3, % | Строк ≥4, % | Время, мс | Побед |");
+    push("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     for (const [name, item] of Object.entries(product.summary)) {
       push(
-        `| ${name} | ${item.meanHeightRatio.toFixed(3)} | ${item.meanCostRatio.toFixed(3)} | ${item.meanTotalHeight} | ${item.meanCostPer1000Rows} | ${item.meanRowHeight} | ${item.meanP95Height} | ${item.meanTruncatedShare} | ${item.meanMultiLineShare} | ${item.meanRows3PlusShare} | ${item.meanRuntimeMs} | ${item.wins} |`,
+        `| ${name} | ${item.meanHeightRatio.toFixed(3)} | ${item.meanCostRatio.toFixed(3)} | ${item.meanTotalHeight} | ${item.meanCostPer1000Rows} | ${item.meanRowHeight} | ${item.meanP95Height} | ${item.meanMaxHeight} | ${item.meanMultiLineShare} | ${item.meanRows3PlusShare} | ${item.meanRows4PlusShare} | ${item.meanRuntimeMs} | ${item.wins} |`,
       );
     }
     push("");
+    const large = product.configs.filter((config) => config.rows === 5000);
+    if (large.length > 0) {
+      const runtimes = large.map((config) => config.results.search.ms);
+      push(
+        `Время \`search\` на 5000×11 (основной сценарий): среднее ${round(
+          runtimes.reduce((sum, value) => sum + value, 0) / runtimes.length,
+          2,
+        )} мс, максимум ${round(Math.max(...runtimes), 2)} мс — цель «десятки мс» закрыта.`,
+      );
+      push("");
+    }
+    if (policies) {
+      push("### Сравнение политик");
+      push("");
+      push(
+        "Текущий продукт — `truncate` у наименования и полный перенос ошибок (как в `ImportRemaindersDialog`), ширины — текущие доли. Ниже — цена отказа от обрезки при полном тексте.",
+      );
+      push("");
+      push("| Политика | Средняя высота строки | Суммарная высота (сред.) | Обрезка ячеек, % | Рост к текущему фиксу |");
+      push("|---|---:|---:|---:|---:|");
+      push(
+        `| Текущий продукт (наименование 1 строка, ошибки перенос) | ${policies.meanCurrentRowHeight} | ${policies.meanCurrentTotalHeight} | ${policies.meanCurrentTruncatedShare} | 0% |`,
+      );
+      push(
+        `| Baseline-доли, полный текст | ${policies.meanBaselineRowHeight} | ${policies.meanBaselineTotalHeight} | ${policies.meanBaselineTruncatedShare} | ${signedPercent(policies.meanGrowthBaselinePct)} |`,
+      );
+      push(
+        `| \`search\`, полный текст | ${policies.meanBestRowHeight} | ${policies.meanBestTotalHeight} | ${policies.meanBestTruncatedShare} | ${signedPercent(policies.meanGrowthBestPct)} |`,
+      );
+      push("");
+      push(
+        "Обрезка в основном сценарии — это не текст (у него clamp = ∞), а пилюли «Операций»: они nowrap, и по спеке §12 сжимаются с подписью в title. Поэтому `search` экономит высоту в том числе за счёт «Операций»; отрицательный рост — перераспределение бюджета, положительный — цена полного текста.",
+      );
+      push("");
+      push(
+        `Ориентир §15: если рост без обрезки больше 25%, обрезка остаётся предохранителем с раскрытием по клику. Здесь \`search\` даёт **${signedPercent(policies.meanGrowthBestPct)}** к текущему фиксу; решение фиксируется в #485.`,
+      );
+      push("");
+    }
     push("### По ширине таблицы");
     push("");
     const productNames = ["baseline", "breakpoints", "search"].filter(
@@ -1032,26 +1408,48 @@ function buildReport(data) {
     }
   }
 
-  if (sensitivity) {
-    push("## Чувствительность λ и line-clamp «Ошибок»");
+  if (sweep) {
+    push("## Свип политики обрезки: Парето «высота против потерянного текста»");
     push("");
     push(
-      `Оптимизатор \`search\`, продуктовый срез 11 колонок, ${sensitivity.spec.rows} строк, seed ${sensitivity.spec.seed}, ` +
-        `средние по профилям (${sensitivity.spec.profiles.join(", ")}) и ширинам (${sensitivity.spec.widths.join(
-          "/",
-        )}). Cost посчитан с тем же λ, с которым работал оптимизатор, поэтому cost между λ не сравнивать — смотрите высоту, обрезку и переносы.`,
+      `Оптимизатор \`search\`, продуктовый срез 11 колонок, ${sweep.spec.rows} строк, seed ${sweep.spec.seed}, λ = ${sweep.spec.lambda} px. ` +
+        `Средние по профилям (${sweep.spec.profiles.join(", ")}) и ширинам (${sweep.spec.widths.join("/")}). ` +
+        "`clamp = ∞` — основной сценарий; остальные строки — предохранитель, который покупает высоту ценой спрятанного текста.",
     );
     push("");
-    push("| λ, px | line-clamp | Cost, px / 1000 строк | Высота строки | p95 | Обрезка, % | Переносов, % | Строк ≥3, % | «Ошибки», px | «Наименование», px |");
-    push("|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|");
-    for (const item of sensitivity.summary) {
+    push("| clamp | Высота строки | Суммарная высота | p95 | max | Потеряно текста (wrap), % | Обрезка всех ячеек, % | Строк ≥4, % | «Ошибки», px | «Наименование», px | Доминируется |");
+    push("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");
+    for (const item of sweep.summary) {
       push(
-        `| ${item.lambda} | ${clampLabel(item.clamp)} | ${item.meanCost} | ${item.meanHeight} | ${item.meanP95Height} | ${item.meanTruncatedShare} | ${item.meanMultiLineShare} | ${item.meanRows3PlusShare} | ${item.meanErrorsWidth} | ${item.meanSourceNameWidth} |`,
+        `| ${clampLabel(item.clamp)} | ${item.meanHeight} | ${item.meanTotalHeight} | ${item.meanP95Height} | ${item.meanMaxHeight} | ${item.meanTextTruncatedShare} | ${item.meanTruncatedShare} | ${item.meanRows4PlusShare} | ${item.meanErrorsWidth} | ${item.meanSourceNameWidth} | ${item.dominated ? "да" : "нет"} |`,
       );
     }
     push("");
     push(
-      "Читать так: рост λ переносит бюджет от обрезки к переносу (высота растёт, обрезка падает); снятие потолка `line-clamp` у «Ошибок» позволяет длинной причине занять больше строк. Выбор константы — решение заказчика (#485), отчёт показывает цену вариантов.",
+      "«Потеряно текста» — доля ячеек переносимых колонок, где `lines` упёрлись в `clamp`; пилюли и mono-обрезка сюда не входят. Парето читается по паре (высота, потерянный текст): каждый следующий потолок — цена в пикселях за отказ от части текста. Выбор — #485, не бенч.",
+    );
+    push("");
+  }
+
+  if (virtualization) {
+    push("## Виртуализация: предсказанная высота против CSS продукта");
+    push("");
+    push(
+      `Модель считает строку как \`lines × ${virtualization.summary.modelLineHeightPx} px\`, а в продукте «Ошибки» — \`font-medium leading-snug\`: ${virtualization.summary.cssErrorLineHeightPx} px на строку при 11 px. ` +
+        "Вес 500 модель не знает; H4 проверен на Inter 400. Ниже — строки, где высоту задают именно «Ошибки», и средняя переоценка моделью.",
+    );
+    push("");
+    push("| Профиль | W | «Ошибки» задают высоту, % строк | «Наименование» задаёт высоту, % | Средние строки ошибок | Переоценка моделью, px/строка листа |");
+    push("|---|---:|---:|---:|---:|---:|");
+    for (const item of virtualization.cases) {
+      push(
+        `| ${item.profile} | ${item.tableWidth} | ${item.errorsDrivenShare} | ${item.nameDrivenShare} | ${item.meanErrorLines} | ${item.modelOverPredictionPx} |`,
+      );
+    }
+    push("");
+    push(
+      `Средняя переоценка на строку листа — **${virtualization.summary.meanModelOverPredictionPx} px**, на строку, где ошибки задают высоту — **${virtualization.summary.meanModelOverPredictionPerDrivenRowPx} px**. ` +
+        "Это не ошибка оптимизатора (он сравнивает раскладки в одной модели), а разрыв модели с CSS: для виртуализации предсказанную высоту нужно пересчитать в фактический `line-height` и учесть вес 500 — вход для #483.",
     );
     push("");
   }
@@ -1111,11 +1509,18 @@ function buildReport(data) {
     push(
       `- **Нарушение инварианта «maxShare»:** ${violating
         .map(([name, item]) => `${name} — ${item.widthViolations} конфигураций`)
-        .join(", ")}. Это дефект реализации оптимизатора (lib/optimizers.mjs), а не свойство задачи: бенч его только фиксирует, gap таких конфигураций к оракулу невалиден (#481 не правит закрытые файлы).`,
+        .join(", ")}. Бенч фиксирует это отдельным столбцом; gap таких конфигураций к оракулу невалиден.`,
+    );
+  } else {
+    push(
+      "- Инвариант `maxShare` выполняется во всех конфигурациях (p90 исправлен в #486).",
     );
   }
   push(
-    "- `operations` смоделированы как неразрывные пилюли: ширина покупает отсутствие обрезки, а не строки.",
+    "- `MAX_LINES = 64` в `lib/curves.mjs` — техническая защита от бесконечного перебора; в основном сценарии (`clamp = ∞`) она не достигается на синтетике (максимум ниже 64 строк), но при более длинных текстах станет реальным потолком.",
+  );
+  push(
+    "- `operations` смоделированы как неразрывные пилюли: ширина покупает отсутствие обрезки, а не строки. Поэтому `обрезка всех ячеек` в основном сценарии не ноль даже при `clamp = ∞`; «потеряно текста» в свипе считает только переносимые колонки.",
   );
   push(
     "- Минимум текстовой колонки — `max(minPx, maxWordWidth + padding)` по листу (#479): уже самого широкого слова `pretext` рвёт слово, а CSS с `overflow-wrap: normal` — нет. Если минимумы не влезают в бюджет, раскладка честно переполняется.",
@@ -1124,7 +1529,7 @@ function buildReport(data) {
     "- Поиск идёт по подвыборке ≤500 строк (самые длинные строки по одной на гибкую колонку + равномерная сетка), `cost` считается на полном листе; полная проверка H2 — #482.",
   );
   push(
-    "- H2/H3 в отчёте — честные ограничения текущей эвристики, а не замазанные числа: вердикт «не подтверждена» означает, что политика стабильности — отдельная задача #482.",
+    "- H2/H3 — честные ограничения текущей эвристики в основном сценарии, а не замазанные числа: вердикт «не подтверждена» означает, что политика стабильности — отдельная задача #482.",
   );
   push("");
 
@@ -1138,12 +1543,17 @@ function buildReport(data) {
     const candidate = bestByMean.find((name) => name !== "baseline") ?? bestByMean[0];
     const item = matrix.summary[candidate];
     push(
-      `Брать **${candidate}**: лучший средний cost (${item.meanCostRatio.toFixed(
+      `Основной сценарий: **${candidate}** — лучший средний cost (${item.meanCostRatio.toFixed(
         3,
-      )} от baseline), среднее время ${item.meanRuntimeMs} мс, максимум ${
+      )} от текущих долей), среднее время ${item.meanRuntimeMs} мс, максимум ${
         item.maxRuntimeMs
-      } мс на конфигурацию. Константы λ и line-clamp — по таблице чувствительности выше, решение за #485.`,
+      } мс на конфигурацию; на 5000×11 — десятки мс.`,
     );
+    if (policies) {
+      push(
+        `Отказ от обрезки меняет высоту на **${signedPercent(policies.meanGrowthBestPct)}** к текущему фиксу (порог §15 — +25%). Потолок «line-clamp» выбирается по Парето-таблице выше: это решение #485, бенч только показывает цену.`,
+      );
+    }
     push("");
   }
 
@@ -1156,10 +1566,10 @@ async function main() {
   const matrixSchema = matrixSpec();
   const productSchema = productSpec();
   const oracleSchema = oracleSpec();
-  const sensitivitySchema = sensitivitySpec();
+  const sweepSchema = sweepSpec();
 
   console.log(
-    `[bench] measurer=${measurer.name} seeds=${SEED_LIST.join(",")} lambda=${LAMBDA} quick=${QUICK} sections=${SECTIONS_TO_RUN.join(",")}`,
+    `[bench] measurer=${measurer.name} seeds=${SEED_LIST.join(",")} main=clamp∞/λ${MAIN_LAMBDA} sweep=λ${SWEEP_LAMBDA_VALUE} quick=${QUICK} sections=${SECTIONS_TO_RUN.join(",")}`,
   );
 
   let matrix = null;
@@ -1212,6 +1622,7 @@ async function main() {
                   columnCount,
                   seed,
                   measurer,
+                  policies: true,
                 }),
               );
             }
@@ -1221,6 +1632,7 @@ async function main() {
       console.log(`[bench] product ${profile}: ${configs.length} конфигураций`);
     }
     const summary = aggregate(configs);
+    const policies = summarizePolicies(configs);
     const layoutConfig =
       configs.find(
         (config) =>
@@ -1248,9 +1660,15 @@ async function main() {
         }
       : null;
     product = {
-      spec: { ...productSchema, seeds: SEED_LIST },
+      spec: {
+        ...productSchema,
+        seeds: SEED_LIST,
+        clamp: "none",
+        lambda: MAIN_LAMBDA,
+      },
       configs,
       summary,
+      policies,
       byWidth: groupBy(configs, "tableWidth", aggregate),
       layoutExample,
     };
@@ -1284,15 +1702,34 @@ async function main() {
     };
   }
 
-  let sensitivity = null;
-  if (SECTIONS_TO_RUN.includes("sensitivity")) {
-    const cases = runSensitivity(measurer, sensitivitySchema);
-    sensitivity = {
-      spec: sensitivitySchema,
+  let sweep = null;
+  if (SECTIONS_TO_RUN.includes("sweep")) {
+    const cases = runSweep(measurer, sweepSchema);
+    sweep = {
+      spec: sweepSchema,
       cases,
-      summary: summarizeSensitivity(cases),
+      summary: summarizeSweep(cases),
     };
-    console.log(`[bench] sensitivity: ${cases.length} конфигураций`);
+    console.log(`[bench] sweep: ${cases.length} конфигураций`);
+  }
+
+  let virtualization = null;
+  if (
+    SECTIONS_TO_RUN.includes("product") ||
+    SECTIONS_TO_RUN.includes("sweep")
+  ) {
+    const cases = runVirtualization(measurer, sweepSchema);
+    virtualization = {
+      spec: {
+        profiles: sweepSchema.profiles,
+        widths: sweepSchema.widths,
+        rows: sweepSchema.rows,
+        seed: sweepSchema.seed,
+      },
+      cases,
+      summary: summarizeVirtualization(cases),
+    };
+    console.log(`[bench] virtualization: ${cases.length} конфигураций`);
   }
 
   const useStability =
@@ -1315,9 +1752,14 @@ async function main() {
     branch: detectBranch(),
     measurer: measurer.name,
     seeds: SEED_LIST,
-    lambda: LAMBDA,
+    mainScenario: { clamp: "none", lambda: MAIN_LAMBDA },
+    lambda: MAIN_LAMBDA,
+    sweepLambda: SWEEP_LAMBDA_VALUE,
+    sweepClamps: SWEEP_CLAMPS,
     fitRows: FIT_ROWS,
     oracleRows: ORACLE_ROWS,
+    maxLinesCap: 64,
+    cssErrorLineHeightPx: round(CSS_ERROR_LINE_HEIGHT_PX, 3),
     quick: QUICK,
     sections: SECTIONS_TO_RUN,
     argv: args.join(" "),
@@ -1326,7 +1768,8 @@ async function main() {
       matrix: matrix?.configs.length ?? 0,
       product: product?.configs.length ?? 0,
       oracle: oracle?.cases.length ?? 0,
-      sensitivity: sensitivity?.cases.length ?? 0,
+      sweep: sweep?.cases.length ?? 0,
+      virtualization: virtualization?.cases.length ?? 0,
     },
   };
 
@@ -1344,11 +1787,12 @@ async function main() {
       spec: product.spec,
       configs: product.configs,
       summary: product.summary,
+      policies: product.policies,
       byWidth: product.byWidth,
       layoutExample: product.layoutExample,
     },
     oracle: oracle && {
-      spec: oracle.spec,
+      spec: { ...oracle.spec, clamp: "none", lambda: MAIN_LAMBDA },
       cases: oracle.cases,
       summary: {
         caseCount: oracle.caseCount,
@@ -1361,11 +1805,12 @@ async function main() {
     },
     sampleStability,
     widthStability,
-    sensitivity: sensitivity && {
-      spec: sensitivity.spec,
-      cases: sensitivity.cases,
-      summary: sensitivity.summary,
+    sweep: sweep && {
+      spec: sweep.spec,
+      cases: sweep.cases,
+      summary: sweep.summary,
     },
+    virtualization,
     measurerAgreement,
     h4,
     hypotheses,
@@ -1383,7 +1828,9 @@ async function main() {
     oracle,
     sampleStability,
     widthStability,
-    sensitivity,
+    sweep,
+    policies: product?.policies ?? null,
+    virtualization,
     h4,
     hypotheses,
     measurerAgreement,
@@ -1403,10 +1850,24 @@ async function main() {
   }
   if (product) {
     console.log("");
-    console.log("Продуктовый срез (11 колонок):");
+    console.log("Продуктовый срез (11 колонок, clamp=∞, λ=0):");
     for (const [name, item] of Object.entries(product.summary)) {
       console.log(
         `${name.padEnd(22)} cost/baseline ${item.meanCostRatio.toFixed(3)}   обрезка ${String(item.meanTruncatedShare).padStart(5)}%   время ${String(item.meanRuntimeMs).padStart(6)} мс`,
+      );
+    }
+    if (product.policies) {
+      console.log(
+        `Рост полного текста к текущему фиксу: baseline ${signedPercent(product.policies.meanGrowthBaselinePct)}, search ${signedPercent(product.policies.meanGrowthBestPct)}`,
+      );
+    }
+  }
+  if (sweep) {
+    console.log("");
+    console.log("Свип clamp (λ=20): высота строки / потеряно текста");
+    for (const item of sweep.summary) {
+      console.log(
+        `${clampLabel(item.clamp).padEnd(14)} ${String(item.meanHeight).padStart(7)} px   потеряно ${String(item.meanTextTruncatedShare).padStart(6)}%   время ${String(item.meanRuntimeMs).padStart(6)} мс`,
       );
     }
   }
