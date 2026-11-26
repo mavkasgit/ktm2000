@@ -15,6 +15,7 @@ from app.services.import_normalization import (
     numeric_sku_key,
     sku_compound_parts,
     sku_entry,
+    sku_loose,
     sku_tail,
 )
 
@@ -191,3 +192,20 @@ def test_numeric_key_does_not_touch_non_numeric_skus():
     assert not match_sku_cell("ALS-33", _catalog("ALS-033")).found
     # Нормализованное совпадение нечислового артикула работает как раньше.
     assert match_sku_cell("als–33", _catalog("ALS-33")).index == 0
+
+
+def test_sku_loose_drops_dash_only_between_letter_and_digits():
+    assert sku_loose("ALS-1291") == "als1291"
+    assert sku_loose("ЮП–081") == "юп081"
+    assert sku_loose("ALS1291") == "als1291"
+    # Дефис между цифрами — часть номера, его не трогаем.
+    assert sku_loose("12-34") == "12-34"
+
+
+def test_dashless_spelling_matches_sku():
+    # 1С пишет код поставщика без дефиса: ALS1291 — тот же ALS-1291.
+    assert match_sku_cell("ALS1291", _catalog("ALS-1291")).index == 0
+    assert match_sku_cell("als-1291", _catalog("ALS1291")).index == 0
+    # Другой номер и дефис внутри цифр по-прежнему не склеиваются.
+    assert not match_sku_cell("ALS1292", _catalog("ALS-1291")).found
+    assert not match_sku_cell("12-34", _catalog("1234")).found

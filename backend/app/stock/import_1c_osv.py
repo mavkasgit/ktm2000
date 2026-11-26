@@ -22,6 +22,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm import selectinload
 
 from app.domain.dimensions import (
     LENGTH_MM,
@@ -30,14 +31,24 @@ from app.domain.dimensions import (
     format_mm_as_meters,
 )
 from app.models.product import Product, Product1CCode, ProductLength
-from app.models.product_1c_skipped import SKIP_REASON_LABELS, Product1CSkipped
+from app.models.product_1c_skipped import (
+    SKIP_REASON_LABELS,
+    SKIP_REASON_NOT_MES,
+    Product1CSkipped,
+)
+from app.models.route import RouteRuleProfile
 from app.models.section import Section
-from app.services.import_normalization import match_sku_cell, sku_entry
+from app.services.import_normalization import match_sku_cell, normalize_sku, sku_entry
 from app.services.product_alias_groups import (
     AliasGroups,
     load_alias_groups,
 )
+from app.services.route_builder import (
+    build_route_from_profile,
+    load_route_build_batch_cache,
+)
 from app.services.route_storage_classifier import STOCK_TYPES
+from app.stock.import_1c_markers import ColorVocabulary, extract_osv_markers
 from app.stock.import_service import (
     _EMPTY_CELL_VALUES,
     RemainderItem,
@@ -669,17 +680,28 @@ _HASH_CODE_RE = re.compile(r"#\s*(\d+)(?:-\d+)?")
 _CANDIDATE_SPLIT_RE = re.compile(r"[,/]")
 
 
-def _extract_sku_candidates(name: str | None) -> list[str]:
-    """Кандидаты-артикулы из наименования 1С (порядок: скобки, токены, ``#N``)."""
+def _extract_paren_candidates(name: str | None) -> list[str]:
+    """Артикулы в скобках: «(ЮП-2616)», «(ALS-1103, ЮП-3773)», «(033-00 / ЮП-2630)».
+
+    Скобки в наименованиях 1С несут авторский артикул — «Профиль алюм.
+    #318-00(ЮП-3123)» означает именно ЮП-3123, а «#318-00» — код поставщика.
+    """
     if not name:
         return []
     candidates: list[str] = []
-
     for group in _PARENS_RE.findall(name):
         for chunk in _CANDIDATE_SPLIT_RE.split(group):
             candidate = chunk.strip()
             if candidate:
                 candidates.append(candidate)
+    return candidates
+
+
+def _extract_sku_candidates(name: str | None) -> list[str]:
+    """Кандидаты-артикулы из наименования 1С (порядок: скобки, токены, ``#N``)."""
+    if not name:
+        return []
+    candidates = _extract_paren_candidates(name)
     candidates.extend(match.group(0) for match in _SKU_TOKEN_RE.finditer(name))
     candidates.extend(match.group(1) for match in _HASH_CODE_RE.finditer(name))
 
@@ -698,6 +720,15 @@ class _Catalog:
     product_ids: list[int]
     sku_by_id: dict[int, str]
     groups: AliasGroups
+    #: База «артикул + короткое числовое исполнение» → id артикулов:
+    #: ``ЮП-2464-1`` даёт ``{"юп-2464": [71]}``. 1С пишет полуфабрикат
+    #: ``ЮП-2464-01 ПФ``, токен наименования обрезается до ``ЮП-2464`` —
+    #: без этого индекса строка не находит артикул (см. ``variant_products``).
+    variant_ids: dict[str, list[int]] = field(default_factory=dict)
+
+    def variant_products(self, candidate: str) -> list[int]:
+        """Артикулы, у которых ``candidate`` — база исполнения (``ЮП-2464``)."""
+        return self.variant_ids.get(normalize_sku(candidate), [])
 
     def canonical_id(self, product_id: int) -> int:
         """Представитель группы алиасов (минимальный ``product_id``)."""
@@ -713,21 +744,63 @@ class _Catalog:
         return self.sku_by_id.get(product_id, str(product_id))
 
 
+_VARIANT_SUFFIX_RE = re.compile(r"^(?P<base>.+)-(?P<variant>\d{1,2})$")
+
+
+def _variant_base_key(sku: str) -> str | None:
+    """База артикула с коротким числовым исполнением: ``ЮП-2464-1`` → ``юп-2464``.
+
+    Исполнение — последний сегмент из одной-двух цифр (``-1``, ``-05``).
+    Четырёхзначный номер (``АТ-7121``) — это сам артикул, а не исполнение:
+    иначе база ``ат`` склеила бы разные артикулы. Если на одну базу приходится
+    два артикула (``МС16-20`` и ``МС16-25``), индекс отдаст оба — вызывающий
+    обязан считать это неоднозначностью, а не выбирать первый.
+    """
+    match = _VARIANT_SUFFIX_RE.match(normalize_sku(sku))
+    if match is None:
+        return None
+    if match.group("variant") == "00":
+        # «#033-00» — код поставщика, а не исполнение: база «033» иначе
+        # подхватила бы чужую карточку по токену без суффикса.
+        return None
+    return match.group("base")
+
+
 async def _load_catalog(db: AsyncSession) -> _Catalog:
     groups = await load_alias_groups(db)
+    # Алиас — это ещё одно написание артикула, поэтому он участвует в разборе
+    # наименования так же, как SKU. Но только если такого SKU нет отдельной
+    # записью: тогда он уже представлен собой, и его группа решает каскад.
+    alias_rows = (await db.execute(select(Product.id, Product.aliases))).all()
+    aliases_by_id: dict[int, set[str]] = {
+        int(product_id): {
+            normalize_sku(str(alias)) for alias in (aliases or ()) if alias
+        }
+        for product_id, aliases in alias_rows
+    }
+    sku_keys = {
+        normalize_sku(sku) for group in groups.groups for sku in group.skus
+    }
     entries: list[SkuEntry] = []
     product_ids: list[int] = []
     sku_by_id: dict[int, str] = {}
     for group in groups.groups:
         for product_id, sku in zip(group.product_ids, group.skus, strict=True):
-            entries.append(sku_entry(sku))
+            extra = aliases_by_id.get(product_id, set()) - sku_keys
+            entries.append(sku_entry(sku, extra))
             product_ids.append(product_id)
             sku_by_id[product_id] = sku
+    variant_ids: dict[str, list[int]] = {}
+    for product_id, sku in sku_by_id.items():
+        base = _variant_base_key(sku)
+        if base is not None:
+            variant_ids.setdefault(base, []).append(product_id)
     return _Catalog(
         entries=entries,
         product_ids=product_ids,
         sku_by_id=sku_by_id,
         groups=groups,
+        variant_ids=variant_ids,
     )
 
 
@@ -766,21 +839,58 @@ class _NameMatch:
 
 
 def _match_name_candidates(name: str | None, catalog: _Catalog) -> _NameMatch:
-    """Сопоставить кандидатов из наименования через ``match_sku_cell``."""
+    """Сопоставить кандидатов из наименования через ``match_sku_cell``.
+
+    Скобки разбираются первыми и, если дали артикул, код поставщика вне скобок
+    не участвует: в «Профиль алюм.#318-00(ЮП-3123)» номер ``318`` из кода
+    совпадает с отдельным артикулом ``318``, и без приоритета скобок строка
+    становится ложно неоднозначной.
+    """
     group_keys: set[int] = set()
     matched_ids: list[int] = []
     ambiguous_ids: list[int] = []
-    for candidate in _extract_sku_candidates(name):
-        match = match_sku_cell(candidate, catalog.entries)
-        if match.rejected:
-            ambiguous_ids.extend(
-                catalog.product_ids[index] for index in match.ambiguous_indexes
-            )
-            continue
-        if match.found and match.index is not None:
-            product_id = catalog.product_ids[match.index]
-            group_keys.add(catalog.group_key(product_id))
-            matched_ids.append(product_id)
+
+    def collect(candidates: list[str]) -> None:
+        for candidate in candidates:
+            match = match_sku_cell(candidate, catalog.entries)
+            if match.rejected:
+                ambiguous_ids.extend(
+                    catalog.product_ids[index] for index in match.ambiguous_indexes
+                )
+                continue
+            if match.found and match.index is not None:
+                product_id = catalog.product_ids[match.index]
+                group_keys.add(catalog.group_key(product_id))
+                matched_ids.append(product_id)
+                continue
+            # Исполнение полуфабриката: токен ``ЮП-2464`` — база артикула
+            # ``ЮП-2464-1``, 1С пишет ``ЮП-2464-01 ПФ``. Берём только
+            # единственного кандидата: два артикула на одну базу —
+            # неоднозначность, а не выбор первого по порядку справочника.
+            variants = catalog.variant_products(candidate)
+            if len(variants) == 1:
+                product_id = variants[0]
+                group_keys.add(catalog.group_key(product_id))
+                matched_ids.append(product_id)
+            elif len(variants) > 1:
+                ambiguous_ids.extend(variants)
+
+    paren_candidates = _extract_paren_candidates(name)
+    collect(paren_candidates)
+    if not group_keys and not ambiguous_ids:
+        # Скобки главнее кода поставщика: если артикул в скобках не нашёлся,
+        # `#318-00` не подменяет его отдельной карточкой `318` — иначе строка
+        # молча уедет на чужое сечение. Токены вне скобок пробуем.
+        hash_codes = (
+            {match.group(1) for match in _HASH_CODE_RE.finditer(name or "")}
+            if paren_candidates
+            else set()
+        )
+        collect([
+            candidate
+            for candidate in _extract_sku_candidates(name)
+            if candidate not in paren_candidates and candidate not in hash_codes
+        ])
     return _NameMatch(
         group_keys=group_keys,
         product_ids=matched_ids,
@@ -1114,8 +1224,16 @@ async def resolve_1c_osv_quantities(
             continue
         unit_kind = _classify_unit(item.source_unit or "")
         if unit_kind == "other":
-            item.errors.append(_unit_error(item.source_unit))
-            item.status = "invalid"
+            # Плёнки, м², кг и прочие единицы MES не ведёт: это не дефект
+            # данных, а строка «не наша». Ошибка заставила бы разбирать её
+            # руками каждый прогон; пропуск с причиной — честное решение
+            # заказчика (26.11.2026), а не тихое проглатывание.
+            item.status = "skipped"
+            item.skip_reason = SKIP_REASON_NOT_MES
+            item.skip_reason_label = SKIP_REASON_LABELS.get(
+                SKIP_REASON_NOT_MES, SKIP_REASON_NOT_MES
+            )
+            item.skip_note = _unit_error(item.source_unit)
             continue
         if unit_kind == "pcs":
             # Штуки как есть: количества уже в item.quantity, длина не нужна.
@@ -1146,3 +1264,296 @@ async def resolve_1c_osv_quantities(
         item.quantity = float(pieces)
         item.dimensions = build_length_dimensions(length_mm)
         item.dimensions_label = describe_length(length_mm)
+
+
+# ─── Выполненные операции по маркерам наименования (#468) ─────────────────────
+
+#: Профиль маршрута, по которому собирается префикс: та же «Упаковочная карта
+#: РП», что у плана. Правила цвета/пресса — данные профиля, а не константы.
+_PACKAGING_PROFILE_CODE = "packaging_map_rp"
+_COLOR_RULE_CODE = "anod_colors"
+_PRESS_RULE_CODE = "press_types"
+_ANODIZING_SECTION = "ANODIZING"
+_PRESSING_SECTION = "PRESSING"
+_FINISHED_STOCK_SECTION = "FINISHED_STOCK"
+
+
+async def _load_packaging_profile(db: AsyncSession) -> RouteRuleProfile | None:
+    return (
+        await db.execute(
+            select(RouteRuleProfile)
+            .where(
+                RouteRuleProfile.code == _PACKAGING_PROFILE_CODE,
+                RouteRuleProfile.is_active.is_(True),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+def _marker_vocabulary(rules, operation_names: dict[str, str]) -> ColorVocabulary:
+    """Словарь цвета/пресса из правил профиля и имён операций участков.
+
+    Ключевые слова берутся из действий ``set_operation_by_mapping``: порядок
+    правила значим (составные цвета стоят раньше общих).
+    """
+    color_keywords: list[tuple[str, str]] = []
+    press_keywords: list[tuple[str, str]] = []
+    for rule in rules:
+        rule_code = rule.code
+        if rule_code not in {_COLOR_RULE_CODE, _PRESS_RULE_CODE}:
+            continue
+        target = color_keywords if rule_code == _COLOR_RULE_CODE else press_keywords
+        for action in rule.actions or []:
+            if str(action.get("action") or "") != "set_operation_by_mapping":
+                continue
+            for entry in action.get("mapping") or []:
+                keyword = str(entry.get("keyword") or "").lower()
+                code = str(entry.get("operation_code") or "")
+                if keyword and code:
+                    target.append((keyword, code))
+    color_codes = {code for _, code in color_keywords}
+    names = {
+        code: operation_names[code]
+        for code in color_codes
+        if code in operation_names
+    }
+    return ColorVocabulary(
+        color_keywords=tuple(color_keywords),
+        color_names=names,
+        press_keywords=tuple(press_keywords),
+    )
+
+
+async def _load_marker_products(
+    db: AsyncSession, product_ids: set[int]
+) -> tuple[dict[int, Product], dict[int, set[str]]]:
+    """Продукты строк и их «якоря» — все написания группы алиасов.
+
+    Суффикс ``-NN`` считается цветом только сразу после якоря. Якорь — SKU
+    любого участника группы, а не только канона: 1С пишет ``ЮП-3473-06``, а
+    канон группы — ``ЮП-2910``. Алиас, совпавший с SKU другого продукта,
+    якорем не становится: он уже представлен своей карточкой (правило
+    ``_load_catalog``).
+    """
+    groups = await load_alias_groups(db)
+    expanded: set[int] = set(product_ids)
+    for product_id in product_ids:
+        group = groups.group_for(product_id)
+        if group is not None:
+            expanded.update(group.product_ids)
+    products = {
+        product.id: product
+        for product in (
+            await db.execute(
+                select(Product)
+                .options(selectinload(Product.processing_flags))
+                .where(Product.id.in_(expanded))
+            )
+        ).scalars()
+    }
+    all_skus = {
+        normalize_sku(sku)
+        for sku in (await db.scalars(select(Product.sku))).all()
+        if sku
+    }
+    anchors: dict[int, set[str]] = {}
+    for product_id in product_ids:
+        group = groups.group_for(product_id)
+        member_ids = group.product_ids if group is not None else (product_id,)
+        members = [
+            products[member_id]
+            for member_id in member_ids
+            if member_id in products
+        ]
+        skus = {normalize_sku(member.sku) for member in members} - {""}
+        aliases = {
+            normalize_sku(alias)
+            for member in members
+            for alias in (member.aliases or [])
+        } - all_skus - {""}
+        anchors[product_id] = skus | aliases
+    return products, anchors
+
+
+def _prefix_steps(route, target_section: str) -> list:
+    """Шаги маршрута до последнего этапа ``target_section`` включительно.
+
+    Этап — участок целиком: у ``ANODIZING`` две группы (цвет и упаковка),
+    и ``PACK_SPUNBOND``/``PACK_STRETCH`` входят в префикс вместе с цветом.
+    Транспортные и незначимые операции пропускаются: ось остатка состоит из
+    ``operation_code`` справочника, а не из проходов склада.
+    """
+    target_steps = [
+        step for step in route.steps if step.section_code == target_section
+    ]
+    if not target_steps:
+        return []
+    last_sequence = max(step.sequence for step in target_steps)
+    seen: set[str] = set()
+    steps = []
+    for step in route.steps:
+        if step.sequence > last_sequence:
+            continue
+        if not step.operation_code or not step.is_significant:
+            continue
+        if step.operation_code in seen:
+            continue
+        seen.add(step.operation_code)
+        steps.append(step)
+    return steps
+
+
+def _stage_entry(step, batch) -> dict:
+    """Развёрнутый справочником элемент оси — как у ``resolve_completed_stages``.
+
+    Код берётся из шага маршрута, а не подбирается по имени: у ANOD_01 и C0
+    одно имя «Серебро», и разрешение по имени молча подменило бы код (ADR-0061).
+    """
+    section = batch.sections_by_code.get(step.section_code)
+    operation = next(
+        (
+            op
+            for ops in batch.ops_by_section_group.values()
+            for op in ops
+            if op.operation_code == step.operation_code
+        ),
+        None,
+    )
+    return {
+        "sequence": step.sequence,
+        "section_code": step.section_code,
+        "section_name": step.section_name,
+        "section_icon": section.icon if section is not None else None,
+        "section_icon_color": section.icon_color if section is not None else None,
+        "operation_code": step.operation_code,
+        "operation_name": step.operation_name,
+        "op_icon": operation.icon if operation is not None else None,
+        "op_icon_color": operation.icon_color if operation is not None else None,
+        "is_significant": step.is_significant,
+    }
+
+
+def _invalidate(item: RemainderItem, *messages: str) -> None:
+    """Строка остаётся видимой ошибкой с причиной — не угадываем."""
+    item.errors.extend(messages)
+    item.status = "invalid"
+
+
+async def resolve_1c_osv_completed_operations(
+    db: AsyncSession,
+    items: Sequence[RemainderItem],
+) -> None:
+    """Заполнить ось выполненных операций по маркерам наименования, in-place.
+
+    Маршрут собирается тем же профилем, что у плана, но **не сохраняется**:
+    остатку нужен только префикс операций (ADR-0055, ADR-0061). Строка без
+    маркеров получает пустой список — «прошёл маршрут, операций не было», а
+    не ``None``: иначе остаток не выдаётся в маршрут (ADR-0055 п.6).
+
+    Полуфабрикат (``ПФ``) лежит на «Складе готовой продукции»: заказчик
+    считает склады сырья и ГП едиными (26.11.2026), поэтому участок листа для
+    таких строк не подходит.
+
+    Без профиля маршрута разбор не выполняется: непросеянная база — это не
+    дефект строки, и превращать весь предпросмотр в ошибки нельзя.
+    """
+    candidates = [
+        item
+        for item in items
+        if item.status == "valid" and item.product_id is not None
+    ]
+    if not candidates:
+        return
+
+    profile = await _load_packaging_profile(db)
+    if profile is None:
+        return
+
+    batch = await load_route_build_batch_cache(db, profile)
+    vocabulary = _marker_vocabulary(batch.rules, batch.operation_name_by_code)
+    if not vocabulary.color_keywords and not vocabulary.press_keywords:
+        return
+
+    finished = (
+        await db.execute(
+            select(Section).where(Section.code == _FINISHED_STOCK_SECTION)
+        )
+    ).scalar_one_or_none()
+
+    products, anchors_by_product = await _load_marker_products(
+        db, {item.product_id for item in candidates if item.product_id is not None}
+    )
+
+    for item in candidates:
+        product = products.get(item.product_id)  # type: ignore[arg-type]
+        if product is None:
+            continue
+        markers = extract_osv_markers(
+            item.source_name,
+            anchors=anchors_by_product.get(product.id, set()),
+            vocabulary=vocabulary,
+        )
+        if markers.errors:
+            _invalidate(item, *markers.errors)
+            continue
+        if markers.color_code is not None and markers.color_name is None:
+            _invalidate(
+                item,
+                f"Цвет {markers.color_code} не найден в справочнике операций",
+            )
+            continue
+        if not markers.has_markers:
+            item.completed_operations_raw = ""
+            continue
+        if markers.is_semi_finished and markers.color_code is None:
+            # ПФ означает анодирование, но без цвета операция неизвестна;
+            # подставлять первый цвет справочника значило бы угадывать.
+            _invalidate(item, "ПФ без цвета: не удалось определить цвет")
+            continue
+        if markers.is_semi_finished and finished is None:
+            _invalidate(
+                item,
+                "Участок «Склад готовой продукции» не найден — "
+                "полуфабрикат некуда положить",
+            )
+            continue
+
+        payload = {
+            "product_id": product.id,
+            "source_name": item.source_name,
+            # Слово важнее имени операции: у C35 и ANOD_05 одно имя «Чёрный»,
+            # и маршрут по имени подменил бы код первым по порядку.
+            "color": markers.color_keyword or markers.color_name,
+            "operation": markers.press_keyword,
+            "output_kind": "П/ф" if markers.is_semi_finished else "ГП",
+        }
+        route = await build_route_from_profile(
+            db, profile, payload, product=product, batch=batch
+        )
+        if route.error:
+            _invalidate(item, f"Маршрут не собран: {route.error}")
+            continue
+
+        target_section = (
+            _ANODIZING_SECTION
+            if markers.color_code or markers.is_semi_finished
+            else _PRESSING_SECTION
+        )
+        prefix = _prefix_steps(route, target_section)
+        if not prefix:
+            _invalidate(
+                item,
+                f"В маршруте нет пройденных операций участка {target_section}",
+            )
+            continue
+
+        # Имена — для предпросмотра и совместимости; точные коды — в
+        # completed_stages, чтобы ось не зависела от неоднозначных имён.
+        item.completed_operations_raw = ", ".join(
+            step.operation_name for step in prefix
+        )
+        item.completed_stages = [_stage_entry(step, batch) for step in prefix]
+        if markers.is_semi_finished and finished is not None:
+            item.target_section_id = finished.id
+            item.target_section_name = finished.name
