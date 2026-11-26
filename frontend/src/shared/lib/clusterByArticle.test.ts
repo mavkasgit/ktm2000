@@ -65,6 +65,35 @@ describe("clusterByArticle", () => {
     ]);
   });
 
+  it("одинаковые артикулы в разных написаниях — один блок (#474)", () => {
+    // `ALS-1103` и `ALS1103` — один артикул: дефис между буквой и цифрой
+    // оформление. Группировка по сырому написанию развела бы их в два блока,
+    // и знакомые оператору строки читались бы вразброс.
+    const blocks: Block[] = [
+      { article: "ALS-1103", quantity: 100, tag: "dash" },
+      { article: "ALS1103", quantity: 200, tag: "solid" },
+      { article: "ЮП-1", quantity: 50, tag: "other" },
+    ];
+
+    expect(clusterByArticle(blocks, { articleOf: byArticle, quantityOf: quantity }).map((b) => b.tag)).toEqual([
+      "dash",
+      "solid",
+      "other",
+    ]);
+  });
+
+  it("дефис между цифрами остаётся частью номера: 12-34 и 1234 — разные", () => {
+    const blocks: Block[] = [
+      { article: "12-34", quantity: 100, tag: "dash" },
+      { article: "1234", quantity: 200, tag: "solid" },
+    ];
+
+    expect(clusterByArticle(blocks, { articleOf: byArticle, quantityOf: quantity }).map((b) => b.tag)).toEqual([
+      "solid",
+      "dash",
+    ]);
+  });
+
   it("пустой список не падает", () => {
     expect(clusterByArticle([], { articleOf: byArticle, quantityOf: quantity })).toEqual([]);
   });

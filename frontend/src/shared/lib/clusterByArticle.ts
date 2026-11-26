@@ -15,7 +15,14 @@
  * Одна реализация на все экраны: доска участка, передачи, печатный план. Своя
  * копия рядом с экраном — способ разойтись в том, что «одинаковые артикулы
  * близко» значит на соседней странице.
+ *
+ * Ключ группировки — ``skuLoose`` артикула (#474): ``ALS-1103`` и ``ALS1103``
+ * — один артикул, дефис между буквой и цифрой это оформление. В подписи
+ * остаётся первое встреченное сырое написание — его и увидит оператор; дефис
+ * между цифрами (``12-34``) ключ не снимает, это часть номера.
  */
+
+import { skuLoose } from "./skuSpelling";
 
 export type ClusterByArticleOptions<T> = {
   /** Артикул блока: по нему блоки склеиваются в один кусок списка. */
@@ -35,25 +42,32 @@ export function clusterByArticle<T>(
 ): T[] {
   const byArticle = new Map<string, T[]>();
   const totals = new Map<string, number>();
+  // Первое встреченное написание артикула — для подписи и порядка при равной
+  // сумме. Ключ группировки нормализован, а оператору показываем его.
+  const displayArticle = new Map<string, string>();
 
   for (const block of blocks) {
     const article = articleOf(block);
+    const key = skuLoose(article);
     const quantity = quantityOf(block);
-    const known = byArticle.get(article);
+    const known = byArticle.get(key);
     if (known) {
       known.push(block);
-      totals.set(article, (totals.get(article) ?? 0) + quantity);
+      totals.set(key, (totals.get(key) ?? 0) + quantity);
       continue;
     }
-    byArticle.set(article, [block]);
-    totals.set(article, quantity);
+    byArticle.set(key, [block]);
+    totals.set(key, quantity);
+    displayArticle.set(key, article);
   }
 
   return [...byArticle.keys()]
     .sort((a, b) => {
       const quantityDiff = (totals.get(b) ?? 0) - (totals.get(a) ?? 0);
       if (quantityDiff !== 0) return quantityDiff;
-      return compareArticles ? compareArticles(a, b) : 0;
+      return compareArticles
+        ? compareArticles(displayArticle.get(a) ?? "", displayArticle.get(b) ?? "")
+        : 0;
     })
     .flatMap((article) => byArticle.get(article) ?? []);
 }
