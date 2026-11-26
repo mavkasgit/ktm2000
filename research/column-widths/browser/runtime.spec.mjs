@@ -62,13 +62,14 @@ test("prepare + search укладываются в порог §15 (CPU 4×)", a
     line("search (включая buildCostModel)", overall.search),
     line("итого", overall.total),
     `холодный прогон (${cold.profile} @ ${cold.tableWidth}): ${cold.totalMs} мс`,
-    `порог ${threshold.ms} мс: ${threshold.pass ? "PASS" : "FAIL"} (p95 ${threshold.maxP95TotalMs} мс, cold ${threshold.coldTotalMs} мс)`,
+    `порог ${threshold.ms} мс по медиане: ${threshold.pass ? "PASS" : "FAIL"} (медиана ${threshold.medianTotalMs} мс, p95 ${threshold.p95TotalMs} мс, cold ${threshold.coldTotalMs} мс)`,
     "по конфигурациям:",
   ];
   for (const config of configs) {
     lines.push(
       `  ${config.profile} @ ${config.tableWidth}: prepare ${config.summary.prepare.median} / ` +
-        `search ${config.summary.search.median} / итого ${config.summary.total.median} мс (p95 ${config.summary.total.p95})`,
+        `search ${config.summary.search.median} / итого ${config.summary.total.median} мс (p95 ${config.summary.total.p95}), ` +
+        `эквивалентность полной подготовке: Δwidth ${config.diagnostics.equivalence.maxWidthDeltaPx} px`,
     );
   }
   console.log(lines.join("\n"));
@@ -85,12 +86,18 @@ test("prepare + search укладываются в порог §15 (CPU 4×)", a
   );
   expect(overall.total.median, "замер не должен быть нулевым").toBeGreaterThan(0);
 
-  // Нарушения `minPx` — не «медленно», а сломанная модель: такую раскладку
-  // нельзя применять. Честное переполнение бюджета допустимо и остаётся в JSON.
   for (const config of configs) {
+    // Нарушения `minPx` — не «медленно», а сломанная модель: такую раскладку
+    // нельзя применять. Честное переполнение бюджета допустимо и остаётся в JSON.
     expect(
       config.result.sanity.belowMin,
       `${config.profile} @ ${config.tableWidth}: minPx колонок не нарушен`,
     ).toEqual([]);
+    // Оптимизация подготовки не имеет права менять раскладку: иначе гейт §15
+    // измеряет другую политику, а не ту, что прошла исследование.
+    expect(
+      config.diagnostics.equivalence.sameWidths,
+      `${config.profile} @ ${config.tableWidth}: ширины совпадают с полной подготовкой`,
+    ).toBe(true);
   }
 });

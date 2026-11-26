@@ -36,16 +36,32 @@ function prepareCell(measurer, column, value) {
   };
 }
 
-export function prepareSheet(sheet, measurer) {
+/**
+ * Готовит лист к многократной оценке ширин.
+ *
+ * `options.singleLineMeasurer` (#483) — измеритель для колонок без переноса.
+ * Им считается всё, что по определению занимает одну строку: numeric, mono,
+ * control и `truncate`-текст. Их натуральная ширина влияет только на счётчик
+ * обрезки (`cost = Σ height + λ × truncated`), а при `λ = 0` — ни на что:
+ * переносить там нечего, `lines` всегда 1. Поэтому `pretext` (сегментация +
+ * canvas) нужен только `wrap`-колонкам, а остальным достаточно табличных
+ * метрик — это та же политика, просто без лишней работы.
+ */
+export function prepareSheet(sheet, measurer, options = {}) {
+  const { singleLineMeasurer = null } = options;
   const columns = sheet.columns;
   const rows = sheet.rows.map((row) => {
     const cells = new Array(columns.length);
     for (let index = 0; index < columns.length; index += 1) {
       const column = columns[index];
-      cells[index] = prepareCell(measurer, column, row.values[column.id]);
+      const columnMeasurer =
+        singleLineMeasurer && column.wrap !== true ? singleLineMeasurer : measurer;
+      cells[index] = prepareCell(columnMeasurer, column, row.values[column.id]);
     }
     return cells;
   });
+  // `measurer` — тот, которым готовились `wrap`-ячейки: именно его зовут
+  // `measureCell`/`cellThresholds` для переноса.
   return { columns, rows, measurer };
 }
 
