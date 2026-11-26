@@ -19,6 +19,7 @@ import {
 import type { StockBalanceEntry } from "@/shared/api/stock";
 import { listProducts } from "@/shared/api/products";
 import { fmtQty } from "@/shared/lib/quantityFormat";
+import { skuLoose } from "@/shared/lib/skuSpelling";
 import {
   AlertCircle,
   AlertTriangle,
@@ -175,9 +176,9 @@ export function RemainderAllocationDialog({
       setError(null);
       try {
         const products = await listProducts({ q: positionSku, limit: 20 });
-        const normalizedSku = positionSku.trim().toLowerCase();
+        const normalizedSku = skuLoose(positionSku);
         const product =
-          products.find((p) => p.sku.trim().toLowerCase() === normalizedSku) ??
+          products.find((p) => skuLoose(p.sku) === normalizedSku) ??
           (products.length === 1 ? products[0] : undefined);
         const productId = product?.id ?? 0;
         // `order=operations` — тот же порядок, что предвыбор на бэкенде
