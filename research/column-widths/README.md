@@ -21,6 +21,7 @@
 | `lib/evaluate.mjs` | подготовка листа и оценка высоты/обрезки |
 | `lib/optimizers.mjs` | `baseline`, `auto`, `p90`, `narrowing`, `breakpoints`, `oracle` |
 | `bench.mjs` | матрица, JSON и markdown-отчёт |
+| `browser/` | Playwright-стенд H4: `pretext` против реального DOM (`table-fixed`, те же шрифты и ширины); [README](./browser/README.md) |
 | `test/` | unit-тесты на детерминизм, границы профилей, перенос, контракт измерителей, инварианты оптимизаторов |
 
 ## Профили и калибровка
@@ -67,10 +68,11 @@
 ## Запуск
 
 ```bash
-npm install --prefix research/column-widths   # @chenglou/pretext
+npm install --prefix research/column-widths   # @chenglou/pretext, vite, @playwright/test
 node research/column-widths/bench.mjs --quick # 2 профиля, быстрый прогон
 node research/column-widths/bench.mjs         # полная матрица
 npm test --prefix research/column-widths
+npm --prefix research/column-widths run browser:test  # H4: pretext против DOM
 ```
 
 Результаты пишутся в `results/bench.json` и `results/report.md`; каталог
@@ -127,6 +129,30 @@ measurer.lineCount(prepared, usableWidth);     // число строк при �
 - при ширине уже самого длинного слова pretext делает аварийный перенос внутри
   слова (`overflow-wrap: break-word`), greedy оставляет слово в одной
   переполненной строке.
+
+## Браузерная валидация (H4)
+
+Стенд [`browser/`](./browser/README.md) меряет те же строки дважды: `pretext`
+и реальный Chromium в `table-fixed`-ячейке с `line-height: 20px` из
+`columns.mjs` и `overflow-wrap: normal`. Профили — все семь, текстовые
+колонки — `source_name` и `errors`, ширины контента 90–280 px (продуктовый
+диапазон), seed 1, 100 строк.
+
+```bash
+npm install --prefix research/column-widths
+npm --prefix research/column-widths run browser:test
+```
+
+Текущий вердикт (2026-11-26, Chromium 1254): **H4 достигнут** — 9
+расхождений на 4656 непустых ячеек (**0.19%**) по строкам и по высоте.
+Все 9 — `errors` на ширине 90 px, где слово «поддерживается» шире контента
+на 0.84 px: `pretext` рвёт его как `overflow-wrap: break-word`, а CSS с
+`normal` оставляет в одной строке. Там, где `usableWidth >= maxWordWidth`,
+расхождений **0** (4647 ячеек), включая дефисные артикулы; mono-диагностика —
+0 из 6730. Вывод для модели: `pretext` точен, но оптимизатор обязан держать
+`w_i >= CELL_PADDING_PX + maxWordWidth` (или CSS должен быть `break-word`).
+Сырой JSON — `results/browser.json` (не коммитится), таблицы и разбор причин —
+в [`browser/README.md`](./browser/README.md).
 
 ## Границы модели
 
