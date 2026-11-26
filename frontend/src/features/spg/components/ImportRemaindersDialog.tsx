@@ -33,7 +33,11 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { saveBlobAsFile } from "@/shared/lib/downloadFile";
-import { remainderPreviewColumns } from "../lib/remainderPreviewColumns";
+import {
+  remainderPreviewColumns,
+  REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH,
+  REMAINDER_PREVIEW_RESET_COLUMN_WIDTH,
+} from "../lib/remainderPreviewColumns";
 
 import {
   useImportRowExpansion,
@@ -311,6 +315,12 @@ type PreviewRowProps = {
  * Качество и участок интерактивны только у ``valid``: у пропущенной и
  * ошибочной строки импорт их не применит, поэтому там статичный бейдж, а не
  * ``Select`` (ADR-0030 — строка остаётся компактной).
+ *
+ * Высота строки — один ритм `TABLE_ROW_COMPACT` (ADR-0030), поэтому текстовые
+ * ячейки печатаются одной строкой (`truncate`), а полное значение — в `title`:
+ * перенос длинного наименования/артикула растягивал строку и ломал оценку
+ * виртуализатора. Перенос оставлен только «Ошибкам»: это причина, по которой
+ * строка попала в предпросмотр, и её видно без наведения.
  */
 const PreviewRow = memo(function PreviewRow({
   item,
@@ -349,12 +359,19 @@ const PreviewRow = memo(function PreviewRow({
         <td className="px-1.5 py-0.5 text-left font-bold text-muted-foreground tabular-nums">
           {item.source_row_number}
         </td>
-        <td className="px-1.5 py-0.5 font-mono tabular-nums whitespace-nowrap">
+        <td
+          className="px-1.5 py-0.5 font-mono tabular-nums whitespace-nowrap overflow-hidden text-ellipsis"
+          title={item.source_code ?? undefined}
+        >
           {item.source_code ?? "—"}
         </td>
         <td
-          className="px-1.5 py-0.5 font-mono font-semibold"
-          title={item.matched_sku && item.matched_sku !== item.sku ? `Найден SKU: ${item.matched_sku}` : undefined}
+          className="px-1.5 py-0.5 font-mono font-semibold whitespace-nowrap overflow-hidden text-ellipsis"
+          title={
+            item.matched_sku && item.matched_sku !== item.sku
+              ? `${item.sku} → найдено: ${item.matched_sku}`
+              : item.sku
+          }
         >
           {item.sku}
           {item.matched_sku && item.matched_sku !== item.sku ? (
@@ -362,8 +379,8 @@ const PreviewRow = memo(function PreviewRow({
           ) : null}
         </td>
         <td
-          className={`px-1.5 py-0.5 ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
-          title={item.source_name ?? undefined}
+          className={`px-1.5 py-0.5 truncate ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
+          title={item.source_name ?? item.product_name ?? undefined}
         >
           {item.product_name ?? item.source_name ?? "—"}
         </td>
@@ -374,22 +391,25 @@ const PreviewRow = memo(function PreviewRow({
           {fmtQtyPrecise(item.source_quantity_m)}
         </td>
         <td
-          className={`px-1.5 py-0.5 tabular-nums whitespace-nowrap ${
+          className={`px-1.5 py-0.5 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis ${
             item.dimensions ? "font-medium text-foreground" : "text-muted-foreground"
           }`}
+          title={formatDimensionsLabel(item.dimensions, item.dimensions_label)}
         >
           {formatDimensionsLabel(item.dimensions, item.dimensions_label)}
         </td>
-        <td className="px-1.5 py-0.5 min-w-[160px]">
+        <td className="px-1.5 py-0.5 overflow-hidden">
           {item.completed_stages && item.completed_stages.length > 0 ? (
             <RouteStepsDisplay
               steps={item.completed_stages}
               referenceOps={operations}
               compact
               size="sm"
+              // Одна строка: перенос пилюль поднимал высоту строки (ADR-0030).
+              nowrap
             />
           ) : (
-            <span className="text-xs text-muted-foreground">
+            <span className="block truncate text-xs text-muted-foreground">
               {getImportItemOperationsLabel(item)}
             </span>
           )}
@@ -404,7 +424,7 @@ const PreviewRow = memo(function PreviewRow({
               onValueChange={(value) => onQualityChange(rowKey, value as QualityState)}
             >
               <SelectTrigger
-                className={`h-6 w-full min-w-[96px] text-[10px] font-semibold border px-2 ${qualityBadgeClass(
+                className={`h-6 w-full text-[10px] font-semibold border px-2 ${qualityBadgeClass(
                   qualityState,
                 )}`}
               >
@@ -420,7 +440,7 @@ const PreviewRow = memo(function PreviewRow({
             </Select>
           ) : (
             <span
-              className={`inline-flex h-6 w-full min-w-[96px] items-center justify-center rounded-md border px-2 text-[10px] font-semibold ${qualityBadgeClass(
+              className={`inline-flex h-6 w-full items-center justify-center rounded-md border px-2 text-[10px] font-semibold ${qualityBadgeClass(
                 qualityState,
               )}`}
             >
@@ -446,7 +466,7 @@ const PreviewRow = memo(function PreviewRow({
               value={sectionOverride ?? item.target_section_id ?? null}
               onValueChange={(sectionId) => onSectionChange(rowKey, sectionId)}
               placeholder="Выберите участок"
-              className="h-6 w-full min-w-[140px] text-[10px]"
+              className="h-6 w-full text-[10px]"
             />
           ) : (
             <span className="text-xs text-muted-foreground">{sectionLabel}</span>
@@ -1660,7 +1680,13 @@ export function ImportRemaindersDialog({
               ) : null}
 
               <ImportPreview.TableFrame
-                className={`${DATA_TABLE_STYLES.container} min-h-0`}
+                // Горизонтальный скролл объявлен здесь, а не взят из
+                // `DATA_TABLE_STYLES.container` (`overflow-x-hidden`):
+                // раскладка таблицы фиксированная (`table-fixed` + `<colgroup>`
+                // ниже), колонки не сжимаются под узкое окно, и без прокрутки
+                // правый край просто обрезался бы — тот же дефект, что
+                // вылечен в `PlanPage`.
+                className="min-h-0 min-w-0 overflow-auto rounded-lg border"
                 containerRef={scrollContainerRef}
                 // Спиннер — только пока предпросмотра на экране не было ни
                 // разу: перечитывание по фильтру не должно уносить таблицу
@@ -1680,10 +1706,22 @@ export function ImportRemaindersDialog({
                   )
                 }
               >
-                <table className="w-full text-[11px] text-left border-collapse">
+                {/* `table-fixed` + `<colgroup>`: строки виртуализированы, и при
+                    auto-раскладке ширины колонок считались по содержимому
+                    смонтированных строк — при скролле они «перерисовывались».
+                    Ширины объявлены один раз в `remainderPreviewColumns`
+                    (вместе со служебными колонками дают 100%). */}
+                <table className="w-full min-w-[1180px] table-fixed text-[11px] text-left border-collapse">
+                    <colgroup>
+                      <col style={{ width: REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH }} />
+                      {remainderPreviewColumns.map((column) => (
+                        <col key={column.id} style={{ width: column.width }} />
+                      ))}
+                      <col style={{ width: REMAINDER_PREVIEW_RESET_COLUMN_WIDTH }} />
+                    </colgroup>
                     <thead>
                       <tr>
-                        <th className={`${headerCellClass} w-7`} />
+                        <th className={headerCellClass} />
                         {remainderPreviewColumns.map((column) => (
                           <th
                             key={column.id}

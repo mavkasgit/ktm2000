@@ -8,7 +8,11 @@ import { describe, expect, it } from "vitest";
 import { buildColumnApiParams } from "@/shared/lib/columnSpecs";
 import type { RemainderPreviewSortField } from "@/shared/lib/stockSortParams";
 
-import { remainderPreviewColumns } from "./remainderPreviewColumns";
+import {
+  remainderPreviewColumns,
+  REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH,
+  REMAINDER_PREVIEW_RESET_COLUMN_WIDTH,
+} from "./remainderPreviewColumns";
 
 const build = (
   columnFilters: Partial<Record<RemainderPreviewSortField, Set<string>>>,
@@ -43,6 +47,15 @@ describe("колонки предпросмотра остатков", () => {
       expect(column?.filterField).toBeUndefined();
       expect(column?.sortField).toBeUndefined();
     }
+  });
+
+  it("ширины складываются в 100%: иначе table-fixed перераспределит остаток", () => {
+    // Таблица предпросмотра виртуализирована, поэтому раскладка фиксированная:
+    // ширины не должны зависеть от смонтированных строк. Служебные колонки
+    // (шеврон и сброс) объявлены рядом, а не в диалоге.
+    const total = [...remainderPreviewColumns.map((column) => column.width), REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH, REMAINDER_PREVIEW_RESET_COLUMN_WIDTH]
+      .reduce((sum, width) => sum + Number.parseFloat(width), 0);
+    expect(total).toBeCloseTo(100, 5);
   });
 });
 

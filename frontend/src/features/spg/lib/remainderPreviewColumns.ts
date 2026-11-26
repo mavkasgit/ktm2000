@@ -18,9 +18,28 @@ export type RemainderPreviewColumn = ColumnSpec<
 > & {
   id: string;
   label: string;
-  /** Класс `<th>` сверх общего: выравнивание и ширина. */
+  /**
+   * Ширина колонки в `<colgroup>` таблицы предпросмотра.
+   *
+   * Предпросмотр виртуализирован, и при `table-layout: auto` браузер считает
+   * ширины по содержимому смонтированных строк: при скролле строки меняются,
+   * и колонки «перерисовывают» размер. Поэтому раскладка фиксированная
+   * (`table-fixed`), а ширины складываются в 100% вместе со служебными
+   * колонками шеврона и сброса.
+   */
+  width: string;
+  /** Класс `<th>` сверх общего: только выравнивание, ширина живёт в `width`. */
   headerClassName?: string;
 };
+
+/**
+ * Служебные колонки таблицы предпросмотра: шеврон разворота сырых строк слева
+ * и ячейка сброса фильтров справа. Сумма всех ширин (эти две + `width`
+ * колонок) обязана быть 100% — иначе `table-fixed` перераспределит остаток
+ * непредсказуемо.
+ */
+export const REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH = "2.5%";
+export const REMAINDER_PREVIEW_RESET_COLUMN_WIDTH = "2.5%";
 
 /** «—» и «Ошибка» — это не значение, а способ показать, что его нет. */
 const errorValueOnly = (value: string) =>
@@ -42,7 +61,7 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     label: "#",
     filterField: "row",
     sortField: "row",
-    headerClassName: "w-10",
+    width: "3%",
     sortValues: (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
   },
   {
@@ -51,14 +70,14 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     // Сортировки тоже нет — бэкенд её не знает, а иконка без эффекта врёт.
     id: "source_code",
     label: "Код 1С",
-    headerClassName: "w-20",
+    width: "5.5%",
   },
   {
     id: "sku",
     label: "Артикул",
     filterField: "sku",
     sortField: "sku",
-    headerClassName: "w-24",
+    width: "7%",
     sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
@@ -67,14 +86,15 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     // сервер не умеет.
     id: "source_name",
     label: "Наименование",
-    headerClassName: "min-w-[220px]",
+    width: "15%",
   },
   {
     id: "quantity",
     label: "Кол-во, шт",
     filterField: "quantity",
     sortField: "quantity",
-    headerClassName: "w-20 text-right",
+    width: "5.5%",
+    headerClassName: "text-right",
     sortValues: (a, b) => (Number.parseFloat(a) || 0) - (Number.parseFloat(b) || 0),
   },
   {
@@ -82,14 +102,15 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     // фильтра/сортировки нет: сервер их не фильтрует.
     id: "meters",
     label: "Метры",
-    headerClassName: "w-20 text-right",
+    width: "5.5%",
+    headerClassName: "text-right",
   },
   {
     id: "length",
     label: "Длина",
     filterField: "length",
     sortField: "length",
-    headerClassName: "w-16",
+    width: "5%",
     sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
@@ -97,7 +118,9 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     label: "Операции",
     filterField: "operations",
     sortField: "operations",
-    headerClassName: "min-w-[140px]",
+    // Самая широкая содержательная колонка: три пилюли с подписями не
+    // влезали в 13%, а «Наименования» в это время было с запасом.
+    width: "21%",
     sortValues: (a, b) => a.localeCompare(b, "ru"),
     // Значения списка фильтра — серверные подписи (их собирает
     // `getImportItemOperationsServerLabel` по `completed_operations_raw` и
@@ -111,7 +134,7 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     label: "Качество",
     filterField: "quality",
     sortField: "quality",
-    headerClassName: "w-24",
+    width: "7%",
     sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
@@ -119,7 +142,7 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     label: "Участок",
     filterField: "section",
     sortField: "section",
-    headerClassName: "min-w-[135px]",
+    width: "9.5%",
     sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
@@ -131,7 +154,7 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     // строкой: перенос растягивал строку таблицы выше общего ритма
     // `TABLE_ROW_COMPACT` (40px, ADR-0030). Ширина — под самый длинный
     // базовый вариант; длинные ошибки по-прежнему переносятся.
-    headerClassName: "min-w-[200px]",
+    width: "11%",
     mapValue: errorValueOnly,
     sortValues: (a, b) => a.localeCompare(b, "ru"),
   },

@@ -1,0 +1,13 @@
+{
+  "name": "@ktm/research-column-widths",
+  "private": true,
+  "type": "module",
+  "description": "Research harness: optimal column widths for minimal-height data tables",
+  "scripts": {
+    "bench": "node bench.mjs",
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "dependencies": {
+    "@chenglou/pretext": "^1.0.0"
+  }
+}
