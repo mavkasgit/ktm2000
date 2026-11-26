@@ -8,6 +8,8 @@ import {
   mainColumns,
   parseSections,
   runConfig,
+  runRegretMatrix,
+  runSampleStability,
   runSweep,
 } from "../bench.mjs";
 import {
@@ -164,6 +166,66 @@ test("--only парсит секции и all", () => {
     "oracle",
     "product",
     "sweep",
+    "stability",
+    "robust",
   ]);
   assert.throws(() => parseSections("matrix,nope"), /неизвестная секция/);
+});
+
+test("матрица сожалений детерминирована, а перенос с W0 в проценты держит бюджет", async () => {
+  const measurer = await createMeasurer("greedy");
+  const spec = {
+    profiles: ["realistic", "long-tail"],
+    rows: 120,
+    baseWidth: 1500,
+    widths: [1180, 1500, 1600],
+    seed: 1,
+    columnCount: 11,
+    optimizer: "search",
+  };
+  const first = runRegretMatrix(measurer, spec);
+  const second = runRegretMatrix(measurer, spec);
+  assert.deepEqual(second.cases, first.cases);
+  assert.deepEqual(second.byWidth, first.byWidth);
+  assert.equal(first.cases.length, spec.profiles.length * spec.widths.length);
+
+  for (const item of first.cases) {
+    if (item.tableWidth === spec.baseWidth) {
+      assert.equal(item.scaledRegretPct, 0, "на W0 перенос должен быть нейтральным");
+    }
+    assert.ok(
+      Math.abs(item.scaledWidthSum - item.contentWidth) < 0.5,
+      `${item.profile}@${item.tableWidth}: сумма ${item.scaledWidthSum} ≠ ${item.contentWidth}`,
+    );
+    const shareTotal = Object.values(item.baseShares).reduce(
+      (sum, value) => sum + value,
+      0,
+    );
+    assert.ok(Math.abs(shareTotal - 1) < 1e-6, `сумма долей ${shareTotal}`);
+  }
+});
+
+test("H2 пересчитывается на размерах подвыборки 200/500", async () => {
+  const measurer = await createMeasurer("greedy");
+  const cases = runSampleStability(measurer, {
+    profiles: ["long-tail"],
+    sampleSizes: [200, 500],
+    rows: 700,
+  });
+  assert.equal(cases.length, 2 * 3);
+  for (const size of [200, 500]) {
+    const subset = cases.filter((item) => item.sampleSize === size);
+    assert.equal(subset.length, 3);
+    assert.equal(new Set(subset.map((item) => item.profile)).size, 1);
+  }
+  for (const optimizer of ["narrowing", "breakpoints", "search"]) {
+    const heights = [200, 500].map(
+      (size) =>
+        cases.find(
+          (item) => item.sampleSize === size && item.optimizer === optimizer,
+        ).fullHeight,
+    );
+    // Полный лист один и тот же независимо от размера подвыборки.
+    assert.equal(new Set(heights).size, 1, optimizer);
+  }
 });
