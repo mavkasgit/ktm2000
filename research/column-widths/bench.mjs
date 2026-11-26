@@ -284,6 +284,18 @@ function buildReport({ configs, summary, oracle, sampleStability, widthStability
   const h4 = measurerAgreement && !measurerAgreement.skipped
     ? measurerAgreement.sharePct <= 1
     : null;
+  const h2Worst = [...sampleStability].sort(
+    (a, b) => Math.abs(b.heightDeltaPct) - Math.abs(a.heightDeltaPct),
+  )[0];
+  const h3Worst = [...widthStability].sort(
+    (a, b) => b.maxShareDeltaPct - a.maxShareDeltaPct,
+  )[0];
+  const searchH2 = sampleStability
+    .filter((item) => item.optimizer === "search")
+    .map((item) => Math.abs(item.heightDeltaPct));
+  const searchH3 = widthStability
+    .filter((item) => item.optimizer === "search")
+    .map((item) => item.maxShareDeltaPct);
 
   const lines = [];
   lines.push("# Отчёт: оптимальное распределение ширин колонок");
@@ -313,8 +325,8 @@ function buildReport({ configs, summary, oracle, sampleStability, widthStability
     .slice(1)
     .map((name) => `${name} ${worstGap[name].toFixed(2)}%`)
     .join(", ")}.`);
-  lines.push(`- **H2 (подвыборка 500 строк даёт ≤2% потерь):** ${verdict(h2)}.`);
-  lines.push(`- **H3 (раскладка устойчива к W 1180–1920):** ${verdict(h3)}.`);
+  lines.push(`- **H2 (подвыборка 500 строк даёт ≤2% потерь):** ${verdict(h2)}. Худшее — ${h2Worst.optimizer}/${h2Worst.profile}: ${h2Worst.heightDeltaPct}%; у \`search\` максимум ${searchH2.length ? Math.max(...searchH2).toFixed(2) : "—"}%.`);
+  lines.push(`- **H3 (раскладка устойчива к W 1180–1920):** ${verdict(h3)}. Худшее — ${h3Worst.optimizer}/${h3Worst.profile}: ${h3Worst.maxShareDeltaPct} п.п.; у \`search\` максимум ${searchH3.length ? Math.max(...searchH3).toFixed(2) : "—"} п.п.`);
   lines.push(
     `- **H4 (pretext vs эталон <1% строк):** ${
       h4 === null ? "не проверялась в этом прогоне (нужен браузер)" : verdict(h4)
@@ -359,7 +371,7 @@ function buildReport({ configs, summary, oracle, sampleStability, widthStability
   lines.push("- Модель текста в Node — табличные метрики 11px, а не реальный canvas; H4 проверен в браузере отдельно (#479, 0.19% расхождений).");
   lines.push("- `operations` смоделированы как неразрывные пилюли: ширина покупает отсутствие обрезки, а не строки.");
   lines.push("- Минимум текстовой колонки — `max(minPx, maxWordWidth + padding)` по листу (#479): уже самого широкого слова `pretext` рвёт слово, а CSS с `overflow-wrap: normal` — нет. Если минимумы не влезают в бюджет, раскладка честно переполняется.");
-  lines.push("- Поиск идёт по подвыборке ≤500 строк (первые 60% — самые длинные ячейки), `cost` считается на полном листе; полная проверка H2 — #482.");
+  lines.push("- Поиск идёт по подвыборке ≤500 строк (самые длинные строки по одной на гибкую колонку + равномерная сетка), `cost` считается на полном листе; полная проверка H2 — #482.");
   lines.push("");
   lines.push("## Рекомендация");
   lines.push("");

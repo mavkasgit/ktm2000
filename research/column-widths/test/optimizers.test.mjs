@@ -21,6 +21,7 @@ import {
   columnMaxWordWidths,
   effectiveMinWidth,
   roundToBudget,
+  selectSampleRows,
   widthsFromIndices,
 } from "../lib/curves.mjs";
 
@@ -260,6 +261,29 @@ test("оптимизаторы детерминированы", async () => {
     const second = optimizer(prepared, CONTENT, { lambda: 20 }).widths;
     assert.deepEqual(second, first, name);
   }
+});
+
+test("подвыборка детерминирована, не больше лимита и включает длинные строки", async () => {
+  const { prepared } = await fixture({ profile: "long-tail", rows: 2000 });
+  const first = selectSampleRows(prepared, 500);
+  const second = selectSampleRows(prepared, 500);
+  assert.deepEqual(second, first);
+  assert.ok(first.length <= 500, `подвыборка ${first.length} > 500`);
+  assert.ok(first.length > 0);
+  // Самая длинная строка по гибким колонкам обязана попасть в подвыборку.
+  const flexIndexes = prepared.columns
+    .map((column, index) => (column.flex ? index : -1))
+    .filter((index) => index >= 0);
+  let longestRow = 0;
+  let longestScore = -Infinity;
+  prepared.rows.forEach((row, index) => {
+    const score = flexIndexes.reduce((sum, i) => sum + Math.log1p(row[i].naturalWidth), 0);
+    if (score > longestScore) {
+      longestScore = score;
+      longestRow = index;
+    }
+  });
+  assert.ok(first.includes(longestRow), "самая длинная строка не попала в подвыборку");
 });
 
 test("высота строки = max по колонкам, а не сумма", async () => {

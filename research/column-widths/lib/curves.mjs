@@ -31,8 +31,16 @@ export const DEFAULT_MAX_CANDIDATES = 40;
 /** Сколько строк листа видит поиск: подвыборка по H2 (полная проверка — #482). */
 export const DEFAULT_SAMPLE_ROWS = 500;
 
-/** Доля подвыборки, занятая строками с самыми длинными ячейками. */
-const LONG_CELL_SHARE = 0.6;
+/**
+ * Сколько строк-выбросов гарантированно попадает в подвыборку: по одной на
+ * каждую гибкую колонку (самая длинная ячейка). Остальное — равномерная
+ * сетка по листу. Делать хвост долей подвыборки нельзя: `cost` чувствителен к
+ * доле обрезанных ячеек, и перекос в длинные строки систематически завышает
+ * ширину «под хвост» (измерено на `long-tail`: +7% cost против полного листа).
+ */
+function longCellCount(flexCount) {
+  return Math.max(1, flexCount);
+}
 
 /** Потолок строк для колонки без `line-clamp` (защита от бесконечного перебора). */
 const MAX_LINES = 64;
@@ -104,7 +112,7 @@ export function selectSampleRows(prepared, limit = DEFAULT_SAMPLE_ROWS) {
   order.sort((a, b) => scores[b] - scores[a] || a - b);
 
   const chosen = new Uint8Array(total);
-  const longCount = Math.min(total, Math.max(1, Math.ceil(limit * LONG_CELL_SHARE)));
+  const longCount = Math.min(total, longCellCount(scoreColumns.length));
   for (let i = 0; i < longCount; i += 1) chosen[order[i]] = 1;
 
   const rest = [];
