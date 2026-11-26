@@ -13,6 +13,7 @@ from app.domain.dimensions import (
     DimensionsValidationError,
     canonicalize_dimensions,
     dimensions_equal,
+    format_mm_as_meters,
     parse_length_m_to_mm,
 )
 from app.services.color_extraction import resolve_payload_color
@@ -519,15 +520,6 @@ def _append_group_output(
     )
 
 
-def _format_balance_meters(value_mm: Decimal) -> str:
-    """Миллиметры → метры для маркера баланса: «360000» → «360», «2700» → «2,7».
-
-    Числа печатает оператор на предпросмотре, поэтому без экспоненты и с
-    запятой: ``Decimal.normalize()`` дал бы ``3.6E+5``.
-    """
-    return f"{(value_mm / 1000).normalize():f}".replace(".", ",")
-
-
 def _check_group_balances(parsed: list[ParsedPlanRow]) -> None:
     """Баланс группы: вход × длина = Σ(выход × длина) — всегда сходится точно
     (ADR-0003). Расхождение — warning, не ошибка: импорт терпим к аномалиям
@@ -558,9 +550,9 @@ def _check_group_balances(parsed: list[ParsedPlanRow]) -> None:
         if total_in != total_out:
             marker = (
                 "plan_group_balance_mismatch:"
-                f"вход {_format_balance_meters(total_in)} м, "
-                f"выход {_format_balance_meters(total_out)} м "
-                f"(разница {_format_balance_meters(total_out - total_in)} м)"
+                f"вход {format_mm_as_meters(total_in)} м, "
+                f"выход {format_mm_as_meters(total_out)} м "
+                f"(разница {format_mm_as_meters(total_out - total_in)} м)"
             )
             if marker not in row.warnings:
                 row.warnings.append(marker)
