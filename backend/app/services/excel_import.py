@@ -519,6 +519,15 @@ def _append_group_output(
     )
 
 
+def _format_balance_meters(value_mm: Decimal) -> str:
+    """Миллиметры → метры для маркера баланса: «360000» → «360», «2700» → «2,7».
+
+    Числа печатает оператор на предпросмотре, поэтому без экспоненты и с
+    запятой: ``Decimal.normalize()`` дал бы ``3.6E+5``.
+    """
+    return f"{(value_mm / 1000).normalize():f}".replace(".", ",")
+
+
 def _check_group_balances(parsed: list[ParsedPlanRow]) -> None:
     """Баланс группы: вход × длина = Σ(выход × длина) — всегда сходится точно
     (ADR-0003). Расхождение — warning, не ошибка: импорт терпим к аномалиям
@@ -547,7 +556,12 @@ def _check_group_balances(parsed: list[ParsedPlanRow]) -> None:
             continue
         total_in = row.input_quantity * Decimal(str(input_length))
         if total_in != total_out:
-            marker = f"plan_group_balance_mismatch:in={total_in.normalize()}mm,out={total_out.normalize()}mm"
+            marker = (
+                "plan_group_balance_mismatch:"
+                f"вход {_format_balance_meters(total_in)} м, "
+                f"выход {_format_balance_meters(total_out)} м "
+                f"(разница {_format_balance_meters(total_out - total_in)} м)"
+            )
             if marker not in row.warnings:
                 row.warnings.append(marker)
 
