@@ -8,71 +8,92 @@
  *
  * Интерфейс одинаковый, поэтому оптимизатор не знает, каким движком считается
  * строка. Именно это позволяет позже заменить модель на реальный pretext/DOM
- * без переписывания алгоритма.
+ * без переписывания алгоритма:
+ *
+ * ```js
+ * const prepared = measurer.prepare(text, font); // font: "sans" | "mono"
+ * measurer.naturalWidth(prepared);               // ширина в одну строку
+ * measurer.maxWordWidth(prepared);               // самый широкий неразрывный кусок
+ * measurer.lineCount(prepared, usableWidth);     // число строк при ширине
+ * ```
+ *
+ * `ceil` помечен `role: "baseline"`: он нужен только как точка отсчёта в
+ * отчёте и не должен попадать в финальное решение (дефолт — `greedy`).
+ *
+ * Шрифты синхронизированы с CSS через `cssFont()`: `11px "Inter"` для текста и
+ * `11px "JetBrains Mono"` для артикулов/кодов. Источник размера и семейств —
+ * эта функция, а не строки, разбросанные по коду.
  */
 import {
   ceilLineCount,
   greedyLineCount,
-  naturalWidth as rawNaturalWidth,
   prepareText,
 } from "./text.mjs";
+import { installOffscreenCanvas } from "./offscreen-canvas.mjs";
 
 export const MEASURERS = ["greedy", "ceil", "pretext"];
+
+/** Размер шрифта предпросмотра в px — как `text-[11px]` в продуктовой таблице. */
+export const FONT_PX = 11;
+
+/** Семейства из CSS предпросмотра. */
+export const FONT_FAMILY = {
+  sans: '"Inter"',
+  mono: '"JetBrains Mono"',
+};
+
+const FONT_ALIASES = {
+  sans: "sans",
+  text: "sans",
+  mono: "mono",
+  code: "mono",
+};
+
+/** CSS font string для canvas/pretext: `11px "Inter"` или `11px "JetBrains Mono"`. */
+export function cssFont(font = "sans") {
+  const family = FONT_ALIASES[font] ?? "sans";
+  return `${FONT_PX}px ${FONT_FAMILY[family]}`;
+}
 
 function unbounded(prepared, usable, count) {
   const lines = count(prepared, usable);
   return Number.isFinite(lines) ? Math.max(1, lines) : Number.MAX_SAFE_INTEGER;
 }
 
-export function createSyntheticMeasurer(kind = "greedy") {
-  if (kind === "ceil") {
-    return {
-      name: "ceil",
-      prepare: prepareText,
-      naturalWidth: (prepared) => prepared.naturalWidth,
-      maxWordWidth: (prepared) => prepared.maxWordWidth,
-      lineCount: (prepared, usable) => unbounded(prepared, usable, ceilLineCount),
-    };
-  }
+function normalizeFont(font) {
+  return FONT_ALIASES[font] ?? "sans";
+}
+
+function syntheticMeasurer(kind) {
   return {
-    name: "greedy",
-    prepare: prepareText,
+    name: kind,
+    role: kind === "ceil" ? "baseline" : "primary",
+    prepare: (text, font = "sans") => prepareText(text, normalizeFont(font)),
     naturalWidth: (prepared) => prepared.naturalWidth,
     maxWordWidth: (prepared) => prepared.maxWordWidth,
-    lineCount: (prepared, usable) => unbounded(prepared, usable, greedyLineCount),
+    lineCount: (prepared, usable) =>
+      unbounded(prepared, usable, kind === "ceil" ? ceilLineCount : greedyLineCount),
   };
+}
+
+/** Синхронный измеритель на табличных метриках: `greedy` (дефолт) или `ceil` (baseline). */
+export function createSyntheticMeasurer(kind = "greedy") {
+  if (kind !== "greedy" && kind !== "ceil") {
+    throw new Error(`unknown synthetic measurer: ${kind}`);
+  }
+  return syntheticMeasurer(kind);
 }
 
 /**
- * Node-адаптер для pretext: библиотека требует Canvas 2D только на этапе
- * `prepare()`, поэтому подменяем измерение символов той же моделью, что и
- * greedy. В браузере (тикет «валидация измерителя») этот слой не нужен.
+ * Node/браузерный адаптер pretext: скрывает разницу API
+ * (`prepareWithSegments` / `measureLineStats` / `measureNaturalWidth`) за общим
+ * интерфейсом. В Node перед импортом ставит `OffscreenCanvas`-полифилл; в
+ * браузере `globalThis.OffscreenCanvas` уже есть и полифилл не нужен.
+ *
+ * `maxWordWidth` считается по сегментам самого pretext: это самый широкий
+ * неразрывный кусок, поэтому для слова с дефисом он может быть меньше, чем
+ * whitespace-токен у greedy (pretext/браузер переносят после дефиса).
  */
-function installOffscreenCanvas() {
-  if (globalThis.OffscreenCanvas) return;
-  globalThis.OffscreenCanvas = class OffscreenCanvasPolyfill {
-    constructor(width = 0, height = 0) {
-      this.width = width;
-      this.height = height;
-    }
-
-    getContext() {
-      const context = {
-        font: "11px sans-serif",
-        measureText(text) {
-          const font = /mono/i.test(context.font) ? "mono" : "sans";
-          return { width: rawNaturalWidth(String(text), font) };
-        },
-      };
-      return context;
-    }
-  };
-}
-
-function pretextFont(font) {
-  return font === "mono" ? '11px "JetBrains Mono"' : '11px "Inter"';
-}
-
 export async function createPretextMeasurer() {
   installOffscreenCanvas();
   const pretext = await import("@chenglou/pretext");
@@ -85,20 +106,26 @@ export async function createPretextMeasurer() {
   }
   return {
     name: "pretext",
+    role: "primary",
     prepare(text, font = "sans") {
       const value = text ?? "";
-      const prepared = pretext.prepare(value, pretextFont(font), {
+      const family = normalizeFont(font);
+      const prepared = pretext.prepareWithSegments(value, cssFont(family), {
         whiteSpace: "normal",
       });
+      const { kinds, widths } = prepared;
+      let maxWordWidth = 0;
+      for (let index = 0; index < kinds.length; index += 1) {
+        if (kinds[index] !== "text") continue;
+        const width = widths[index];
+        if (width > maxWordWidth) maxWordWidth = width;
+      }
       return {
         prepared,
         text: value,
-        font,
-        naturalWidth:
-          typeof pretext.measureNaturalWidth === "function"
-            ? pretext.measureNaturalWidth(prepared)
-            : rawNaturalWidth(value, font),
-        maxWordWidth: prepareText(value, font).maxWordWidth,
+        font: family,
+        naturalWidth: pretext.measureNaturalWidth(prepared),
+        maxWordWidth,
       };
     },
     naturalWidth: (prepared) => prepared.naturalWidth,
@@ -112,6 +139,7 @@ export async function createPretextMeasurer() {
   };
 }
 
+/** Создаёт измеритель по имени. `pretext` асинхронный (динамический import). */
 export async function createMeasurer(kind = "greedy") {
   if (kind === "pretext") return createPretextMeasurer();
   return createSyntheticMeasurer(kind);
