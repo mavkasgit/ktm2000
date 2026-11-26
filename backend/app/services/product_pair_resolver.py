@@ -32,7 +32,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.product import (
@@ -46,7 +46,8 @@ from app.services.hanger_quantity_calc import (
     HangerConfigError,
     compute_paired_hanger_quantity,
 )
-from app.services.import_normalization import normalize_sku as _normalize_sku
+from app.services.import_normalization import sku_loose as _sku_loose
+from app.services.import_normalization import sku_loose_sql
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,7 @@ def has_pair_snapshot(position) -> bool:
 
 def pair_component_key(component_skus: list[str]) -> tuple[str, ...]:
     """Нормализованный ключ компонентов пары (для кэша одного вызова)."""
-    return tuple(sorted(s for s in (_normalize_sku(sku) for sku in component_skus) if s))
+    return tuple(sorted(s for s in (_sku_loose(sku) for sku in component_skus) if s))
 
 
 def effective_product_ids_key(position) -> tuple:
@@ -209,7 +210,7 @@ async def _load_pair_index(db: AsyncSession) -> dict[frozenset[str], ResolvedPai
         sku_b = skus_by_id.get(pair.product_b_id)
         if sku_a is None or sku_b is None:
             continue
-        key = frozenset({_normalize_sku(sku_a), _normalize_sku(sku_b)})
+        key = frozenset({_sku_loose(sku_a), _sku_loose(sku_b)})
         if key in index:
             continue
         index[key] = ResolvedPair(
@@ -262,7 +263,7 @@ async def resolve_pair_by_component_skus(
     пары (в том числе повторные) не стоят ни одного SQL. Без кэша путь
     прежний, поштучный.
     """
-    normalized = {_normalize_sku(sku) for sku in component_skus if _normalize_sku(sku)}
+    normalized = {_sku_loose(sku) for sku in component_skus if _sku_loose(sku)}
     if len(normalized) != 2:
         return None
     if cache is not None:
@@ -283,7 +284,7 @@ async def resolve_pair_by_component_skus(
         sku_b = skus_by_id.get(pair.product_b_id)
         if sku_a is None or sku_b is None:
             continue
-        if {_normalize_sku(sku_a), _normalize_sku(sku_b)} == normalized:
+        if {_sku_loose(sku_a), _sku_loose(sku_b)} == normalized:
             products_by_id = {p.id: p for p in products}
             return ResolvedPair(
                 pair=pair,
@@ -372,13 +373,40 @@ async def resolve_pair_components_for_sku(
         )
 
     products = (
-        (await db.execute(select(Product).where(Product.sku.in_(component_skus)))).scalars().all()
+        (await db.execute(
+            select(Product).where(
+                or_(
+                    Product.sku.in_(component_skus),
+                    sku_loose_sql(Product.sku).in_(
+                        {_sku_loose(component_sku) for component_sku in component_skus}
+                    ),
+                )
+            )
+        )).scalars().all()
         if component_skus
         else []
     )
-    by_sku = {product.sku: product for product in products}
+    # Точный SKU выигрывает; дефисное написание — фолбэк (#474). Две карточки,
+    # отличающиеся только дефисом, — неоднозначность: не угадываем.
+    by_loose: dict[str, list[Product]] = {}
+    for product in products:
+        if product.sku:
+            by_loose.setdefault(_sku_loose(product.sku), []).append(product)
+
+    def _resolve(component_sku: str) -> Product | None:
+        exact = next(
+            (product for product in products if product.sku == component_sku), None
+        )
+        if exact is not None:
+            return exact
+        matches = by_loose.get(_sku_loose(component_sku), [])
+        return matches[0] if len(matches) == 1 else None
+
     return (
-        [PairComponent(sku=component_sku, product=by_sku.get(component_sku)) for component_sku in component_skus],
+        [
+            PairComponent(sku=component_sku, product=_resolve(component_sku))
+            for component_sku in component_skus
+        ],
         "product_pair_not_found",
     )
 

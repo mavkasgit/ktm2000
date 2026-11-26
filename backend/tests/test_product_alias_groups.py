@@ -202,3 +202,28 @@ async def test_without_cache_every_call_reads_catalog(session) -> None:
         remove()
 
     assert counter["n"] == 2, counter["statements"]
+
+
+async def test_alias_matching_ignores_dash_between_letter_and_digit(session) -> None:
+    """Дефис между буквой и цифрой — оформление: ``ALS-1103`` ↔ ``ALS1103``."""
+    product_a = await _product(session, "ALS1103")
+    product_b = await _product(session, "ЮП3773", aliases=["ALS-1103"])
+    await session.commit()
+
+    groups = await load_alias_groups(session)
+
+    assert groups.expand([product_b.id]) == {product_a.id, product_b.id}
+
+
+async def test_dash_only_collision_merges_to_min_product_id(session) -> None:
+    """Две карточки, отличающиеся только дефисом, — один физический артикул."""
+    product_first = await _product(session, "ALS1103")
+    product_second = await _product(session, "ALS-1103")
+    await session.commit()
+
+    groups = await load_alias_groups(session)
+
+    group = groups.group_for(product_second.id)
+    assert group is not None
+    assert group.product_ids == (product_first.id, product_second.id)
+    assert group.key == product_first.id
