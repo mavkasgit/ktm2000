@@ -45,16 +45,20 @@ _SQL_LOOSE_PATTERN = r"([a-zа-яё])-([0-9])"
 
 
 def sku_loose_sql(column):
-    """SQL-аналог ``sku_loose`` для колонки SKU (PostgreSQL ``regexp_replace``).
+    """SQL-аналог ``sku_loose`` для колонки SKU (PostgreSQL).
 
     Предфильтр остатков и точный ``IN``-фолбэк пар выбирают кандидатов в SQL, а
     окончательное решение принимает Python. Без SQL-копии правила кандидат с
     другим написанием просто не доезжает — и ``sku_loose`` не срабатывает уже
-    никогда. Варианты тире и пробелы покрывает шаг точного совпадения
-    (``normalize_sku``/``_normalized_catalog_sku``), здесь — только правило
-    «дефис между буквой и цифрой — оформление».
+    никогда. Выражение повторяет ``normalize_sku`` (регистр, варианты тире,
+    пробелы) и снимает дефис только между буквой и цифрой — тем же шаблоном,
+    что и Python, без lookbehind (его нет в старых версиях PostgreSQL).
     """
-    return func.regexp_replace(func.lower(column), _SQL_LOOSE_PATTERN, r"\1\2", "g")
+    dashed = func.translate(
+        func.lower(column), SKU_DASH_VARIANTS, "-" * len(SKU_DASH_VARIANTS)
+    )
+    no_spaces = func.replace(func.replace(dashed, " ", ""), "\u00A0", "")
+    return func.regexp_replace(no_spaces, _SQL_LOOSE_PATTERN, r"\1\2", "g")
 
 
 def numeric_sku_key(value: str) -> str | None:
