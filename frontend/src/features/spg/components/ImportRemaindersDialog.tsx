@@ -88,6 +88,7 @@ import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { fmtQty, fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import {
   buildRemainderPreviewSortParam,
+  DEFAULT_REMAINDER_PREVIEW_SORT,
   type RemainderPreviewSortField,
 } from "@/shared/lib/stockSortParams";
 
@@ -295,6 +296,12 @@ type PreviewRowProps = {
    * высота строки предсказана моделью. Без флага — прежний `truncate`.
    */
   nameWraps: boolean;
+  /**
+   * Предсказанная моделью высота строки (#483), px. Живёт в `data-*` только
+   * для наблюдаемости: E2E #484 сверяет её с фактической высотой `<tr>`.
+   * На раскладку не влияет; без флага — `null`.
+   */
+  predictedHeight: number | null;
   onToggle: (rowNumber: number) => void;
   onQualityChange: (rowNumber: number, state: QualityState) => void;
   onSectionChange: (rowNumber: number, sectionId: number | null) => void;
@@ -321,6 +328,7 @@ const PreviewRow = memo(function PreviewRow({
   qualityOverride,
   sectionOverride,
   nameWraps,
+  predictedHeight,
   onToggle,
   onQualityChange,
   onSectionChange,
@@ -336,6 +344,8 @@ const PreviewRow = memo(function PreviewRow({
   return (
     <Fragment>
       <tr
+        data-row-key={rowKey}
+        data-predicted-height={predictedHeight ?? undefined}
         onClick={() => hasRaw && onToggle(rowKey)}
         className={`border-b transition-colors cursor-pointer hover:bg-muted/30 ${
           isInvalid
@@ -755,10 +765,15 @@ export function ImportRemaindersDialog({
   // остаётся на текущих долях, а не считает ширины по подвыборке.
   useEffect(() => {
     if (!previewData) return;
+    // `sort` не бывает пустым: без выбора оператора он равен
+    // `DEFAULT_REMAINDER_PREVIEW_SORT` (`row:asc`). Считать дефолтный порядок
+    // фильтром нельзя — иначе первый ответ листа никогда не считался бы
+    // «полным нефильтрованным», снапшот ширин не появлялся и таблица под
+    // флагом навсегда оставалась на спиннере (#484 поймал это в браузере).
     const unfiltered =
       !debouncedSearch.trim() &&
       !rowSelection &&
-      !sort &&
+      sort === DEFAULT_REMAINDER_PREVIEW_SORT &&
       Object.keys(columnApiParams).length === 0;
     if (!unfiltered) return;
     setWidthItemsBySheet((prev) =>
@@ -1223,6 +1238,12 @@ export function ImportRemaindersDialog({
         // Наименование переносится только когда применена посчитанная
         // раскладка: на текущих долях его высота не предсказана.
         nameWraps={Boolean(optimalShares)}
+        predictedHeight={
+          optimalShares
+            ? optimalWidths.result?.rowHeights.get(item.source_row_number) ??
+              PREVIEW_MIN_ROW_HEIGHT_PX
+            : null
+        }
         onToggle={toggleRow}
         onQualityChange={handleRowQualityChange}
         onSectionChange={handleRowSectionChange}
@@ -1235,6 +1256,7 @@ export function ImportRemaindersDialog({
       qualityStateOverrides,
       targetSectionOverrides,
       optimalShares,
+      optimalWidths.result?.rowHeights,
       toggleRow,
       handleRowQualityChange,
       handleRowSectionChange,
@@ -1773,9 +1795,17 @@ export function ImportRemaindersDialog({
                     смонтированных строк — при скролле они «перерисовывались».
                     Ширины объявлены один раз в `remainderPreviewColumns`
                     (вместе со служебными колонками дают 100%). */}
+                {/* Наблюдаемость режима (#484): E2E проверяет, какая раскладка
+                    применена, совпала ли предсказанная высота с фактической и
+                    уложилась ли доля обрезанных пилюль в лимит текущего фикса.
+                    Только чтение; на вёрстку не влияет. */}
                 <table
                   className="w-full min-w-[1180px] table-fixed text-[11px] text-left border-collapse"
                   style={overflowMinWidth ? { minWidth: `${overflowMinWidth}px` } : undefined}
+                  data-column-layout={optimalShares ? "optimal" : "baseline"}
+                  data-pills-limit-share={optimalWidths.result?.pillsLimitShare}
+                  data-predicted-total-height={optimalWidths.result?.totalHeightPx}
+                  data-predicted-row-count={optimalWidths.result?.rowHeights.size}
                 >
                     <colgroup>
                       <col style={{ width: REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH }} />
