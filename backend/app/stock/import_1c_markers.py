@@ -57,6 +57,10 @@ class OsvMarkers:
 
     color_code: str | None = None
     color_name: str | None = None
+    #: Слово, которым цвет назван в наименовании. Важно для составных и
+    #: «тёзок» (C35 и ANOD_05 — оба «Чёрный»): маршрут разрешает цвет по
+    #: слову, а не по имени операции, иначе код подменится первым по порядку.
+    color_keyword: str | None = None
     press_code: str | None = None
     press_keyword: str | None = None
     is_semi_finished: bool = False
@@ -67,13 +71,13 @@ class OsvMarkers:
         return bool(self.color_code or self.press_code or self.is_semi_finished)
 
 
-def _color_word_hit(
+def _longest_color_hits(
     text: str, vocabulary: ColorVocabulary
-) -> tuple[str, str] | None:
-    """Самое длинное совпадение по ``anod_colors``: ``(код, слово)``.
+) -> list[tuple[str, str]]:
+    """Все совпадения максимальной длины: ``[(слово, код)]``.
 
-    Равная длина у разных кодов — неоднозначность, а не выбор первого:
-    возвращаем ``None`` и ошибку через :func:`_color_word_error`.
+    Длинное совпадение перекрывает короткое («старое золото» раньше «золот»).
+    Равная длина у разных кодов — неоднозначность, а не выбор первого.
     """
     hits = [
         (keyword, code)
@@ -81,25 +85,9 @@ def _color_word_hit(
         if keyword and keyword in text
     ]
     if not hits:
-        return None
+        return []
     longest = max(len(keyword) for keyword, _ in hits)
-    best = [(keyword, code) for keyword, code in hits if len(keyword) == longest]
-    codes = {code for _, code in best}
-    if len(codes) > 1:
-        return None
-    return best[0][1], best[0][0]
-
-
-def _color_word_is_ambiguous(text: str, vocabulary: ColorVocabulary) -> bool:
-    hits = [
-        (keyword, code)
-        for keyword, code in vocabulary.color_keywords
-        if keyword and keyword in text
-    ]
-    if not hits:
-        return False
-    longest = max(len(keyword) for keyword, _ in hits)
-    return len({code for keyword, code in hits if len(keyword) == longest}) > 1
+    return [(keyword, code) for keyword, code in hits if len(keyword) == longest]
 
 
 def _suffix_codes(
@@ -156,9 +144,13 @@ def extract_osv_markers(
         suffix_code = next(iter(suffix_codes))
         suffix_nn = suffix_code.removeprefix("ANOD_")
 
-    if _color_word_is_ambiguous(text, vocabulary):
+    best_hits = _longest_color_hits(text, vocabulary)
+    word_hit: tuple[str, str] | None = None
+    if len({code for _, code in best_hits}) > 1:
         errors.append("Цвет неоднозначен: в наименовании несколько цветов")
-    word_hit = _color_word_hit(text, vocabulary)
+    elif best_hits:
+        keyword, code = best_hits[0]
+        word_hit = (code, keyword)
 
     if word_hit is not None and suffix_code is not None:
         word_code, word_keyword = word_hit
@@ -195,6 +187,9 @@ def extract_osv_markers(
             vocabulary.color_names.get(color_code)
             if color_code is not None and not errors
             else None
+        ),
+        color_keyword=(
+            word_hit[1] if word_hit is not None and not errors else None
         ),
         press_code=press_code if not errors else None,
         press_keyword=press_keyword if not errors else None,

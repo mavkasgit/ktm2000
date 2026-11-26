@@ -9,8 +9,6 @@
 """
 from __future__ import annotations
 
-from io import BytesIO
-
 import pytest
 from app.models import (
     Product,
@@ -32,9 +30,10 @@ from app.stock.import_1c_osv import resolve_1c_osv_completed_operations
 from app.stock.import_service import RemainderItem
 from app.stock.models import StockTransaction
 from httpx import AsyncClient
-from openpyxl import Workbook
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests.helpers.osv import XLSX_MIME, make_osv_workbook, osv_row
 
 VOCABULARY = ColorVocabulary(
     color_keywords=(
@@ -329,6 +328,37 @@ async def test_color_suffix_after_alias_group_member_is_recognized(
     assert "Шампань" in (item.completed_operations_raw or "")
 
 
+async def test_semi_finished_without_color_is_invalid(
+    session: AsyncSession,
+) -> None:
+    """ПФ без цвета: анодирование было, цвет неизвестен — не подставляем первый."""
+    await _seed_packaging_route(session)
+    product = await _make_product(session, "ALS-917")
+    item = _item(1, "ALS-917 ПФ 2,7м", product.id)
+
+    await resolve_1c_osv_completed_operations(session, [item])
+
+    assert item.status == "invalid"
+    assert item.completed_operations_raw is None
+    assert any("ПФ без цвета" in error for error in item.errors)
+
+
+async def test_axis_uses_route_code_not_ambiguous_name(
+    session: AsyncSession,
+) -> None:
+    """C35 и ANOD_05 — оба «Чёрный»: ось обязана взять код маршрута."""
+    await _seed_packaging_route(session)
+    product = await _make_product(session, "ALS-917")
+    item = _item(1, "ALS-917 C35 ПФ 2,7м", product.id)
+
+    await resolve_1c_osv_completed_operations(session, [item])
+
+    assert item.status == "valid", item.errors
+    codes = [stage["operation_code"] for stage in (item.completed_stages or [])]
+    assert "C35" in codes
+    assert "ANOD_05" not in codes
+
+
 async def test_route_prefix_does_not_persist_a_route(
     session: AsyncSession,
 ) -> None:
@@ -344,63 +374,6 @@ async def test_route_prefix_does_not_persist_a_route(
 
 # ─── API: предпросмотр и заливка ──────────────────────────────────────────────
 
-XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-OSV_HEADER = (
-    "Код",
-    "Наименование ТМЦ",
-    "Ед. изм.",
-    "Цена за ед.",
-    "Начальное сальдо",
-    None,
-    "Оборот по дебету",
-    None,
-    "Оборот по кредиту",
-    None,
-    "Конечное сальдо",
-    None,
-)
-OSV_SUBHEADER = (
-    None,
-    None,
-    None,
-    None,
-    "Количество",
-    "Стоимость, руб.",
-    "Количество",
-    "Стоимость, руб.",
-    "Количество",
-    "Стоимость, руб.",
-    "Количество",
-    "Стоимость, руб.",
-)
-
-
-def _osv_row(code: object, name: object, unit: object, quantity: object) -> list:
-    return [code, name, unit, None, None, None, None, None, None, None, quantity, None]
-
-
-def _make_osv_workbook(data_rows: list[list]) -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Склад сырой"
-    for row in [
-        ["Оборотно-сальдовая ведомость по счету 10"],
-        [],
-        ["Завод КТМ СКЛАД СЫРОЙ"],
-        [],
-        [],
-        [],
-        [],
-        list(OSV_HEADER),
-        list(OSV_SUBHEADER),
-        *data_rows,
-    ]:
-        ws.append(row)
-    buffer = BytesIO()
-    wb.save(buffer)
-    return buffer.getvalue()
-
-
 async def test_preview_and_apply_semi_finished_row_to_finished_stock(
     client: AsyncClient, session: AsyncSession
 ) -> None:
@@ -413,8 +386,8 @@ async def test_preview_and_apply_semi_finished_row_to_finished_stock(
     session.add(Product1CCode(product_id=product.id, code="22063"))
     await session.commit()
 
-    content = _make_osv_workbook(
-        [_osv_row("22063", "ALS-917-01 ПФ 2,7м", "м", 27)]
+    content = make_osv_workbook(
+        [osv_row("22063", "ALS-917-01 ПФ 2,7м", "м", 27)]
     )
     preview = await client.post(
         "/api/stock/import/remainders/preview",

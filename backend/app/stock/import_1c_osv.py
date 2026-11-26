@@ -31,7 +31,11 @@ from app.domain.dimensions import (
     format_mm_as_meters,
 )
 from app.models.product import Product, Product1CCode, ProductLength
-from app.models.product_1c_skipped import SKIP_REASON_LABELS, Product1CSkipped
+from app.models.product_1c_skipped import (
+    SKIP_REASON_LABELS,
+    SKIP_REASON_NOT_MES,
+    Product1CSkipped,
+)
 from app.models.route import RouteRuleProfile
 from app.models.section import Section
 from app.services.import_normalization import match_sku_cell, normalize_sku, sku_entry
@@ -697,13 +701,7 @@ def _extract_sku_candidates(name: str | None) -> list[str]:
     """Кандидаты-артикулы из наименования 1С (порядок: скобки, токены, ``#N``)."""
     if not name:
         return []
-    candidates: list[str] = []
-
-    for group in _PARENS_RE.findall(name):
-        for chunk in _CANDIDATE_SPLIT_RE.split(group):
-            candidate = chunk.strip()
-            if candidate:
-                candidates.append(candidate)
+    candidates = _extract_paren_candidates(name)
     candidates.extend(match.group(0) for match in _SKU_TOKEN_RE.finditer(name))
     candidates.extend(match.group(1) for match in _HASH_CODE_RE.finditer(name))
 
@@ -760,6 +758,10 @@ def _variant_base_key(sku: str) -> str | None:
     """
     match = _VARIANT_SUFFIX_RE.match(normalize_sku(sku))
     if match is None:
+        return None
+    if match.group("variant") == "00":
+        # «#033-00» — код поставщика, а не исполнение: база «033» иначе
+        # подхватила бы чужую карточку по токену без суффикса.
         return None
     return match.group("base")
 
@@ -876,10 +878,18 @@ def _match_name_candidates(name: str | None, catalog: _Catalog) -> _NameMatch:
     paren_candidates = _extract_paren_candidates(name)
     collect(paren_candidates)
     if not group_keys and not ambiguous_ids:
+        # Скобки главнее кода поставщика: если артикул в скобках не нашёлся,
+        # `#318-00` не подменяет его отдельной карточкой `318` — иначе строка
+        # молча уедет на чужое сечение. Токены вне скобок пробуем.
+        hash_codes = (
+            {match.group(1) for match in _HASH_CODE_RE.finditer(name or "")}
+            if paren_candidates
+            else set()
+        )
         collect([
             candidate
             for candidate in _extract_sku_candidates(name)
-            if candidate not in paren_candidates
+            if candidate not in paren_candidates and candidate not in hash_codes
         ])
     return _NameMatch(
         group_keys=group_keys,
@@ -1219,8 +1229,10 @@ async def resolve_1c_osv_quantities(
             # руками каждый прогон; пропуск с причиной — честное решение
             # заказчика (26.11.2026), а не тихое проглатывание.
             item.status = "skipped"
-            item.skip_reason = "not_mes"
-            item.skip_reason_label = SKIP_REASON_LABELS.get("not_mes", "not_mes")
+            item.skip_reason = SKIP_REASON_NOT_MES
+            item.skip_reason_label = SKIP_REASON_LABELS.get(
+                SKIP_REASON_NOT_MES, SKIP_REASON_NOT_MES
+            )
             item.skip_note = _unit_error(item.source_unit)
             continue
         if unit_kind == "pcs":
@@ -1288,7 +1300,7 @@ def _marker_vocabulary(rules, operation_names: dict[str, str]) -> ColorVocabular
     color_keywords: list[tuple[str, str]] = []
     press_keywords: list[tuple[str, str]] = []
     for rule in rules:
-        rule_code = getattr(rule, "code", "")
+        rule_code = rule.code
         if rule_code not in {_COLOR_RULE_CODE, _PRESS_RULE_CODE}:
             continue
         target = color_keywords if rule_code == _COLOR_RULE_CODE else press_keywords
@@ -1364,8 +1376,8 @@ async def _load_marker_products(
     return products, anchors
 
 
-def _prefix_operation_names(route, target_section: str) -> list[str]:
-    """Операции маршрута до последнего этапа ``target_section`` включительно.
+def _prefix_steps(route, target_section: str) -> list:
+    """Шаги маршрута до последнего этапа ``target_section`` включительно.
 
     Этап — участок целиком: у ``ANODIZING`` две группы (цвет и упаковка),
     и ``PACK_SPUNBOND``/``PACK_STRETCH`` входят в префикс вместе с цветом.
@@ -1378,15 +1390,54 @@ def _prefix_operation_names(route, target_section: str) -> list[str]:
     if not target_steps:
         return []
     last_sequence = max(step.sequence for step in target_steps)
-    names: list[str] = []
+    seen: set[str] = set()
+    steps = []
     for step in route.steps:
         if step.sequence > last_sequence:
             continue
         if not step.operation_code or not step.is_significant:
             continue
-        if step.operation_name not in names:
-            names.append(step.operation_name)
-    return names
+        if step.operation_code in seen:
+            continue
+        seen.add(step.operation_code)
+        steps.append(step)
+    return steps
+
+
+def _stage_entry(step, batch) -> dict:
+    """Развёрнутый справочником элемент оси — как у ``resolve_completed_stages``.
+
+    Код берётся из шага маршрута, а не подбирается по имени: у ANOD_01 и C0
+    одно имя «Серебро», и разрешение по имени молча подменило бы код (ADR-0061).
+    """
+    section = batch.sections_by_code.get(step.section_code)
+    operation = next(
+        (
+            op
+            for ops in batch.ops_by_section_group.values()
+            for op in ops
+            if op.operation_code == step.operation_code
+        ),
+        None,
+    )
+    return {
+        "sequence": step.sequence,
+        "section_code": step.section_code,
+        "section_name": step.section_name,
+        "section_icon": section.icon if section is not None else None,
+        "section_icon_color": section.icon_color if section is not None else None,
+        "operation_code": step.operation_code,
+        "operation_name": step.operation_name,
+        "op_icon": operation.icon if operation is not None else None,
+        "op_icon_color": operation.icon_color if operation is not None else None,
+        "is_significant": step.is_significant,
+    }
+
+
+def _invalidate(item: RemainderItem, *messages: str) -> None:
+    """Строка остаётся видимой ошибкой с причиной — не угадываем."""
+    item.errors.extend(messages)
+    item.status = "invalid"
 
 
 async def resolve_1c_osv_completed_operations(
@@ -1444,30 +1495,36 @@ async def resolve_1c_osv_completed_operations(
             vocabulary=vocabulary,
         )
         if markers.errors:
-            item.errors.extend(markers.errors)
-            item.status = "invalid"
+            _invalidate(item, *markers.errors)
             continue
         if markers.color_code is not None and markers.color_name is None:
-            item.errors.append(
-                f"Цвет {markers.color_code} не найден в справочнике операций"
+            _invalidate(
+                item,
+                f"Цвет {markers.color_code} не найден в справочнике операций",
             )
-            item.status = "invalid"
             continue
         if not markers.has_markers:
             item.completed_operations_raw = ""
             continue
+        if markers.is_semi_finished and markers.color_code is None:
+            # ПФ означает анодирование, но без цвета операция неизвестна;
+            # подставлять первый цвет справочника значило бы угадывать.
+            _invalidate(item, "ПФ без цвета: не удалось определить цвет")
+            continue
         if markers.is_semi_finished and finished is None:
-            item.errors.append(
+            _invalidate(
+                item,
                 "Участок «Склад готовой продукции» не найден — "
-                "полуфабрикат некуда положить"
+                "полуфабрикат некуда положить",
             )
-            item.status = "invalid"
             continue
 
         payload = {
             "product_id": product.id,
             "source_name": item.source_name,
-            "color": markers.color_name,
+            # Слово важнее имени операции: у C35 и ANOD_05 одно имя «Чёрный»,
+            # и маршрут по имени подменил бы код первым по порядку.
+            "color": markers.color_keyword or markers.color_name,
             "operation": markers.press_keyword,
             "output_kind": "П/ф" if markers.is_semi_finished else "ГП",
         }
@@ -1475,8 +1532,7 @@ async def resolve_1c_osv_completed_operations(
             db, profile, payload, product=product, batch=batch
         )
         if route.error:
-            item.errors.append(f"Маршрут не собран: {route.error}")
-            item.status = "invalid"
+            _invalidate(item, f"Маршрут не собран: {route.error}")
             continue
 
         target_section = (
@@ -1484,15 +1540,20 @@ async def resolve_1c_osv_completed_operations(
             if markers.color_code or markers.is_semi_finished
             else _PRESSING_SECTION
         )
-        names = _prefix_operation_names(route, target_section)
-        if not names:
-            item.errors.append(
-                f"В маршруте нет пройденных операций участка {target_section}"
+        prefix = _prefix_steps(route, target_section)
+        if not prefix:
+            _invalidate(
+                item,
+                f"В маршруте нет пройденных операций участка {target_section}",
             )
-            item.status = "invalid"
             continue
 
-        item.completed_operations_raw = ", ".join(names)
+        # Имена — для предпросмотра и совместимости; точные коды — в
+        # completed_stages, чтобы ось не зависела от неоднозначных имён.
+        item.completed_operations_raw = ", ".join(
+            step.operation_name for step in prefix
+        )
+        item.completed_stages = [_stage_entry(step, batch) for step in prefix]
         if markers.is_semi_finished and finished is not None:
             item.target_section_id = finished.id
             item.target_section_name = finished.name

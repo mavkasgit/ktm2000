@@ -1298,6 +1298,36 @@ async def test_lookup_1c_pf_variant_ambiguous_for_two_suffixes(
     assert "неоднозначен" in items[0].errors[0]
 
 
+async def test_lookup_1c_variant_base_ignores_supplier_zero_suffix(
+    session: AsyncSession,
+) -> None:
+    """«-00» — код поставщика, а не исполнение: токен без суффикса не цепляет."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    await _make_product(session, "ЮП-033-00")
+    items = _items([_osv_row("20999", "Профиль (ЮП-033) 2,7", "м", 100)])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].product_id is None
+    assert items[0].status == "invalid"
+
+
+async def test_lookup_1c_paren_article_does_not_fall_back_to_supplier_code(
+    session: AsyncSession,
+) -> None:
+    """Скобки главнее: если артикул в скобках не найден, `#318-00` не спасает."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    await _make_product(session, "318", lengths=[(2700.0, 2750.0, True)])
+    items = _items([_osv_row("4073", "Профиль алюм.#318-00(ЮП-3123)", "м", 20736)])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].product_id is None
+    assert items[0].status == "invalid"
+
+
 async def test_lookup_1c_parenthesized_article_wins_over_supplier_code(
     session: AsyncSession,
 ) -> None:

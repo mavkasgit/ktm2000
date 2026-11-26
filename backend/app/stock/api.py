@@ -1602,7 +1602,7 @@ async def preview_remainders_excel(
     # Resolve completed stages and target sections
     ops_dict = await resolve_operations_dictionary(db)
     for item in items:
-        if item.completed_operations_raw:
+        if item.completed_operations_raw and not item.completed_stages:
             item.completed_stages = await resolve_completed_stages(
                 db, item.completed_operations_raw, ops_dict, item.errors,
             )
@@ -1789,7 +1789,7 @@ async def import_remainders_excel(
     # Resolve completed stages and target sections before import
     ops_dict = await resolve_operations_dictionary(db)
     for item in items:
-        if item.completed_operations_raw:
+        if item.completed_operations_raw and not item.completed_stages:
             item.completed_stages = await resolve_completed_stages(
                 db, item.completed_operations_raw, ops_dict, item.errors,
             )
