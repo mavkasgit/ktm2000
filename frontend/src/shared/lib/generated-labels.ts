@@ -34,7 +34,7 @@ export const errorLabels: Record<string, string> = {
   "manual_route_inactive": "Ручной маршрут неактивен",
   "manual_route_not_found": "Ручной маршрут не найден",
   "no_route_candidate": "Не найден маршрут, удовлетворяющий правилам выбора",
-  "normal_length_not_found": "Нормальная длина из Excel не найдена в реестре длин артикула — добавьте её в карточку артикула",
+  "normal_length_not_found": "Длина из Excel не совпадает с нормальной длиной артикула",
   "product_inactive": "Продукт неактивен",
   "product_not_found": "Продукт не найден",
   "product_pair_not_found": "Пара таких профилей не создана в справочнике сырья",

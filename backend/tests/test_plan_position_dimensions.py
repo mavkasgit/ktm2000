@@ -37,6 +37,7 @@ PLAN_HEADERS = [
 
 # 1-based индексы колонок входа в PLAN_HEADERS (для merge_cells).
 COL_SKU = 1
+COL_NAME = 3
 COL_INPUT_QTY = 6
 COL_INPUT_LEN = 7
 
@@ -104,7 +105,9 @@ def test_same_sku_empty_input_row_joins_group_without_merge() -> None:
         [
             _plan_row("AT-7121", "Профиль АТ", 150, 2.7, 0.9, 350),
             _plan_row("AT-7121", "", "", "", 1.8, 50),
-        ]
+        ],
+        # Наименование в реальном файле объединено на обе строки группы.
+        merges=[(COL_NAME, 6, 7)],
     )
     parsed = parse_factory_plan_workbook(content, "plan.xlsx")
 
@@ -113,6 +116,66 @@ def test_same_sku_empty_input_row_joins_group_without_merge() -> None:
     assert group.source_row_numbers == [6, 7]
     assert group.quantity == 400
     assert len(group.outputs) == 2
+    assert group.source_name == "Профиль АТ"
+
+
+def test_merged_name_of_pair_rows_is_shared() -> None:
+    """Пара 2616/2604: наименование объединено на две строки.
+
+    Объединение видно оператору на обеих строках, но Excel хранит значение
+    только в верхнем углу. Вторая строка не должна получать ложный
+    ``product_name_missing``: имя пары записано прямо в этом же диапазоне.
+    Позиции при этом остаются раздельными (#312).
+    """
+    content = _plan_workbook(
+        [
+            _plan_row("ЮП-2616", "Кант 47мм 2,7 серебро", 200, 2.7, 2.7, 200),
+            _plan_row("ЮП-2604", "", "", "", 2.7, 200),
+        ],
+        merges=[(COL_NAME, 6, 7)],
+    )
+    parsed = parse_factory_plan_workbook(content, "plan.xlsx")
+
+    assert [row.source_sku for row in parsed.parsed_rows] == ["ЮП-2616", "ЮП-2604"]
+    assert [row.source_row_numbers for row in parsed.parsed_rows] == [[6], [7]]
+    assert [row.source_name for row in parsed.parsed_rows] == [
+        "Кант 47мм 2,7 серебро",
+        "Кант 47мм 2,7 серебро",
+    ]
+    assert all("product_name_missing" not in row.warnings for row in parsed.parsed_rows)
+
+
+def test_unmerged_blank_name_still_warns() -> None:
+    """Пустая ячейка вне merged-диапазона — реальная дыра файла, warning остаётся."""
+    content = _plan_workbook(
+        [
+            _plan_row("ЮП-2616", "Кант 47мм 2,7 серебро", 200, 2.7, 2.7, 200),
+            _plan_row("ЮП-2604", "", "", "", 2.7, 200),
+        ]
+    )
+    parsed = parse_factory_plan_workbook(content, "plan.xlsx")
+
+    assert [row.source_name for row in parsed.parsed_rows] == ["Кант 47мм 2,7 серебро", None]
+    assert "product_name_missing" in parsed.parsed_rows[1].warnings
+
+
+def test_merged_but_empty_name_still_warns() -> None:
+    """Объединение без значения — тоже дыра: имя не угадывается, warning остаётся.
+
+    Подстановка из merged-ячейки помогает только когда в её якоре есть текст;
+    пустой диапазон не должен молча давать позицию без наименования.
+    """
+    content = _plan_workbook(
+        [
+            _plan_row("ЮП-2616", "", 200, 2.7, 2.7, 200),
+            _plan_row("ЮП-2604", "", "", "", 2.7, 200),
+        ],
+        merges=[(COL_NAME, 6, 7)],
+    )
+    parsed = parse_factory_plan_workbook(content, "plan.xlsx")
+
+    assert [row.source_name for row in parsed.parsed_rows] == [None, None]
+    assert all("product_name_missing" in row.warnings for row in parsed.parsed_rows)
 
 
 def test_adjacent_same_sku_rows_with_own_input_stay_separate() -> None:

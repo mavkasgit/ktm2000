@@ -1844,10 +1844,10 @@ async def test_import_pair_component_unknown_normal_length_is_position_error(
 
     assert response.status_code == 200, response.text
     items = response.json()["items"]
-    assert "normal_length_not_found" in items[0]["errors"]
+    assert any(e.startswith("normal_length_not_found") for e in items[0]["errors"])
     assert items[0]["after_data"]["input_dimensions"] == {"length_mm": 2700}
     # У ЮП-PAIR-B реестровая длина 2600, а вход 2700 — своя ошибка позиции.
-    assert "normal_length_not_found" in items[1]["errors"]
+    assert any(e.startswith("normal_length_not_found") for e in items[1]["errors"])
 
 
 @pytest.mark.asyncio

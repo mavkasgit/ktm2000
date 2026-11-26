@@ -10,6 +10,7 @@ import {
 } from "@/shared/ui/import-utils";
 
 import { errorLabels as PLAN_IMPORT_ERROR_LABELS, warningLabels } from "@/shared/lib/generated-labels";
+import { translatePlanImportError } from "../lib/plan-labels";
 import type { ImportPreviewSortConfig, ImportPreviewSortKey } from "../lib/importPreviewSort";
 import { planPreviewMessageLayout } from "../lib/planPreviewMessageLayout";
 
@@ -56,6 +57,9 @@ function translateLabelList(
           return `Дубликат строки ${rowPart}${idPart} из плана`;
         }
       }
+    }
+    if (code === "normal_length_not_found") {
+      return translatePlanImportError(String(c), labels);
     }
     const label = labels[code] ?? code;
     const [, ...rest] = String(c).split(":");

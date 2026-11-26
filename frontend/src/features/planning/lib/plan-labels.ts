@@ -23,10 +23,32 @@ export const statusVariant: Record<string, NonNullable<BadgeProps["variant"]>> =
   released: "default",
 }
 
-export function translateLabel(code: string, labels: Record<string, string>): string {
+/**
+ * Код `normal_length_not_found` несёт параметры длины из Excel:
+ *   `:raw:<сырьевая>:<нормальная>` — в файле указана сырьевая длина;
+ *   `:missing:<raw|product>:<длина>` — длины нет в справочнике сырья/продуктов;
+ *   `:<длина>` — старый формат без типа (нейтральная подпись).
+ * Без параметров остаётся нейтральная подпись: ни «добавьте в карточку»,
+ * ни «исправьте файл» не угадываются заранее.
+ */
+export function translatePlanImportError(code: string, labels: Record<string, string>): string {
   const [base, ...rest] = String(code).split(":")
   const label = labels[base] ?? base
-  return rest.length > 0 ? `${label}: ${rest.join(":")}` : label
+  if (base !== "normal_length_not_found" || rest.length === 0) {
+    return rest.length > 0 ? `${label}: ${rest.join(":")}` : label
+  }
+  if (rest[0] === "raw" && rest.length >= 3) {
+    return `${label} — ${rest[1]} это сырьё для ${rest[2]}; укажите ${rest[2]} в «Длина, м»`
+  }
+  if (rest[0] === "missing" && rest.length === 3) {
+    const where = rest[1] === "raw" ? "справочнике сырья" : "справочнике продуктов"
+    return `${label} — ${rest[2]} нет в ${where}; добавьте, если это нормальная длина`
+  }
+  return `${label} — ${rest[0]} нет в справочнике; добавьте, если это нормальная длина`
+}
+
+export function translateLabel(code: string, labels: Record<string, string>): string {
+  return translatePlanImportError(code, labels)
 }
 
 export type DuplicateConflict = {
