@@ -256,7 +256,9 @@ def series_of(sku: str) -> str:
     """
     if sku.startswith("Кр.труба"):
         return "Кр.труба"
-    for prefix in ("ЮП-", "АТ-", "ALS-", "ALS", "ПТ", "ПП", "ПС", "МС", "КП-", "Ш-"):
+    if re.match(r"^ALS-?\d", sku):
+        return "ALS"
+    for prefix in ("ЮП-", "АТ-", "ПТ", "ПП", "ПС", "МС", "КП-", "Ш-"):
         if sku.startswith(prefix):
             return prefix.rstrip("-")
     if re.match(r"^П\d", sku):
