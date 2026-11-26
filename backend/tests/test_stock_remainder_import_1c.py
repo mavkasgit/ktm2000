@@ -510,6 +510,41 @@ async def test_lookup_1c_matches_sku_in_name_and_keeps_canon(session: AsyncSessi
     assert items[0].warnings == []
 
 
+async def test_lookup_1c_matches_dashless_spelling_in_name(session: AsyncSession) -> None:
+    """Написание без дефиса узнаётся как тот же SKU: ALS1291 → ALS-1291."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    product = await _make_product(session, "ALS-1291")
+    items = _items([
+        _osv_row(
+            "21923",
+            "Профиль алюминиевый под рассеивателем ALS1291, 2,75",
+            "м",
+            100,
+        ),
+    ])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].product_id == product.id
+    assert items[0].status == "valid"
+
+
+async def test_lookup_1c_matches_alias_text_in_name(session: AsyncSession) -> None:
+    """Алиас, которого нет отдельным SKU, узнаётся в наименовании."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    product = await _make_product(session, "KANT-26", aliases=["СТАРЫЙ-КОД"])
+    items = _items([
+        _osv_row("20999", "Кант (СТАРЫЙ-КОД) 2,7", "м", 100),
+    ])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].product_id == product.id
+    assert items[0].status == "valid"
+
+
 async def test_lookup_1c_different_groups_is_ambiguous(session: AsyncSession) -> None:
     """Кандидаты из разных групп эквивалентов — ошибка «неоднозначно»."""
     from app.stock.import_1c_osv import _lookup_1c_products
@@ -773,18 +808,21 @@ async def test_resolve_quantities_all_meter_unit_spellings(
     assert items[0].source_quantity_m == pytest.approx(5400.0)
 
 
-async def test_resolve_quantities_unsupported_unit_is_error(
+async def test_resolve_quantities_unsupported_unit_is_skipped(
     session: AsyncSession,
 ) -> None:
+    """Единица вне MES (кг, м²) — пропуск «не MES», а не ошибка строки."""
     product = await _make_product(session, "KANT-KG", lengths=[(2700, None, True)])
     await _bind_1c_code(session, product, "20933")
     items = _items([_osv_row("20933", "Кант 2,70м", "кг", 100)])
 
     await _resolve_quantities(session, items)
 
-    assert items[0].status == "invalid"
+    assert items[0].status == "skipped"
     assert items[0].quantity is None
-    assert items[0].errors == ["Единица измерения 'кг' не поддерживается"]
+    assert items[0].errors == []
+    assert items[0].skip_reason == "not_mes"
+    assert items[0].skip_note == "Единица измерения 'кг' не поддерживается"
 
 
 # ─── Автоучасток ──────────────────────────────────────────────────────────────
@@ -966,8 +1004,10 @@ async def test_preview_osv_returns_source_fields_and_pieces(
     ]
 
     unsupported_unit = body["items"][2]
-    assert unsupported_unit["status"] == "invalid"
-    assert unsupported_unit["errors"] == ["Единица измерения 'кг' не поддерживается"]
+    assert unsupported_unit["status"] == "skipped"
+    assert unsupported_unit["errors"] == []
+    assert unsupported_unit["skip_reason"] == "not_mes"
+    assert unsupported_unit["skip_note"] == "Единица измерения 'кг' не поддерживается"
 
 
 async def test_preview_osv_search_finds_source_code(
@@ -1218,6 +1258,63 @@ async def test_preview_osv_counts_skipped_and_filters_by_it(
     filtered = resp.json()
     assert filtered["items_total"] == 1
     assert [item["source_code"] for item in filtered["items"]] == ["16944"]
+
+
+async def test_lookup_1c_matches_pf_variant_of_suffixed_sku(
+    session: AsyncSession,
+) -> None:
+    """``ЮП-2464-01 ПФ`` узнаёт ``ЮП-2464-1``: исполнение не меняет позицию."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    product = await _make_product(
+        session, "ЮП-2464-1", lengths=[(2500.0, 2540.0, True)]
+    )
+    items = _items([
+        _osv_row("22209", "ЮП-2464-01 ПФ 2,5м", "м", 25),
+        _osv_row("22125", "ЮП-2464-05 ПФ 2,5м", "м", 42.5),
+    ])
+
+    await _lookup_1c_products(session, items)
+
+    assert [item.product_id for item in items] == [product.id, product.id]
+    assert [item.status for item in items] == ["valid", "valid"]
+    assert items[0].errors == []
+
+
+async def test_lookup_1c_pf_variant_ambiguous_for_two_suffixes(
+    session: AsyncSession,
+) -> None:
+    """Две карточки на одну базу (``-1`` и ``-5``) — неоднозначность, не выбор."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    await _make_product(session, "ЮП-2464-1")
+    await _make_product(session, "ЮП-2464-5")
+    items = _items([_osv_row("22209", "ЮП-2464-01 ПФ 2,5м", "м", 25)])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].product_id is None
+    assert items[0].status == "invalid"
+    assert "неоднозначен" in items[0].errors[0]
+
+
+async def test_lookup_1c_parenthesized_article_wins_over_supplier_code(
+    session: AsyncSession,
+) -> None:
+    """«#318-00(ЮП-3123)» — артикул в скобках, отдельный ``318`` не мешает."""
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    target = await _make_product(
+        session, "ЮП-3123", lengths=[(2700.0, 2750.0, True)]
+    )
+    await _make_product(session, "318", lengths=[(2700.0, 2750.0, True)])
+    items = _items([_osv_row("4073", "Профиль алюм.#318-00(ЮП-3123)", "м", 20736)])
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].product_id == target.id
+    assert items[0].status == "valid"
+    assert items[0].errors == []
 
 
 

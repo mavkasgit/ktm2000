@@ -32,7 +32,7 @@ from app.domain.dimensions import (
 from app.models.product import Product, Product1CCode, ProductLength
 from app.models.product_1c_skipped import SKIP_REASON_LABELS, Product1CSkipped
 from app.models.section import Section
-from app.services.import_normalization import match_sku_cell, sku_entry
+from app.services.import_normalization import match_sku_cell, normalize_sku, sku_entry
 from app.services.product_alias_groups import (
     AliasGroups,
     load_alias_groups,
@@ -669,6 +669,23 @@ _HASH_CODE_RE = re.compile(r"#\s*(\d+)(?:-\d+)?")
 _CANDIDATE_SPLIT_RE = re.compile(r"[,/]")
 
 
+def _extract_paren_candidates(name: str | None) -> list[str]:
+    """Артикулы в скобках: «(ЮП-2616)», «(ALS-1103, ЮП-3773)», «(033-00 / ЮП-2630)».
+
+    Скобки в наименованиях 1С несут авторский артикул — «Профиль алюм.
+    #318-00(ЮП-3123)» означает именно ЮП-3123, а «#318-00» — код поставщика.
+    """
+    if not name:
+        return []
+    candidates: list[str] = []
+    for group in _PARENS_RE.findall(name):
+        for chunk in _CANDIDATE_SPLIT_RE.split(group):
+            candidate = chunk.strip()
+            if candidate:
+                candidates.append(candidate)
+    return candidates
+
+
 def _extract_sku_candidates(name: str | None) -> list[str]:
     """Кандидаты-артикулы из наименования 1С (порядок: скобки, токены, ``#N``)."""
     if not name:
@@ -698,6 +715,15 @@ class _Catalog:
     product_ids: list[int]
     sku_by_id: dict[int, str]
     groups: AliasGroups
+    #: База «артикул + короткое числовое исполнение» → id артикулов:
+    #: ``ЮП-2464-1`` даёт ``{"юп-2464": [71]}``. 1С пишет полуфабрикат
+    #: ``ЮП-2464-01 ПФ``, токен наименования обрезается до ``ЮП-2464`` —
+    #: без этого индекса строка не находит артикул (см. ``variant_products``).
+    variant_ids: dict[str, list[int]] = field(default_factory=dict)
+
+    def variant_products(self, candidate: str) -> list[int]:
+        """Артикулы, у которых ``candidate`` — база исполнения (``ЮП-2464``)."""
+        return self.variant_ids.get(normalize_sku(candidate), [])
 
     def canonical_id(self, product_id: int) -> int:
         """Представитель группы алиасов (минимальный ``product_id``)."""
@@ -713,21 +739,59 @@ class _Catalog:
         return self.sku_by_id.get(product_id, str(product_id))
 
 
+_VARIANT_SUFFIX_RE = re.compile(r"^(?P<base>.+)-(?P<variant>\d{1,2})$")
+
+
+def _variant_base_key(sku: str) -> str | None:
+    """База артикула с коротким числовым исполнением: ``ЮП-2464-1`` → ``юп-2464``.
+
+    Исполнение — последний сегмент из одной-двух цифр (``-1``, ``-05``).
+    Четырёхзначный номер (``АТ-7121``) — это сам артикул, а не исполнение:
+    иначе база ``ат`` склеила бы разные артикулы. Если на одну базу приходится
+    два артикула (``МС16-20`` и ``МС16-25``), индекс отдаст оба — вызывающий
+    обязан считать это неоднозначностью, а не выбирать первый.
+    """
+    match = _VARIANT_SUFFIX_RE.match(normalize_sku(sku))
+    if match is None:
+        return None
+    return match.group("base")
+
+
 async def _load_catalog(db: AsyncSession) -> _Catalog:
     groups = await load_alias_groups(db)
+    # Алиас — это ещё одно написание артикула, поэтому он участвует в разборе
+    # наименования так же, как SKU. Но только если такого SKU нет отдельной
+    # записью: тогда он уже представлен собой, и его группа решает каскад.
+    alias_rows = (await db.execute(select(Product.id, Product.aliases))).all()
+    aliases_by_id: dict[int, set[str]] = {
+        int(product_id): {
+            normalize_sku(str(alias)) for alias in (aliases or ()) if alias
+        }
+        for product_id, aliases in alias_rows
+    }
+    sku_keys = {
+        normalize_sku(sku) for group in groups.groups for sku in group.skus
+    }
     entries: list[SkuEntry] = []
     product_ids: list[int] = []
     sku_by_id: dict[int, str] = {}
     for group in groups.groups:
         for product_id, sku in zip(group.product_ids, group.skus, strict=True):
-            entries.append(sku_entry(sku))
+            extra = aliases_by_id.get(product_id, set()) - sku_keys
+            entries.append(sku_entry(sku, extra))
             product_ids.append(product_id)
             sku_by_id[product_id] = sku
+    variant_ids: dict[str, list[int]] = {}
+    for product_id, sku in sku_by_id.items():
+        base = _variant_base_key(sku)
+        if base is not None:
+            variant_ids.setdefault(base, []).append(product_id)
     return _Catalog(
         entries=entries,
         product_ids=product_ids,
         sku_by_id=sku_by_id,
         groups=groups,
+        variant_ids=variant_ids,
     )
 
 
@@ -766,21 +830,50 @@ class _NameMatch:
 
 
 def _match_name_candidates(name: str | None, catalog: _Catalog) -> _NameMatch:
-    """Сопоставить кандидатов из наименования через ``match_sku_cell``."""
+    """Сопоставить кандидатов из наименования через ``match_sku_cell``.
+
+    Скобки разбираются первыми и, если дали артикул, код поставщика вне скобок
+    не участвует: в «Профиль алюм.#318-00(ЮП-3123)» номер ``318`` из кода
+    совпадает с отдельным артикулом ``318``, и без приоритета скобок строка
+    становится ложно неоднозначной.
+    """
     group_keys: set[int] = set()
     matched_ids: list[int] = []
     ambiguous_ids: list[int] = []
-    for candidate in _extract_sku_candidates(name):
-        match = match_sku_cell(candidate, catalog.entries)
-        if match.rejected:
-            ambiguous_ids.extend(
-                catalog.product_ids[index] for index in match.ambiguous_indexes
-            )
-            continue
-        if match.found and match.index is not None:
-            product_id = catalog.product_ids[match.index]
-            group_keys.add(catalog.group_key(product_id))
-            matched_ids.append(product_id)
+
+    def collect(candidates: list[str]) -> None:
+        for candidate in candidates:
+            match = match_sku_cell(candidate, catalog.entries)
+            if match.rejected:
+                ambiguous_ids.extend(
+                    catalog.product_ids[index] for index in match.ambiguous_indexes
+                )
+                continue
+            if match.found and match.index is not None:
+                product_id = catalog.product_ids[match.index]
+                group_keys.add(catalog.group_key(product_id))
+                matched_ids.append(product_id)
+                continue
+            # Исполнение полуфабриката: токен ``ЮП-2464`` — база артикула
+            # ``ЮП-2464-1``, 1С пишет ``ЮП-2464-01 ПФ``. Берём только
+            # единственного кандидата: два артикула на одну базу —
+            # неоднозначность, а не выбор первого по порядку справочника.
+            variants = catalog.variant_products(candidate)
+            if len(variants) == 1:
+                product_id = variants[0]
+                group_keys.add(catalog.group_key(product_id))
+                matched_ids.append(product_id)
+            elif len(variants) > 1:
+                ambiguous_ids.extend(variants)
+
+    paren_candidates = _extract_paren_candidates(name)
+    collect(paren_candidates)
+    if not group_keys and not ambiguous_ids:
+        collect([
+            candidate
+            for candidate in _extract_sku_candidates(name)
+            if candidate not in paren_candidates
+        ])
     return _NameMatch(
         group_keys=group_keys,
         product_ids=matched_ids,
@@ -1114,8 +1207,14 @@ async def resolve_1c_osv_quantities(
             continue
         unit_kind = _classify_unit(item.source_unit or "")
         if unit_kind == "other":
-            item.errors.append(_unit_error(item.source_unit))
-            item.status = "invalid"
+            # Плёнки, м², кг и прочие единицы MES не ведёт: это не дефект
+            # данных, а строка «не наша». Ошибка заставила бы разбирать её
+            # руками каждый прогон; пропуск с причиной — честное решение
+            # заказчика (26.11.2026), а не тихое проглатывание.
+            item.status = "skipped"
+            item.skip_reason = "not_mes"
+            item.skip_reason_label = SKIP_REASON_LABELS.get("not_mes", "not_mes")
+            item.skip_note = _unit_error(item.source_unit)
             continue
         if unit_kind == "pcs":
             # Штуки как есть: количества уже в item.quantity, длина не нужна.

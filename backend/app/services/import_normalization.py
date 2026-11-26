@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -23,6 +24,19 @@ def normalize_sku(value: str) -> str:
     for ch in SKU_DASH_VARIANTS:
         normalized = normalized.replace(ch, "-")
     return normalized.replace(" ", "").replace("\u00A0", "")
+
+
+_DASH_BETWEEN_LETTER_AND_DIGIT = re.compile(r"(?<=[a-zа-яё])-(?=\d)")
+
+
+def sku_loose(value: str) -> str:
+    """Артикул без дефиса между буквой и цифрой: ``ALS-1291`` == ``ALS1291``.
+
+    Дефис здесь — оформление, а не часть кода: 1С пишет ``ALS1291``, справочник —
+    ``ALS-1291``. Хвост (``sku_tail``) и числовой ключ по-прежнему считаются по
+    исходному SKU: это отдельные правила, не нормализация.
+    """
+    return _DASH_BETWEEN_LETTER_AND_DIGIT.sub("", normalize_sku(value))
 
 
 def numeric_sku_key(value: str) -> str | None:
@@ -82,6 +96,11 @@ class SkuEntry:
     чисто цифрового SKU (#444). Запись одна на артикул, поэтому несколько
     ключей одного продукта не могут родить ложную неоднозначность.
 
+    ``loose_keys`` — те же написания без дефиса между буквой и цифрой:
+    ``ALS-1291`` узнаётся и как ``ALS1291`` (1С пишет код поставщика без
+    дефиса). Это шаг каскада, а не ещё один SKU: группы алиасов и хвост
+    по-прежнему считаются по исходному написанию.
+
     Числовой ключ лежит отдельно от ``keys`` намеренно: в точном цикле
     ``match_sku_cell`` первый ключ победил бы молча, а записи ``33`` и ``033``
     обязаны дать неоднозначность, а не выбор по порядку справочника.
@@ -90,6 +109,7 @@ class SkuEntry:
     keys: frozenset[str]
     tail: str
     numeric_key: str | None = None
+    loose_keys: frozenset[str] = frozenset()
 
 
 def sku_entry(sku: str, extra_keys: Iterable[str] = ()) -> SkuEntry:
@@ -102,10 +122,12 @@ def sku_entry(sku: str, extra_keys: Iterable[str] = ()) -> SkuEntry:
     ``ЮП-033`` в числовой ``33``.
     """
     normalized = normalize_sku(sku)
+    keys = frozenset({normalized, *extra_keys} - {""})
     return SkuEntry(
-        keys=frozenset({normalized, *extra_keys} - {""}),
+        keys=keys,
         tail=sku_tail(sku),
         numeric_key=numeric_sku_key(sku),
+        loose_keys=frozenset(sku_loose(key) for key in keys if key),
     )
 
 
@@ -165,10 +187,13 @@ def match_sku_parts(cell: str, entries: Sequence[SkuEntry]) -> SkuMatch:
     артикуле, и оператор этого не заметил бы.
     """
     for part in sku_compound_parts(cell):
+        loose_part = sku_loose(part)
         hits = tuple(
             index
             for index, entry in enumerate(entries)
-            if part in entry.keys or part == entry.tail
+            if part in entry.keys
+            or part == entry.tail
+            or loose_part in entry.loose_keys
         )
         if len(hits) == 1:
             return SkuMatch(index=hits[0], part=part)
@@ -177,8 +202,23 @@ def match_sku_parts(cell: str, entries: Sequence[SkuEntry]) -> SkuMatch:
     return SkuMatch()
 
 
+def _match_sku_loose(cell: str, entries: Sequence[SkuEntry]) -> SkuMatch:
+    """Совпадение без дефиса между буквой и цифрой: ``ALS1291`` ↔ ``ALS-1291``."""
+    loose = sku_loose(cell)
+    if not loose:
+        return SkuMatch()
+    hits = tuple(
+        index for index, entry in enumerate(entries) if loose in entry.loose_keys
+    )
+    if len(hits) == 1:
+        return SkuMatch(index=hits[0])
+    if len(hits) > 1:
+        return SkuMatch(ambiguous_indexes=hits)
+    return SkuMatch()
+
+
 def match_sku_cell(cell: str, entries: Sequence[SkuEntry]) -> SkuMatch:
-    """Каскад привязки: целая ячейка → числовой код → части по «/» (#347, #444).
+    """Каскад привязки: целая ячейка → числовой код → без дефиса → части (#347, #444).
 
     Точное совпадение обязано идти первым: артикул со слэшем в справочнике легален
     (``Product.sku`` уникален целиком), и привязывать его к первой части было бы
@@ -194,6 +234,9 @@ def match_sku_cell(cell: str, entries: Sequence[SkuEntry]) -> SkuMatch:
     numeric_match = match_sku_numeric(normalized_cell, entries)
     if numeric_match.found or numeric_match.rejected:
         return numeric_match
+    loose_match = _match_sku_loose(normalized_cell, entries)
+    if loose_match.found or loose_match.rejected:
+        return loose_match
     return match_sku_parts(normalized_cell, entries)
 
 
