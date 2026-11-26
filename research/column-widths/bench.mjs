@@ -324,14 +324,17 @@ function collectMetrics(prepared, widths, lambda = MAIN_LAMBDA) {
 }
 
 /**
- * Доля потерянного текста в переносимых колонках (то, что покупает `clamp`).
- * Пилюли и mono-обрезка сюда не входят: у них своя политика `nowrap`.
+ * Доля потерянного текста: ячейки текстовых колонок, полный текст которых не
+ * виден. Считаются и `wrap`-колонки, и однострочные (`truncate` у
+ * «Наименования» — та же потеря). Пилюли и mono-обрезка сюда не входят: у них
+ * своя политика `nowrap`, и в основном сценарии это не потеря текста, а
+ * подпись в `title`.
  */
-function wrapTruncation(prepared, widths) {
+function textTruncation(prepared, widths) {
   let total = 0;
   let truncated = 0;
   prepared.columns.forEach((column, index) => {
-    if (!column.wrap) return;
+    if (column.kind !== "text") return;
     const usable = widths[column.id] - CELL_PADDING_PX;
     for (const row of prepared.rows) {
       total += 1;
@@ -400,17 +403,22 @@ export function runConfig({
       results.baseline.widths,
       0,
     );
-    const pick = (source) => ({
+    const pick = (source, widths) => ({
       height: source.height,
       meanHeight: source.meanHeight,
       p95Height: source.p95Height,
       maxHeight: source.maxHeight,
       truncatedShare: source.truncatedShare,
+      textTruncatedShare: textTruncation(fullPrepared, widths).sharePct,
     });
     policy = {
-      currentProduct: current,
-      noClampBaseline: pick(results.baseline),
-      noClampBest: pick(results.search),
+      currentProduct: {
+        ...current,
+        textTruncatedShare: textTruncation(currentPrepared, results.baseline.widths)
+          .sharePct,
+      },
+      noClampBaseline: pick(results.baseline, results.baseline.widths),
+      noClampBest: pick(results.search, results.search.widths),
       growthPct: {
         baseline: round(
           (results.baseline.height / (current.height || 1) - 1) * 100,
@@ -696,7 +704,7 @@ export function runSweep(measurer, spec) {
           }),
         );
         const metrics = collectMetrics(prepared, value.widths, spec.lambda);
-        const textLoss = wrapTruncation(prepared, value.widths);
+        const textLoss = textTruncation(prepared, value.widths);
         cases.push({
           profile,
           tableWidth,
@@ -1026,6 +1034,11 @@ function summarizePolicies(configs) {
     meanCurrentTruncatedShare: mean((p) => p.currentProduct.truncatedShare),
     meanBaselineTruncatedShare: mean((p) => p.noClampBaseline.truncatedShare),
     meanBestTruncatedShare: mean((p) => p.noClampBest.truncatedShare),
+    meanCurrentTextTruncatedShare: mean((p) => p.currentProduct.textTruncatedShare),
+    meanBaselineTextTruncatedShare: mean(
+      (p) => p.noClampBaseline.textTruncatedShare,
+    ),
+    meanBestTextTruncatedShare: mean((p) => p.noClampBest.textTruncatedShare),
     meanGrowthBaselinePct: mean((p) => p.growthPct.baseline),
     meanGrowthBestPct: mean((p) => p.growthPct.best),
   };
@@ -1345,20 +1358,20 @@ function buildReport(data) {
         "Текущий продукт — `truncate` у наименования и полный перенос ошибок (как в `ImportRemaindersDialog`), ширины — текущие доли. Ниже — цена отказа от обрезки при полном тексте.",
       );
       push("");
-      push("| Политика | Средняя высота строки | Суммарная высота (сред.) | Обрезка ячеек, % | Рост к текущему фиксу |");
-      push("|---|---:|---:|---:|---:|");
+      push("| Политика | Средняя высота строки | Суммарная высота (сред.) | Потеря текста, % | Обрезка пилюль/служебных, % | Рост к текущему фиксу |");
+      push("|---|---:|---:|---:|---:|---:|");
       push(
-        `| Текущий продукт (наименование 1 строка, ошибки перенос) | ${policies.meanCurrentRowHeight} | ${policies.meanCurrentTotalHeight} | ${policies.meanCurrentTruncatedShare} | 0% |`,
+        `| Текущий продукт (наименование 1 строка, ошибки перенос) | ${policies.meanCurrentRowHeight} | ${policies.meanCurrentTotalHeight} | ${policies.meanCurrentTextTruncatedShare} | ${policies.meanCurrentTruncatedShare} | 0% |`,
       );
       push(
-        `| Baseline-доли, полный текст | ${policies.meanBaselineRowHeight} | ${policies.meanBaselineTotalHeight} | ${policies.meanBaselineTruncatedShare} | ${signedPercent(policies.meanGrowthBaselinePct)} |`,
+        `| Baseline-доли, полный текст | ${policies.meanBaselineRowHeight} | ${policies.meanBaselineTotalHeight} | ${policies.meanBaselineTextTruncatedShare} | ${policies.meanBaselineTruncatedShare} | ${signedPercent(policies.meanGrowthBaselinePct)} |`,
       );
       push(
-        `| \`search\`, полный текст | ${policies.meanBestRowHeight} | ${policies.meanBestTotalHeight} | ${policies.meanBestTruncatedShare} | ${signedPercent(policies.meanGrowthBestPct)} |`,
+        `| \`search\`, полный текст | ${policies.meanBestRowHeight} | ${policies.meanBestTotalHeight} | ${policies.meanBestTextTruncatedShare} | ${policies.meanBestTruncatedShare} | ${signedPercent(policies.meanGrowthBestPct)} |`,
       );
       push("");
       push(
-        "Обрезка в основном сценарии — это не текст (у него clamp = ∞), а пилюли «Операций»: они nowrap, и по спеке §12 сжимаются с подписью в title. Поэтому `search` экономит высоту в том числе за счёт «Операций»; отрицательный рост — перераспределение бюджета, положительный — цена полного текста.",
+        "«Потеря текста» — только текстовые колонки (наименование, ошибки): у текущего продукта это обрезанные наименования, у полного текста — ноль. «Обрезка пилюль/служебных» — отдельная политика `nowrap` для «Операций» и mono-колонок: подпись остаётся в `title`, это не скрытый текст. Смешивать эти два числа нельзя.",
       );
       push("");
       push(
