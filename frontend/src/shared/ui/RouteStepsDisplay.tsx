@@ -21,6 +21,12 @@ export type RouteStepsDisplayProps = {
   /** Справочник операций из API — подставляет icon/color, если в steps их нет. */
   referenceOps?: RouteStep[]
   compact?: boolean
+  /**
+   * Не переносить пилюли: они сжимаются и обрезают подпись (одна строка).
+   * Нужно там, где высота строки фиксирована (виртуализированные таблицы),
+   * а перенос растягивал бы строку выше общего ритма.
+   */
+  nowrap?: boolean
   size?: "sm" | "md"
   /** Показывать иконки/точки в бейджах. По умолчанию true. */
   showIcons?: boolean
@@ -134,6 +140,7 @@ export function RouteStepsDisplay({
   steps,
   referenceOps,
   compact = true,
+  nowrap = false,
   size = "sm",
   showIcons = true,
   className,
@@ -157,7 +164,13 @@ export function RouteStepsDisplay({
 
   if (compact) {
     return (
-      <div className={cn("flex flex-wrap items-center gap-0.5 min-w-0", className)}>
+      <div
+        className={cn(
+          "flex items-center gap-0.5 min-w-0",
+          nowrap ? "flex-nowrap" : "flex-wrap",
+          className,
+        )}
+      >
         {groupedSteps.map((group, groupIdx) => (
           <Fragment key={group[0].sequence}>
             {groupIdx > 0 ? (

@@ -1,0 +1,19 @@
+{
+  "name": "@ktm/research-column-widths",
+  "private": true,
+  "type": "module",
+  "description": "Research harness: optimal column widths for minimal-height data tables",
+  "scripts": {
+    "bench": "node bench.mjs",
+    "browser:serve": "vite --config browser/vite.config.mjs",
+    "browser:test": "playwright test --config browser/playwright.config.mjs",
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "dependencies": {
+    "@chenglou/pretext": "^1.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "vite": "^8.3.8"
+  }
+}

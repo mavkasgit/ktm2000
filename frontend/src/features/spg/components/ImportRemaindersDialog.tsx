@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback, Fragment, memo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useResizeObserver } from "@siberiacancode/reactuse";
 import { AlertCircle, CheckCircle, Download, Loader2 } from "lucide-react";
 
 import {
@@ -33,7 +34,19 @@ import { useFilterableTable } from "@/shared/hooks/useFilterableTable";
 import { buildColumnApiParams, buildColumnFilterValues } from "@/shared/lib/columnSpecs";
 import { getAriaSort } from "@/shared/lib/multiSort";
 import { saveBlobAsFile } from "@/shared/lib/downloadFile";
-import { remainderPreviewColumns } from "../lib/remainderPreviewColumns";
+import {
+  remainderPreviewColumns,
+  REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH,
+  REMAINDER_PREVIEW_RESET_COLUMN_WIDTH,
+} from "../lib/remainderPreviewColumns";
+import { isOptimalColumnWidthsEnabled } from "../lib/optimalColumnWidthsFlag";
+import {
+  previewErrorsCellText,
+  previewErrorsText,
+  previewNameCellClass,
+} from "../lib/remainderPreviewErrors";
+import { PREVIEW_MIN_ROW_HEIGHT_PX } from "../lib/previewColumnWidths";
+import { useOptimalColumnWidths } from "../lib/useOptimalColumnWidths";
 
 import {
   useImportRowExpansion,
@@ -76,6 +89,7 @@ import { useDebouncedValue } from "@/shared/lib/useDebouncedValue";
 import { fmtQty, fmtQtyPrecise } from "@/shared/lib/quantityFormat";
 import {
   buildRemainderPreviewSortParam,
+  DEFAULT_REMAINDER_PREVIEW_SORT,
   type RemainderPreviewSortField,
 } from "@/shared/lib/stockSortParams";
 
@@ -198,27 +212,6 @@ function getImportItemSectionLabel(
   return sections.find((section) => section.id === sectionId)?.name ?? `#${sectionId}`;
 }
 
-/** Подпись пропуска из предпросмотра: «нет совпадения» / «есть в исключениях». */
-function getImportItemSkipReason(item: RemainderImportItem): string {
-  return item.skip_reason_label?.trim() || "нет совпадения";
-}
-
-function getImportItemErrorsLabel(item: RemainderImportItem): string {
-  // Правило повторяет `_preview_errors_label` (`stock/import_service.py`):
-  // пропуск — не ошибка, но колонка объясняет строку, и по этой же подписи
-  // сервер фильтрует `?errors=`. Второй строки-заметки нет: `skip_note`
-  // повторял подпись и удваивал высоту строки (CODING_STANDARDS п.11).
-  // Префикс «Пропущено: » держит e2e остатков и счётчик в шапке.
-  if (item.status === "skipped") {
-    return `Пропущено: ${getImportItemSkipReason(item)}`;
-  }
-  const messages = [...item.warnings, ...item.errors];
-  if (messages.length === 0) {
-    return item.status === "valid" ? "—" : "Ошибка";
-  }
-  return messages.map(translateImportError).join(", ");
-}
-
 function getImportItemCellValue(
   item: RemainderImportItem,
   field: RemainderPreviewSortField,
@@ -245,7 +238,7 @@ function getImportItemCellValue(
     case "section":
       return getImportItemSectionLabel(item, sectionOverrides, sections);
     case "errors":
-      return getImportItemErrorsLabel(item);
+      return previewErrorsText(item);
   }
 }
 
@@ -299,6 +292,18 @@ type PreviewRowProps = {
   expanded: boolean;
   qualityOverride: QualityState | null;
   sectionOverride: number | null;
+  /**
+   * Под флагом #483 «Наименование» переносится: ширина колонки посчитана, а
+   * высота строки предсказана моделью. `false` — текущий фикс: `truncate` в
+   * одну строку (в том числе в ветке `baseline` адаптивной политики #489).
+   */
+  nameWraps: boolean;
+  /**
+   * Предсказанная моделью высота строки (#483), px. Живёт в `data-*` только
+   * для наблюдаемости: E2E #484 сверяет её с фактической высотой `<tr>`.
+   * Считается в обеих ветках политики #489; без флага — `null`.
+   */
+  predictedHeight: number | null;
   onToggle: (rowNumber: number) => void;
   onQualityChange: (rowNumber: number, state: QualityState) => void;
   onSectionChange: (rowNumber: number, sectionId: number | null) => void;
@@ -311,6 +316,14 @@ type PreviewRowProps = {
  * Качество и участок интерактивны только у ``valid``: у пропущенной и
  * ошибочной строки импорт их не применит, поэтому там статичный бейдж, а не
  * ``Select`` (ADR-0030 — строка остаётся компактной).
+ *
+ * Без флага #483 текстовые ячейки печатаются одной строкой (`truncate`), а
+ * полное значение — в `title`: виртуализатор не знал переменной высоты.
+ * Под флагом ширина колонок посчитана, высота каждой строки предсказана
+ * моделью, и «Наименование» печатается полностью (`whitespace-pre-line`).
+ * Адаптивная политика (#489) может вернуть `baseline` и на флаге: тогда
+ * ширины — текущие доли, «Наименование» снова `truncate`, а предсказанная
+ * высота остаётся (она нужна виртуализатору).
  */
 const PreviewRow = memo(function PreviewRow({
   item,
@@ -319,6 +332,8 @@ const PreviewRow = memo(function PreviewRow({
   expanded,
   qualityOverride,
   sectionOverride,
+  nameWraps,
+  predictedHeight,
   onToggle,
   onQualityChange,
   onSectionChange,
@@ -334,6 +349,8 @@ const PreviewRow = memo(function PreviewRow({
   return (
     <Fragment>
       <tr
+        data-row-key={rowKey}
+        data-predicted-height={predictedHeight ?? undefined}
         onClick={() => hasRaw && onToggle(rowKey)}
         className={`border-b transition-colors cursor-pointer hover:bg-muted/30 ${
           isInvalid
@@ -349,12 +366,19 @@ const PreviewRow = memo(function PreviewRow({
         <td className="px-1.5 py-0.5 text-left font-bold text-muted-foreground tabular-nums">
           {item.source_row_number}
         </td>
-        <td className="px-1.5 py-0.5 font-mono tabular-nums whitespace-nowrap">
+        <td
+          className="px-1.5 py-0.5 font-mono tabular-nums whitespace-nowrap overflow-hidden text-ellipsis"
+          title={item.source_code ?? undefined}
+        >
           {item.source_code ?? "—"}
         </td>
         <td
-          className="px-1.5 py-0.5 font-mono font-semibold"
-          title={item.matched_sku && item.matched_sku !== item.sku ? `Найден SKU: ${item.matched_sku}` : undefined}
+          className="px-1.5 py-0.5 font-mono font-semibold whitespace-nowrap overflow-hidden text-ellipsis"
+          title={
+            item.matched_sku && item.matched_sku !== item.sku
+              ? `${item.sku} → найдено: ${item.matched_sku}`
+              : item.sku
+          }
         >
           {item.sku}
           {item.matched_sku && item.matched_sku !== item.sku ? (
@@ -362,8 +386,8 @@ const PreviewRow = memo(function PreviewRow({
           ) : null}
         </td>
         <td
-          className={`px-1.5 py-0.5 ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
-          title={item.source_name ?? undefined}
+          className={`px-1.5 py-0.5 ${previewNameCellClass(nameWraps)} ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
+          title={item.source_name ?? item.product_name ?? undefined}
         >
           {item.product_name ?? item.source_name ?? "—"}
         </td>
@@ -374,22 +398,25 @@ const PreviewRow = memo(function PreviewRow({
           {fmtQtyPrecise(item.source_quantity_m)}
         </td>
         <td
-          className={`px-1.5 py-0.5 tabular-nums whitespace-nowrap ${
+          className={`px-1.5 py-0.5 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis ${
             item.dimensions ? "font-medium text-foreground" : "text-muted-foreground"
           }`}
+          title={formatDimensionsLabel(item.dimensions, item.dimensions_label)}
         >
           {formatDimensionsLabel(item.dimensions, item.dimensions_label)}
         </td>
-        <td className="px-1.5 py-0.5 min-w-[160px]">
+        <td className="px-1.5 py-0.5 overflow-hidden">
           {item.completed_stages && item.completed_stages.length > 0 ? (
             <RouteStepsDisplay
               steps={item.completed_stages}
               referenceOps={operations}
               compact
               size="sm"
+              // Одна строка: перенос пилюль поднимал высоту строки (ADR-0030).
+              nowrap
             />
           ) : (
-            <span className="text-xs text-muted-foreground">
+            <span className="block truncate text-xs text-muted-foreground">
               {getImportItemOperationsLabel(item)}
             </span>
           )}
@@ -404,7 +431,7 @@ const PreviewRow = memo(function PreviewRow({
               onValueChange={(value) => onQualityChange(rowKey, value as QualityState)}
             >
               <SelectTrigger
-                className={`h-6 w-full min-w-[96px] text-[10px] font-semibold border px-2 ${qualityBadgeClass(
+                className={`h-6 w-full text-[10px] font-semibold border px-2 ${qualityBadgeClass(
                   qualityState,
                 )}`}
               >
@@ -420,7 +447,7 @@ const PreviewRow = memo(function PreviewRow({
             </Select>
           ) : (
             <span
-              className={`inline-flex h-6 w-full min-w-[96px] items-center justify-center rounded-md border px-2 text-[10px] font-semibold ${qualityBadgeClass(
+              className={`inline-flex h-6 w-full items-center justify-center rounded-md border px-2 text-[10px] font-semibold ${qualityBadgeClass(
                 qualityState,
               )}`}
             >
@@ -446,7 +473,7 @@ const PreviewRow = memo(function PreviewRow({
               value={sectionOverride ?? item.target_section_id ?? null}
               onValueChange={(sectionId) => onSectionChange(rowKey, sectionId)}
               placeholder="Выберите участок"
-              className="h-6 w-full min-w-[140px] text-[10px]"
+              className="h-6 w-full text-[10px]"
             />
           ) : (
             <span className="text-xs text-muted-foreground">{sectionLabel}</span>
@@ -459,9 +486,7 @@ const PreviewRow = memo(function PreviewRow({
               : "whitespace-pre-line text-destructive"
           }`}
         >
-          {isSkipped
-            ? getImportItemErrorsLabel(item)
-            : item.errors.map(translateImportError).join(", ") || "—"}
+          {previewErrorsCellText(item)}
         </td>
         <TableCornerResetCell />
       </tr>
@@ -541,6 +566,9 @@ const summaryCellClass = TABLE_ROW_COMPACT.cell;
  */
 const PREVIEW_ALL_ROWS_LIMIT = 5000;
 
+/** Флаг #483: без него экран ведёт себя как раньше — текущие доли колонок. */
+const OPTIMAL_COLUMN_WIDTHS_ENABLED = isOptimalColumnWidthsEnabled();
+
 export function ImportRemaindersDialog({
   open,
   onOpenChange,
@@ -616,6 +644,9 @@ export function ImportRemaindersDialog({
   // Последнее показанное превью листа: пока грузится новый фильтр, таблица
   // остаётся на экране вместе с полем поиска и его фокусом (ADR-0060 п.1).
   const [lastPreviewBySheet, setLastPreviewBySheet] = useState<Record<number, RemainderPreviewResponse>>({});
+  // Первый полный нефильтрованный ответ листа — вход модели ширин (#483).
+  // Поиск, сортировка и чипы приходят позже и раскладку не пересчитывают.
+  const [widthItemsBySheet, setWidthItemsBySheet] = useState<Record<number, RemainderImportItem[]>>({});
   const [sheetsLoading, setSheetsLoading] = useState(false);
   const [rowSelection, setRowSelection] = useState("");
   const [clearExisting, setClearExisting] = useState(false);
@@ -734,6 +765,27 @@ export function ImportRemaindersDialog({
     );
   }, [previewData, selectedSheet]);
 
+  // Снапшот для модели ширин — первая же (нефильтрованная) выдача листа.
+  // Если лист впервые открыли уже с фильтром, снапшота нет: экран честно
+  // остаётся на текущих долях, а не считает ширины по подвыборке.
+  useEffect(() => {
+    if (!previewData) return;
+    // `sort` не бывает пустым: без выбора оператора он равен
+    // `DEFAULT_REMAINDER_PREVIEW_SORT` (`row:asc`). Считать дефолтный порядок
+    // фильтром нельзя — иначе первый ответ листа никогда не считался бы
+    // «полным нефильтрованным», снапшот ширин не появлялся и таблица под
+    // флагом навсегда оставалась на спиннере (#484 поймал это в браузере).
+    const unfiltered =
+      !debouncedSearch.trim() &&
+      !rowSelection &&
+      sort === DEFAULT_REMAINDER_PREVIEW_SORT &&
+      Object.keys(columnApiParams).length === 0;
+    if (!unfiltered) return;
+    setWidthItemsBySheet((prev) =>
+      prev[selectedSheet]?.length ? prev : { ...prev, [selectedSheet]: previewData.items },
+    );
+  }, [previewData, selectedSheet, debouncedSearch, rowSelection, sort, columnApiParams]);
+
   // ── Resolve location id for API (из файла, per-row override или первая валидная строка) ──
   const resolveImportLocationId = useMemo((): number | null => {
     if (!shownPreview?.section_meta) return null;
@@ -752,6 +804,7 @@ export function ImportRemaindersDialog({
     setPreviewCache({});
     setPreviewLoadingKeys({});
     setLastPreviewBySheet({});
+    setWidthItemsBySheet({});
     previewSourceToken.current = null;
   }, []);
 
@@ -1124,6 +1177,55 @@ export function ImportRemaindersDialog({
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // ── Оптимальные ширины колонок (#483, за флагом) ───────────────────────
+  // Ширина контейнера — единственный вход, который пересчитывает раскладку.
+  // Наблюдаем рамку таблицы (шаг `preview`); сам пересчёт дебаунсит хук.
+  // `useResizeObserver` из reactuse: свой `new ResizeObserver` запрещён
+  // (reactuse-diff). Берём `clientWidth` узла, а не `contentRect`, — ширины
+  // таблицы считаются по внешней рамке скролла.
+  const [previewWidth, setPreviewWidth] = useState(0);
+  useResizeObserver(scrollContainerRef, {
+    enabled: step === "preview",
+    onChange: () => {
+      const width = scrollContainerRef.current?.clientWidth ?? 0;
+      if (width > 0) {
+        setPreviewWidth((previous) => (previous === width ? previous : width));
+      }
+    },
+  });
+
+  const optimalWidths = useOptimalColumnWidths({
+    enabled: OPTIMAL_COLUMN_WIDTHS_ENABLED,
+    sheetIndex: selectedSheet,
+    items: widthItemsBySheet[selectedSheet] ?? null,
+    operations,
+    containerWidth: previewWidth,
+  });
+  const optimalShares = optimalWidths.result?.shares ?? null;
+  // Адаптивная политика (#489): полный текст применяется только если он не
+  // дороже текущего фикса больше чем на θ. При `baseline` ширины — текущие
+  // доли, наименование снова `truncate`, а предсказанные высоты остаются —
+  // они нужны виртуализатору.
+  const fullTextLayout = optimalWidths.result?.policy === "full-text";
+  // Пока ширин нет (новый лист), таблицу держит спиннер: показать её на
+  // текущих долях и потом переложить — это и есть «прыжок», который тикет
+  // запрещает. На ресайз ширины остаются прошлые, пока не готовы новые.
+  const widthsPending =
+    OPTIMAL_COLUMN_WIDTHS_ENABLED &&
+    !optimalShares &&
+    optimalWidths.status !== "off";
+  const overflowMinWidth =
+    optimalShares && optimalWidths.result && optimalWidths.result.minTableWidthPx > 1180
+      ? optimalWidths.result.minTableWidthPx
+      : null;
+  const rowHeights = optimalShares
+    ? visibleItems.map(
+        (item) =>
+          optimalWidths.result?.rowHeights.get(item.source_row_number) ??
+          PREVIEW_MIN_ROW_HEIGHT_PX,
+      )
+    : undefined;
+
   // Развёрнутая сырая строка — переменной высоты; виртуализатор считает строки
   // одинаковыми, поэтому на время разворота таблица рисуется обычным tbody.
   const hasExpandedPreviewRow = useMemo(
@@ -1144,6 +1246,15 @@ export function ImportRemaindersDialog({
         expanded={isRowExpanded(item.source_row_number)}
         qualityOverride={qualityStateOverrides[item.source_row_number] ?? null}
         sectionOverride={targetSectionOverrides[item.source_row_number] ?? null}
+        // Наименование переносится только в раскладке полного текста: в
+        // `baseline` (#489) его высота — одна строка, как у текущего фикса.
+        nameWraps={fullTextLayout}
+        predictedHeight={
+          optimalShares
+            ? optimalWidths.result?.rowHeights.get(item.source_row_number) ??
+              PREVIEW_MIN_ROW_HEIGHT_PX
+            : null
+        }
         onToggle={toggleRow}
         onQualityChange={handleRowQualityChange}
         onSectionChange={handleRowSectionChange}
@@ -1155,6 +1266,9 @@ export function ImportRemaindersDialog({
       isRowExpanded,
       qualityStateOverrides,
       targetSectionOverrides,
+      fullTextLayout,
+      optimalShares,
+      optimalWidths.result?.rowHeights,
       toggleRow,
       handleRowQualityChange,
       handleRowSectionChange,
@@ -1660,12 +1774,20 @@ export function ImportRemaindersDialog({
               ) : null}
 
               <ImportPreview.TableFrame
-                className={`${DATA_TABLE_STYLES.container} min-h-0`}
+                // Горизонтальный скролл объявлен здесь, а не взят из
+                // `DATA_TABLE_STYLES.container` (`overflow-x-hidden`):
+                // раскладка таблицы фиксированная (`table-fixed` + `<colgroup>`
+                // ниже), колонки не сжимаются под узкое окно, и без прокрутки
+                // правый край просто обрезался бы — тот же дефект, что
+                // вылечен в `PlanPage`.
+                className="min-h-0 min-w-0 overflow-auto rounded-lg border"
                 containerRef={scrollContainerRef}
                 // Спиннер — только пока предпросмотра на экране не было ни
                 // разу: перечитывание по фильтру не должно уносить таблицу
                 // вместе с открытым поповером и набранным текстом (ADR-0044).
-                loading={previewLoading && !shownPreview}
+                // Пока считаются ширины (#483), таблица тоже не показывается:
+                // иначе колонки прыгнут после первого кадра.
+                loading={(previewLoading && !shownPreview) || widthsPending}
                 isEmpty={shownPreview !== null && visibleItems.length === 0}
                 emptyContent={
                   shownPreview && previewItemsTotal > 0 ? (
@@ -1680,10 +1802,40 @@ export function ImportRemaindersDialog({
                   )
                 }
               >
-                <table className="w-full text-[11px] text-left border-collapse">
+                {/* `table-fixed` + `<colgroup>`: строки виртуализированы, и при
+                    auto-раскладке ширины колонок считались по содержимому
+                    смонтированных строк — при скролле они «перерисовывались».
+                    Ширины объявлены один раз в `remainderPreviewColumns`
+                    (вместе со служебными колонками дают 100%). */}
+                {/* Наблюдаемость режима (#484): E2E проверяет, какая раскладка
+                    применена, совпала ли предсказанная высота с фактической и
+                    уложилась ли доля обрезанных пилюль в лимит текущего фикса.
+                    `data-height-delta-pct` (#489) — цена полного текста против
+                    текущего фикса: по ней E2E видит, что ветка выбрана правилом
+                    θ, а не «на глаз». Только чтение; на вёрстку не влияет. */}
+                <table
+                  className="w-full min-w-[1180px] table-fixed text-[11px] text-left border-collapse"
+                  style={overflowMinWidth ? { minWidth: `${overflowMinWidth}px` } : undefined}
+                  data-column-layout={fullTextLayout ? "optimal" : "baseline"}
+                  data-pills-limit-share={optimalWidths.result?.pillsLimitShare}
+                  data-predicted-total-height={optimalWidths.result?.totalHeightPx}
+                  data-predicted-row-count={optimalWidths.result?.rowHeights.size}
+                  data-height-delta-pct={optimalWidths.result?.heightDeltaPct}
+                  data-baseline-height={optimalWidths.result?.baselineHeightPx}
+                >
+                    <colgroup>
+                      <col style={{ width: REMAINDER_PREVIEW_CHEVRON_COLUMN_WIDTH }} />
+                      {remainderPreviewColumns.map((column) => (
+                        <col
+                          key={column.id}
+                          style={{ width: optimalShares?.[column.id] ?? column.width }}
+                        />
+                      ))}
+                      <col style={{ width: REMAINDER_PREVIEW_RESET_COLUMN_WIDTH }} />
+                    </colgroup>
                     <thead>
                       <tr>
-                        <th className={`${headerCellClass} w-7`} />
+                        <th className={headerCellClass} />
                         {remainderPreviewColumns.map((column) => (
                           <th
                             key={column.id}
@@ -1717,6 +1869,9 @@ export function ImportRemaindersDialog({
                         // Оценка из общего набора компактной строки (ADR-0030):
                         // фактическую высоту виртуализатор измеряет сам.
                         rowHeight={TABLE_ROW_COMPACT.rowHeightPx}
+                        // С флагом #483 — предсказанная высота каждой строки
+                        // (`lines × lineHeight` «Ошибок»); без флага — как раньше.
+                        rowHeights={rowHeights}
                         colSpan={remainderPreviewColumns.length + 2}
                         scrollContainerRef={scrollContainerRef}
                         renderRow={renderPreviewRow}

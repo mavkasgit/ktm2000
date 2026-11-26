@@ -4,6 +4,15 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 export interface VirtualizedTableBodyProps<T> {
   rows: T[];
   rowHeight: number;
+  /**
+   * Предсказанная высота каждой строки (индекс — позиция в `rows`). Если её
+   * нет, работает прежняя оценка `rowHeight` + измерение первой строки.
+   *
+   * Нужна там, где высота строки разная и известна до рендера: модель ширин
+   * предпросмотра остатков считает `lines × lineHeight` «Ошибок» (#483), и
+   * виртуализатор получает её вместо среднего по таблице.
+   */
+  rowHeights?: ReadonlyArray<number | undefined>;
   overscan?: number;
   /**
    * Ref to the outer scroll container (the div with overflow-auto).
@@ -39,6 +48,7 @@ const VIRTUALIZATION_THRESHOLD = 300;
 export function VirtualizedTableBody<T>({
   rows,
   rowHeight,
+  rowHeights,
   overscan = 5,
   scrollContainerRef,
   colSpan,
@@ -69,7 +79,7 @@ export function VirtualizedTableBody<T>({
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => measuredRowHeight ?? rowHeight,
+    estimateSize: (index) => rowHeights?.[index] ?? measuredRowHeight ?? rowHeight,
     overscan,
   });
 

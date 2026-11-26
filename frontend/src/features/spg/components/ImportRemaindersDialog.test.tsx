@@ -576,6 +576,28 @@ describe("пропущенные строки и лист целиком", () =>
     }
   });
 
+  it("раскладка таблицы фиксированная: ширины не зависят от смонтированных строк", async () => {
+    mockPreviewReferences();
+    const { cleanup } = await mountPreview();
+    try {
+      const header = screen.getByRole("columnheader", { name: "Код 1С" });
+      const table = header.closest("table");
+      expect(table).toBeTruthy();
+      // Auto-раскладка считала ширины по содержимому видимых строк: при
+      // скролле виртуализатор менял строки, и колонки «перерисовывались».
+      expect(table!.className).toContain("table-fixed");
+
+      // Одна `<col>` на шеврон, все колонки спеки и колонку сброса.
+      const cols = Array.from(table!.querySelectorAll("colgroup > col")) as HTMLElement[];
+      expect(cols).toHaveLength(remainderPreviewColumns.length + 2);
+      expect(cols.slice(1, -1).map((col) => col.style.width)).toEqual(
+        remainderPreviewColumns.map((column) => column.width),
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
   it("чипы изолируют категорию, повторный клик и сброс возвращают дефолт", async () => {
     mockPreviewReferences();
     const { cleanup } = await mountPreview();
@@ -774,6 +796,17 @@ describe("колонки предпросмотра ОСВ", () => {
       expect(nameCell.getAttribute("title")).toBe(
         "Кант универсальный 26мм 2,70м (ЮП-2616) алюминий",
       );
+
+      // Строка держит один ритм TABLE_ROW_COMPACT: текстовые ячейки не
+      // переносятся, полное значение — в title. Перенос остаётся «Ошибкам».
+      for (const label of ["Код 1С", "Артикул", "Длина"]) {
+        const cell = cells[labels.indexOf(label)];
+        expect(cell.getAttribute("title"), `title в «${label}»`).toBeTruthy();
+        expect(cell.className, `одна строка в «${label}»`).toContain("whitespace-nowrap");
+      }
+      expect(nameCell.className).toContain("truncate");
+      const codeCell = cells[labels.indexOf("Код 1С")];
+      expect(codeCell.getAttribute("title")).toBe("20933");
     } finally {
       cleanup();
     }
