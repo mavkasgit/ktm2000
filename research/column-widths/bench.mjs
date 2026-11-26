@@ -5,7 +5,7 @@
  * Основной сценарий — полный текст: `clamp = ∞`, `λ = 0`. Обрезка — отдельная
  * политика, её цена измеряется свипом.
  *
- * Прогон состоит из четырёх частей:
+ * Прогон состоит из шести частей:
  *
  * - `matrix`  — 7 профилей × {100,1000,5000} × {1180,1500,1920} × {6,12,20} × seeds;
  *               метрики считаются по полному листу, оптимизатор видит ≤500 строк;
@@ -14,7 +14,9 @@
  * - `oracle`  — точный перебор на малых инстансах (60 строк), все оптимизаторы
  *               рядом с эталоном; отсюда берётся gap для H1;
  * - `sweep`   — Парето «высота против потерянного текста»:
- *               `clamp ∈ {∞,6,4,3,2}` при `λ = 20`.
+ *               `clamp ∈ {∞,6,4,3,2}` при `λ = 20`;
+ * - `stability` — матрица сожалений: доли с W0 = 1500 на других ширинах (#482);
+ * - `robust`  — один робастный вектор долей на профили × ширины (#482, #487).
  *
  * Гипотезы H1–H4 выводятся с числом и вердиктом. H4 берётся из браузерного
  * прогона #479 (`results/browser.json`, создаёт `npm run browser:test`), а не из
@@ -25,8 +27,9 @@
  *   node research/column-widths/bench.mjs --quick         # сжатая матрица
  *   node research/column-widths/bench.mjs --measurer=pretext
  *   node research/column-widths/bench.mjs --seeds=3
- *   node research/column-widths/bench.mjs --only=product  # product|oracle|matrix|
- *                                                         # sweep|all (или через запятую)
+ *   node research/column-widths/bench.mjs --only=product  # matrix|oracle|product|
+ *                                                         # sweep|stability|robust|all
+ *                                                         # (или через запятую)
  *   node research/column-widths/bench.mjs --lambda=40     # λ свипа (основной всегда 0)
  *
  * Результаты: research/column-widths/results/{bench.json,report.md}. Каталог
@@ -51,6 +54,12 @@ import {
 import { createMeasurer } from "./lib/measurers.mjs";
 import { evaluate, measureCell, prepareSheet } from "./lib/evaluate.mjs";
 import { OPTIMIZERS, oracleOptimizer } from "./lib/optimizers.mjs";
+import {
+  buildRobustScenario,
+  contentSharesFromFlexShares,
+  robustShares,
+  widthsFromFlexShares,
+} from "./lib/robust.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RESULTS_DIR = resolve(HERE, "results");
@@ -91,7 +100,7 @@ const CSS_ERROR_LINE_HEIGHT_PX = 11 * 1.375; // leading-snug при text-[11px]
 const FIT_ROWS = 500;
 const ORACLE_ROWS = 60;
 
-const SECTIONS = ["matrix", "oracle", "product", "sweep"];
+const SECTIONS = ["matrix", "oracle", "product", "sweep", "stability", "robust"];
 
 const args = process.argv.slice(2);
 const argValue = (name, fallback) => {
@@ -183,6 +192,35 @@ function sweepSpec() {
   };
 }
 
+/**
+ * Матрица сожалений (#482): доли, подобранные на W0, переносятся на W'.
+ * Основной сценарий — полный текст (λ = 0), продуктовая ширина 11 колонок.
+ */
+function stabilitySpec() {
+  return {
+    profiles: QUICK ? ["realistic", "long-tail"] : PROFILES,
+    rows: QUICK ? 300 : 1000,
+    baseWidth: 1500,
+    widths: QUICK ? [1180, 1600] : [1180, 1400, 1600, 1920],
+    seed: 1,
+    columnCount: 11,
+    optimizer: "search",
+  };
+}
+
+/** Робастный вектор (#482): один набор долей на профили × ширины. */
+function robustSpec() {
+  return {
+    profiles: QUICK ? ["realistic", "long-tail"] : PROFILES,
+    rows: QUICK ? 300 : 1000,
+    widths: QUICK ? [1180, 1600] : [1180, 1400, 1600, 1920],
+    seed: 1,
+    columnCount: 11,
+    rowLimit: QUICK ? 300 : FIT_ROWS,
+    maxCandidates: QUICK ? 8 : 12,
+  };
+}
+
 function contentWidth(tableWidth) {
   return tableWidth - SERVICE_WIDTH_PX;
 }
@@ -238,6 +276,19 @@ function prepareForFit(sheet, measurer) {
 function round(value, digits = 2) {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
+}
+
+function average(values) {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function maxOf(values, fallback = 0) {
+  return values.length === 0 ? fallback : Math.max(...values);
+}
+
+function minOf(values, fallback = 0) {
+  return values.length === 0 ? fallback : Math.min(...values);
 }
 
 function clampLabel(clamp) {
@@ -501,57 +552,66 @@ function runOracleConfig({ profile, tableWidth, columnCount, seed, measurer }) {
 }
 
 /**
- * H2: та же эвристика на первых 500 строках против полного листа. Внутренняя
- * подвыборка оптимизатора проверяется отдельно (#482) — здесь честная граница
- * «что будет, если оптимизатор увидит только 500 строк».
+ * H2: та же эвристика на первых N строках против полного листа (#482:
+ * N ∈ {200, 500, 1000}). Внутренняя подвыборка оптимизатора — отдельный
+ * вопрос; здесь честная граница «что будет, если оптимизатор увидит только
+ * первые N строк». `long-tail` и `outlier` считаются отдельными профилями.
  */
-function runSampleStability(measurer) {
+export function runSampleStability(measurer, options = {}) {
   const cases = [];
-  const profiles = QUICK ? ["realistic"] : ["realistic", "long-tail", "outlier"];
+  const profiles =
+    options.profiles ??
+    (QUICK ? ["realistic"] : ["realistic", "long-tail", "outlier"]);
+  const sampleSizes = options.sampleSizes ?? (QUICK ? [200, 500] : [200, 500, 1000]);
+  const rows = options.rows ?? 5000;
   const names = ["narrowing", "breakpoints", "search"];
   for (const profile of profiles) {
-    for (const name of names) {
-      const columns = mainColumns(12);
-      const sheet = generateSheet({ profile, rows: 5000, columns, seed: 1 });
-      const width = contentWidth(1500);
+    const columns = mainColumns(11);
+    const sheet = generateSheet({ profile, rows, columns, seed: 1 });
+    const width = contentWidth(1500);
+    const full = prepareSheet(sheet, measurer);
+    const fullRuns = Object.fromEntries(
+      names.map((name) => [name, OPTIMIZERS[name](full, width, { lambda: MAIN_LAMBDA })]),
+    );
+    for (const sampleSize of sampleSizes) {
       const sample = prepareSheet(
-        { ...sheet, rows: sheet.rows.slice(0, 500) },
+        { ...sheet, rows: sheet.rows.slice(0, sampleSize) },
         measurer,
       );
-      const full = prepareSheet(sheet, measurer);
-      const sampleRun = OPTIMIZERS[name](sample, width, {
-        lambda: MAIN_LAMBDA,
-      });
-      const fullRun = OPTIMIZERS[name](full, width, {
-        lambda: MAIN_LAMBDA,
-      });
-      const sampleMetrics = collectMetrics(full, sampleRun.widths);
-      const fullMetrics = collectMetrics(full, fullRun.widths);
-      const deltas = columns
-        .filter((column) => column.flex)
-        .map((column) =>
-          Math.abs(sampleRun.widths[column.id] - fullRun.widths[column.id]),
-        );
-      cases.push({
-        profile,
-        optimizer: name,
-        sampleHeight: sampleMetrics.height,
-        fullHeight: fullMetrics.height,
-        heightDeltaPct: round(
-          ((sampleMetrics.height - fullMetrics.height) /
-            (fullMetrics.height || 1)) *
-            100,
-          2,
-        ),
-        sampleCost: sampleMetrics.cost,
-        fullCost: fullMetrics.cost,
-        costDeltaPct: round(
-          ((sampleMetrics.cost - fullMetrics.cost) / (fullMetrics.cost || 1)) *
-            100,
-          2,
-        ),
-        maxFlexWidthDeltaPx: round(Math.max(0, ...deltas), 1),
-      });
+      for (const name of names) {
+        const sampleRun = OPTIMIZERS[name](sample, width, {
+          lambda: MAIN_LAMBDA,
+        });
+        const fullRun = fullRuns[name];
+        const sampleMetrics = collectMetrics(full, sampleRun.widths);
+        const fullMetrics = collectMetrics(full, fullRun.widths);
+        const deltas = columns
+          .filter((column) => column.flex)
+          .map((column) =>
+            Math.abs(sampleRun.widths[column.id] - fullRun.widths[column.id]),
+          );
+        cases.push({
+          profile,
+          optimizer: name,
+          sampleSize,
+          sampleHeight: sampleMetrics.height,
+          fullHeight: fullMetrics.height,
+          heightDeltaPct: round(
+            ((sampleMetrics.height - fullMetrics.height) /
+              (fullMetrics.height || 1)) *
+              100,
+            2,
+          ),
+          sampleCost: sampleMetrics.cost,
+          fullCost: fullMetrics.cost,
+          costDeltaPct: round(
+            ((sampleMetrics.cost - fullMetrics.cost) / (fullMetrics.cost || 1)) *
+              100,
+            2,
+          ),
+          maxFlexWidthDeltaPx: round(Math.max(0, ...deltas), 1),
+        });
+      }
     }
   }
   return cases;
@@ -591,6 +651,360 @@ function runStabilityAcrossWidths(measurer, widths) {
     }
   }
   return cases;
+}
+
+/**
+ * Диагностика переноса долей: статические `minPx` и `maxShare`. Для
+ * робастного вектора дополнительно проверяется динамический минимум
+ * (`maxWordWidth`, #479) — он зависит от листа, поэтому считается отдельно.
+ */
+function staticViolations(columns, widths, contentWidth) {
+  const violations = [];
+  for (const column of columns) {
+    if (widths[column.id] < column.minPx - 0.5) {
+      violations.push({
+        column: column.id,
+        kind: "minPx",
+        width: round(widths[column.id], 1),
+        limit: column.minPx,
+      });
+    }
+    const cap = maxWidth(column, contentWidth);
+    if (Number.isFinite(cap) && widths[column.id] > cap + 0.5) {
+      violations.push({
+        column: column.id,
+        kind: "maxShare",
+        width: round(widths[column.id], 1),
+        limit: round(cap, 1),
+      });
+    }
+  }
+  return violations;
+}
+
+/**
+ * Матрица сожалений (#482): оптимизатор подбирает доли на `W0`, результат
+ * переносится на `W'`. Основной вариант — проценты (`share × contentWidth`),
+ * как в продукте; отдельно считается «пиксели с `W0` без масштабирования» —
+ * это не поведение `table-fixed` с процентами, а диагностика.
+ */
+export function runRegretMatrix(measurer, spec = {}) {
+  const profiles = spec.profiles ?? PROFILES;
+  const baseWidth = spec.baseWidth ?? 1500;
+  const widths = spec.widths ?? [1180, 1400, 1600, 1920];
+  const rows = spec.rows ?? 1000;
+  const seed = spec.seed ?? 1;
+  const columnCount = spec.columnCount ?? 11;
+  const optimizerName = spec.optimizer ?? "search";
+  const columns = mainColumns(columnCount);
+  const baseContent = contentWidth(baseWidth);
+  const cases = [];
+
+  for (const profile of profiles) {
+    const sheet = generateSheet({ profile, rows, columns, seed });
+    const prepared = prepareSheet(sheet, measurer);
+    const baseRun = OPTIMIZERS[optimizerName](prepared, baseContent, {
+      lambda: MAIN_LAMBDA,
+    });
+    const baseShares = {};
+    for (const column of columns) {
+      baseShares[column.id] = baseRun.widths[column.id] / baseContent;
+    }
+
+    for (const tableWidth of widths) {
+      const content = contentWidth(tableWidth);
+      const optimalRun = OPTIMIZERS[optimizerName](prepared, content, {
+        lambda: MAIN_LAMBDA,
+      });
+      const optimalMetrics = evaluate(prepared, optimalRun.widths, {
+        lambda: MAIN_LAMBDA,
+      });
+
+      const scaledWidths = {};
+      for (const column of columns) {
+        scaledWidths[column.id] = baseShares[column.id] * content;
+      }
+      const scaledMetrics = evaluate(prepared, scaledWidths, {
+        lambda: MAIN_LAMBDA,
+      });
+
+      // «Пиксели с W0 как есть»: не проценты, а фиксированные px.
+      const fixedMetrics = evaluate(prepared, baseRun.widths, {
+        lambda: MAIN_LAMBDA,
+      });
+
+      cases.push({
+        profile,
+        tableWidth,
+        contentWidth: content,
+        rows,
+        optimizer: optimizerName,
+        baseWidth,
+        baseContent,
+        baseShares,
+        optimalCost: optimalMetrics.cost,
+        optimalHeight: optimalMetrics.height,
+        scaledWidths,
+        scaledCost: scaledMetrics.cost,
+        scaledHeight: scaledMetrics.height,
+        scaledRegretPct: round(
+          ((scaledMetrics.cost - optimalMetrics.cost) /
+            (optimalMetrics.cost || 1)) *
+            100,
+          2,
+        ),
+        scaledWidthSum: round(sumWidths(columns, scaledWidths), 1),
+        scaledViolations: staticViolations(columns, scaledWidths, content),
+        fixedPixelCost: fixedMetrics.cost,
+        fixedPixelHeight: fixedMetrics.height,
+        fixedPixelRegretPct: round(
+          ((fixedMetrics.cost - optimalMetrics.cost) /
+            (optimalMetrics.cost || 1)) *
+            100,
+          2,
+        ),
+        fixedPixelWidthSum: round(sumWidths(columns, baseRun.widths), 1),
+      });
+    }
+  }
+
+  const byWidth = widths.map((tableWidth) => {
+    const subset = cases.filter((item) => item.tableWidth === tableWidth);
+    const scaled = subset.map((item) => item.scaledRegretPct);
+    const fixed = subset.map((item) => item.fixedPixelRegretPct);
+    const worstScaled = subset.reduce(
+      (worst, item) =>
+        worst === null || item.scaledRegretPct > worst.scaledRegretPct
+          ? item
+          : worst,
+      null,
+    );
+    return {
+      tableWidth,
+      profiles: subset.length,
+      meanScaledRegretPct: round(average(scaled), 2),
+      worstScaledRegretPct: round(maxOf(scaled), 2),
+      worstScaledProfile: worstScaled
+        ? `${worstScaled.profile}/${worstScaled.optimizer}`
+        : null,
+      meanFixedPixelRegretPct: round(average(fixed), 2),
+      worstFixedPixelRegretPct: round(maxOf(fixed), 2),
+      scaledViolations: subset.reduce(
+        (sum, item) => sum + item.scaledViolations.length,
+        0,
+      ),
+    };
+  });
+
+  const allScaled = cases.map((item) => item.scaledRegretPct);
+  return {
+    spec: {
+      ...spec,
+      profiles,
+      widths,
+      rows,
+      seed,
+      columnCount,
+      optimizer: optimizerName,
+      baseWidth,
+    },
+    cases,
+    byWidth,
+    summary: {
+      caseCount: cases.length,
+      meanScaledRegretPct: round(average(allScaled), 2),
+      worstScaledRegretPct: round(maxOf(allScaled), 2),
+      thresholdPct: 3,
+      passes: maxOf(allScaled) <= 3,
+    },
+  };
+}
+
+/**
+ * Робастный вектор (#482): один набор долей на все профили и `W'`.
+ *
+ * Поиск идёт по кэшу порогов (`lib/robust.mjs`), затем вектор проверяется на
+ * полных листах тем же `evaluate`, что и остальной бенч. Рядом считается
+ * перенос долей с `W0` (реальное поведение процентов) — порог требует, чтобы
+ * робастный вектор был не хуже него.
+ */
+export function runRobustVector(measurer, spec = {}) {
+  const profiles = spec.profiles ?? PROFILES;
+  const widths = spec.widths ?? [1180, 1400, 1600, 1920];
+  const rows = spec.rows ?? 1000;
+  const seed = spec.seed ?? 1;
+  const columnCount = spec.columnCount ?? 11;
+  const baseWidth = spec.baseWidth ?? 1500;
+  const rowLimit = spec.rowLimit ?? FIT_ROWS;
+  const maxCandidates = spec.maxCandidates ?? 12;
+  const columns = mainColumns(columnCount);
+  const baseContent = contentWidth(baseWidth);
+
+  const preparedByProfile = new Map();
+  const scenarios = [];
+  for (const profile of profiles) {
+    const sheet = generateSheet({ profile, rows, columns, seed });
+    const prepared = prepareSheet(sheet, measurer);
+    preparedByProfile.set(profile, prepared);
+    for (const tableWidth of widths) {
+      scenarios.push(
+        buildRobustScenario({
+          prepared,
+          contentWidth: contentWidth(tableWidth),
+          lambda: MAIN_LAMBDA,
+          rowLimit,
+          maxCandidates,
+          profile,
+          tableWidth,
+        }),
+      );
+    }
+  }
+
+  const robust = robustShares(scenarios, {
+    objectives: spec.objectives,
+    maxSweeps: spec.maxSweeps,
+  });
+  const scenarioAt = (profile, tableWidth) =>
+    scenarios.find(
+      (scenario) =>
+        scenario.profile === profile && scenario.tableWidth === tableWidth,
+    );
+
+  const verification = [];
+  for (const profile of profiles) {
+    const prepared = preparedByProfile.get(profile);
+    const baseRun = OPTIMIZERS.search(prepared, baseContent, {
+      lambda: MAIN_LAMBDA,
+    });
+    const baseShares = {};
+    for (const column of columns) {
+      baseShares[column.id] = baseRun.widths[column.id] / baseContent;
+    }
+    for (const tableWidth of widths) {
+      const content = contentWidth(tableWidth);
+      const optimalRun = OPTIMIZERS.search(prepared, content, {
+        lambda: MAIN_LAMBDA,
+      });
+      const optimalMetrics = evaluate(prepared, optimalRun.widths, {
+        lambda: MAIN_LAMBDA,
+      });
+
+      const scaledWidths = {};
+      for (const column of columns) {
+        scaledWidths[column.id] = baseShares[column.id] * content;
+      }
+      const scaledMetrics = evaluate(prepared, scaledWidths, {
+        lambda: MAIN_LAMBDA,
+      });
+
+      const robustWidths = widthsFromFlexShares(columns, content, robust.shares);
+      const robustMetrics = evaluate(prepared, robustWidths, {
+        lambda: MAIN_LAMBDA,
+      });
+
+      const scenario = scenarioAt(profile, tableWidth);
+      const violations = staticViolations(columns, robustWidths, content);
+      for (const column of columns) {
+        if (!column.flex || !scenario) continue;
+        const effective = scenario.model.minimums[column.id];
+        if (robustWidths[column.id] < effective - 0.5) {
+          violations.push({
+            column: column.id,
+            kind: "effectiveMin",
+            width: round(robustWidths[column.id], 1),
+            limit: round(effective, 1),
+          });
+        }
+      }
+
+      verification.push({
+        profile,
+        tableWidth,
+        contentWidth: content,
+        optimalCost: optimalMetrics.cost,
+        scaledCost: scaledMetrics.cost,
+        scaledRegretPct: round(
+          ((scaledMetrics.cost - optimalMetrics.cost) /
+            (optimalMetrics.cost || 1)) *
+            100,
+          2,
+        ),
+        robustCost: robustMetrics.cost,
+        robustGapPct: round(
+          Math.max(
+            0,
+            ((robustMetrics.cost - optimalMetrics.cost) /
+              (optimalMetrics.cost || 1)) *
+              100,
+          ),
+          2,
+        ),
+        robustHeight: robustMetrics.height,
+        robustWidths,
+        robustWidthSum: round(sumWidths(columns, robustWidths), 1),
+        violations,
+      });
+    }
+  }
+
+  const byWidth = widths.map((tableWidth) => {
+    const subset = verification.filter((item) => item.tableWidth === tableWidth);
+    const robustGaps = subset.map((item) => item.robustGapPct);
+    const scaledRegrets = subset.map((item) => item.scaledRegretPct);
+    const worst = subset.reduce(
+      (worstItem, item) =>
+        worstItem === null || item.robustGapPct > worstItem.robustGapPct
+          ? item
+          : worstItem,
+      null,
+    );
+    return {
+      tableWidth,
+      profiles: subset.length,
+      meanRobustGapPct: round(average(robustGaps), 2),
+      worstRobustGapPct: round(maxOf(robustGaps), 2),
+      worstRobustProfile: worst ? worst.profile : null,
+      meanScaledRegretPct: round(average(scaledRegrets), 2),
+      worstScaledRegretPct: round(maxOf(scaledRegrets), 2),
+      violations: subset.reduce((sum, item) => sum + item.violations.length, 0),
+    };
+  });
+
+  const robustGaps = verification.map((item) => item.robustGapPct);
+  const meanGapPct = average(robustGaps);
+  const worstGapPct = maxOf(robustGaps);
+  const contentShares = contentSharesFromFlexShares(
+    columns,
+    baseContent,
+    robust.shares,
+  );
+  return {
+    spec: {
+      ...spec,
+      profiles,
+      widths,
+      rows,
+      seed,
+      columnCount,
+      baseWidth,
+      rowLimit,
+      maxCandidates,
+    },
+    shares: robust.shares,
+    contentShares,
+    contentSharesByWidth: robust.contentSharesByWidth,
+    bounds: robust.bounds,
+    seedUsed: robust.seed,
+    objective: robust.objective,
+    meanGapPct: round(meanGapPct, 2),
+    worstGapPct: round(worstGapPct, 2),
+    passes: meanGapPct <= 2 && worstGapPct <= 4,
+    runs: robust.runs,
+    scenarios: robust.scenarios,
+    verification,
+    byWidth,
+  };
 }
 
 /** Диагностика модели: pretext против greedy на синтетике. Это не H4. */
@@ -1048,7 +1462,91 @@ function verdict(condition) {
   return condition ? "подтверждена" : "не подтверждена";
 }
 
-function buildHypotheses({ oracle, sampleStability, widthStability, h4 }) {
+/**
+ * Решение #482 по заранее записанному порогу. Порог не подгоняется:
+ * (а) — перенос долей с W0 ≤3% (средняя и худшая по профилям);
+ * (б) — робастный вектор, средний ≤2% и худший ≤4%, и не хуже (а);
+ * (в) — иначе пересчёт на ресайзе остаётся.
+ */
+function buildDecision({ regret, robust }) {
+  if (!regret && !robust) return null;
+  const transferMean = regret
+    ? maxOf(regret.byWidth.map((item) => item.meanScaledRegretPct))
+    : null;
+  const transferWorst = regret
+    ? maxOf(regret.byWidth.map((item) => item.worstScaledRegretPct))
+    : null;
+  const transferPass =
+    regret !== null && transferMean <= 3 && transferWorst <= 3;
+
+  let robustNotWorse = null;
+  if (regret && robust) {
+    robustNotWorse = robust.byWidth.every((item) => {
+      const scaled = regret.byWidth.find(
+        (entry) => entry.tableWidth === item.tableWidth,
+      );
+      if (!scaled) return false;
+      return (
+        item.meanRobustGapPct <= scaled.meanScaledRegretPct + 1e-9 &&
+        item.worstRobustGapPct <= scaled.worstScaledRegretPct + 1e-9
+      );
+    });
+  }
+  const robustPass = robust ? robust.passes : false;
+
+  let option;
+  let reason;
+  if (transferPass) {
+    option = "а";
+    reason =
+      "перенос долей с W0 укладывается в 3%: пересчёт на ресайзе не нужен, доли можно хранить в процентах.";
+  } else if (robustPass && robustNotWorse) {
+    option = "б";
+    reason =
+      "робастный вектор укладывается в 2%/4% и не хуже переноса с W0: его можно зашить константой.";
+  } else {
+    option = "в";
+    const parts = [];
+    if (regret) {
+      parts.push(
+        `перенос с W0 даёт худшую потерю ${transferWorst}% (порог 3%, средняя ${transferMean}%)`,
+      );
+    }
+    if (robust) {
+      parts.push(
+        `робастный вектор — средний ${robust.meanGapPct}%, худший ${robust.worstGapPct}% (порог 2%/4%)`,
+      );
+      if (robustNotWorse === false) {
+        parts.push("и он хуже переноса с W0 на части ширин");
+      }
+    }
+    reason = `${parts.join("; ")}. Пересчёт на ресайзе остаётся, #483 обязан уложить его до первого показа таблицы.`;
+  }
+
+  return {
+    option,
+    reason,
+    transfer: {
+      meanPct: transferMean,
+      worstPct: transferWorst,
+      passes: transferPass,
+      thresholdPct: 3,
+      minViolations: regret
+        ? regret.byWidth.reduce((sum, item) => sum + item.scaledViolations, 0)
+        : null,
+    },
+    robust: robust && {
+      meanPct: robust.meanGapPct,
+      worstPct: robust.worstGapPct,
+      passes: robustPass,
+      notWorseThanTransfer: robustNotWorse,
+      shares: robust.shares,
+      contentShares: robust.contentShares,
+    },
+  };
+}
+
+function buildHypotheses({ oracle, sampleStability, widthStability, h4, regret, robust }) {
   const hypotheses = [];
   if (oracle) {
     const best = oracle.best;
@@ -1075,12 +1573,17 @@ function buildHypotheses({ oracle, sampleStability, widthStability, h4 }) {
   }
 
   if (sampleStability.length > 0) {
-    const worst = [...sampleStability].sort(
+    const fiveHundred = sampleStability.filter(
+      (item) => item.sampleSize === undefined || item.sampleSize === 500,
+    );
+    const scope = fiveHundred.length > 0 ? fiveHundred : sampleStability;
+    const worst = [...scope].sort(
       (a, b) => Math.abs(b.heightDeltaPct) - Math.abs(a.heightDeltaPct),
     )[0];
-    const fails = sampleStability.filter(
-      (item) => Math.abs(item.heightDeltaPct) > 2,
-    );
+    const fails = scope.filter((item) => Math.abs(item.heightDeltaPct) > 2);
+    const sizes = [...new Set(sampleStability.map((item) => item.sampleSize))]
+      .filter((size) => size !== undefined)
+      .sort((a, b) => a - b);
     hypotheses.push({
       id: "H2",
       statement:
@@ -1088,9 +1591,9 @@ function buildHypotheses({ oracle, sampleStability, widthStability, h4 }) {
       value: `${worst.heightDeltaPct}% (${worst.optimizer}/${worst.profile})`,
       threshold: "≤2%",
       verdict: verdict(fails.length === 0),
-      note: `${sampleStability.length} случаев; вне порога: ${
-        fails.length || "нет"
-      }`,
+      note: `${scope.length} случаев${
+        sizes.length ? `; размеры подвыборки ${sizes.join("/")} проверены отдельно` : ""
+      }; вне порога: ${fails.length || "нет"}`,
     });
   } else {
     hypotheses.push({
@@ -1129,6 +1632,33 @@ function buildHypotheses({ oracle, sampleStability, widthStability, h4 }) {
       threshold: "≤5 п.п.",
       verdict: "нет данных",
       note: "--only без matrix/product",
+    });
+  }
+
+  if (regret) {
+    hypotheses.push({
+      id: "H3-transfer",
+      statement: `перенос долей с W0 = ${regret.spec.baseWidth} на W' стоит ≤3% cost против оптимума на W' (средняя и худшая по профилям)`,
+      value: `средняя ≤${maxOf(
+        regret.byWidth.map((item) => item.meanScaledRegretPct),
+      )}%, худшая ${maxOf(
+        regret.byWidth.map((item) => item.worstScaledRegretPct),
+      )}%`,
+      threshold: "≤3%",
+      verdict: verdict(regret.summary.passes),
+      note: `${regret.summary.caseCount} случаев, ${regret.spec.profiles.length} профилей; проценты масштабируются (реальное поведение table-fixed)`,
+    });
+  }
+
+  if (robust) {
+    hypotheses.push({
+      id: "H3-robust",
+      statement:
+        "один робастный вектор: средний gap к оптимуму каждой W' ≤2%, худший ≤4%",
+      value: `средний ${robust.meanGapPct}%, худший ${robust.worstGapPct}%`,
+      threshold: "≤2% / ≤4%",
+      verdict: verdict(robust.passes),
+      note: `${robust.spec.profiles.length} профилей × ${robust.spec.widths.length} ширин; seed ${robust.seedUsed}, цель ${robust.objective}`,
     });
   }
 
@@ -1181,6 +1711,9 @@ function buildReport(data) {
     h4,
     hypotheses,
     measurerAgreement,
+    regret,
+    robust,
+    decision,
   } = data;
   const lines = [];
   const push = (...cells) => lines.push(...cells);
@@ -1207,7 +1740,7 @@ function buildReport(data) {
   );
   push(`- Секции: ${meta.sections.join(", ")}`);
   push(
-    `- Конфигураций: ${meta.counts.matrix} матрица, ${meta.counts.product} продуктовый срез, ${meta.counts.oracle} оракул, ${meta.counts.sweep} свип, ${meta.counts.virtualization} виртуализация`,
+    `- Конфигураций: ${meta.counts.matrix} матрица, ${meta.counts.product} продуктовый срез, ${meta.counts.oracle} оракул, ${meta.counts.sweep} свип, ${meta.counts.stability} матрица сожалений, ${meta.counts.robust} сценариев робастного вектора, ${meta.counts.virtualization} виртуализация`,
   );
   push(`- Время прогона: ${meta.runtimeMs} мс`);
   push("");
@@ -1444,6 +1977,79 @@ function buildReport(data) {
     push("");
   }
 
+  if (regret) {
+    push("## Матрица сожалений: доли с W0 на других ширинах (#482)");
+    push("");
+    push(
+      `Оптимизатор \`${regret.spec.optimizer}\`, продуктовый срез ${regret.spec.columnCount} колонок, ${regret.spec.rows} строк, seed ${regret.spec.seed}. ` +
+        `Доли подобраны на \`W0 = ${regret.spec.baseWidth}\`, затем применены к \`W'\`. «Проценты» — реальное поведение \`table-fixed\`: \`share × contentWidth(W')\`; ` +
+        "«пиксели без масштабирования» — диагностика, не поведение продукта. Потеря — относительно раскладки `search`, оптимальной на самой `W'`.",
+    );
+    push("");
+    push("| W' | Профилей | Средняя потеря (проценты), % | Худшая потеря (проценты), % | Худший профиль | Средняя потеря (px без масштаба), % | Худшая (px), % | Наруш. minPx/maxShare |");
+    push("|---:|---:|---:|---:|---|---:|---:|---:|");
+    for (const item of regret.byWidth) {
+      push(
+        `| ${item.tableWidth} | ${item.profiles} | ${item.meanScaledRegretPct} | ${item.worstScaledRegretPct} | ${item.worstScaledProfile} | ${item.meanFixedPixelRegretPct} | ${item.worstFixedPixelRegretPct} | ${item.scaledViolations} |`,
+      );
+    }
+    push("");
+    push(
+      `Средняя по всей сетке — **${regret.summary.meanScaledRegretPct}%**, худшая — **${regret.summary.worstScaledRegretPct}%**; порог тикета ≤${regret.summary.thresholdPct}% ${regret.summary.passes ? "пройден" : "не пройден"}. ` +
+        "Нарушения `minPx` — честная цена процентов: при узкой `W'` доля опускается ниже продуктового минимума (например, «Операции»/«Качество» на 1180), и реальная таблица либо ужмёт контрол, либо получит горизонтальный скролл. Это отдельный аргумент против варианта «(а)».",
+    );
+    push("");
+  }
+
+  if (robust) {
+    push("## Робастный вектор: один набор долей на профили и ширины (#482)");
+    push("");
+    push(
+      `Доли гибких колонок от бюджета гибких (сумма 100%); фиксированные — продуктовые. Поиск: ${robust.spec.profiles.length} профилей × ${robust.spec.widths.length} ширин, ` +
+        `${robust.spec.rows} строк, seed ${robust.spec.seed}; seed поиска \`${robust.seedUsed}\`, цель \`${robust.objective}\`. ` +
+        "Gap считается на полных листах против `search` на той же `W'`.",
+    );
+    push("");
+    push("| Колонка | Доля гибкого бюджета, % | Доля контента при W0 = 1500, % |");
+    push("|---|---:|---:|");
+    for (const [id, share] of Object.entries(robust.shares)) {
+      push(
+        `| ${id} | ${round(share * 100, 2)} | ${round((robust.contentShares[id] ?? 0) * 100, 2)} |`,
+      );
+    }
+    push("");
+    push("| W' | Профилей | Средний gap, % | Худший gap, % | Худший профиль | Средний перенос с W0, % | Худший перенос с W0, % | Наруш. min/max |");
+    push("|---:|---:|---:|---:|---|---:|---:|---:|");
+    for (const item of robust.byWidth) {
+      push(
+        `| ${item.tableWidth} | ${item.profiles} | ${item.meanRobustGapPct} | ${item.worstRobustGapPct} | ${item.worstRobustProfile} | ${item.meanScaledRegretPct} | ${item.worstScaledRegretPct} | ${item.violations} |`,
+      );
+    }
+    push("");
+    push(
+      `Средний gap — **${robust.meanGapPct}%**, худший — **${robust.worstGapPct}%**; порог 2%/4% ${robust.passes ? "пройден" : "не пройден"}. ` +
+        `Ограничения по \`minPx\`/\`maxShare\` ${robust.bounds.feasible ? "совместимы на всех ширинах" : "несовместимы: вектор не может уважать минимумы сразу на всех W'"}; нарушений в проверке — ${robust.byWidth.reduce((sum, item) => sum + item.violations, 0)}.`,
+    );
+    push("");
+  }
+
+  if (decision) {
+    push("## Решение по порогу (#482 → #483/#487)");
+    push("");
+    push(
+      `- **(а) считать на W0 и масштабировать:** средняя ${decision.transfer.meanPct}%, худшая ${decision.transfer.worstPct}% (порог ≤3%) — ${decision.transfer.passes ? "проходит" : "не проходит"}; нарушений ` +
+        `\`minPx\`/\`maxShare\` при переносе — ${decision.transfer.minViolations}.`,
+    );
+    if (decision.robust) {
+      push(
+        `- **(б) робастный вектор один раз:** средний ${decision.robust.meanPct}%, худший ${decision.robust.worstPct}% (порог ≤2%/≤4%) — ${decision.robust.passes ? "проходит" : "не проходит"}; ` +
+          `не хуже переноса с W0 — ${decision.robust.notWorseThanTransfer ? "да" : "нет"}.`,
+      );
+    }
+    push(`- **Выбрано: (${decision.option}).** ${decision.reason}`);
+    push("");
+  }
+
   if (virtualization) {
     push("## Виртуализация: предсказанная высота против CSS продукта");
     push("");
@@ -1481,13 +2087,41 @@ function buildReport(data) {
   if (sampleStability.length > 0) {
     push("## Подвыборка (H2)");
     push("");
-    push("| Профиль | Оптимизатор | 500 строк | 5000 строк | Δ высоты | Δ cost | Δ ширины (max) |");
-    push("|---|---|---:|---:|---:|---:|---:|");
-    for (const item of sampleStability) {
-      push(
-        `| ${item.profile} | ${item.optimizer} | ${item.sampleHeight} | ${item.fullHeight} | ${item.heightDeltaPct}% | ${item.costDeltaPct}% | ${item.maxFlexWidthDeltaPx} px |`,
-      );
+    const sizes = [...new Set(sampleStability.map((item) => item.sampleSize ?? 500))]
+      .sort((a, b) => a - b);
+    push(
+      "Первые N строк листа против оптимизации на полном листе (5000 строк — фиксированный лист профиля). Метрики — на полном листе, основной сценарий.",
+    );
+    push("");
+    push(`| Профиль | N | Худшая Δ высоты, % | Оптимизатор | Худшая Δ cost, % | Δ ширины (max), px |`);
+    push("|---|---:|---:|---|---:|---:|");
+    for (const profile of [...new Set(sampleStability.map((item) => item.profile))]) {
+      for (const size of sizes) {
+        const subset = sampleStability.filter(
+          (item) =>
+            item.profile === profile && (item.sampleSize ?? 500) === size,
+        );
+        if (subset.length === 0) continue;
+        const byHeight = subset.reduce((worst, item) =>
+          Math.abs(item.heightDeltaPct) > Math.abs(worst.heightDeltaPct)
+            ? item
+            : worst,
+        );
+        const byCost = subset.reduce((worst, item) =>
+          Math.abs(item.costDeltaPct) > Math.abs(worst.costDeltaPct)
+            ? item
+            : worst,
+        );
+        const maxWidth = Math.max(...subset.map((item) => item.maxFlexWidthDeltaPx));
+        push(
+          `| ${profile} | ${size} | ${byHeight.heightDeltaPct} | ${byHeight.optimizer} | ${byCost.costDeltaPct} | ${maxWidth} |`,
+        );
+      }
     }
+    push("");
+    push(
+      "Отрицательная Δ значит, что раскладка по подвыборке оказалась дешевле полного поиска на этом листе: подвыборка не видит хвост и не раздувает колонки под редкие длинные строки. Для H2 важен модуль Δ относительно порога 2%.",
+    );
     push("");
   }
 
@@ -1726,6 +2360,21 @@ async function main() {
     console.log(`[bench] sweep: ${cases.length} конфигураций`);
   }
 
+  let regret = null;
+  if (SECTIONS_TO_RUN.includes("stability")) {
+    regret = runRegretMatrix(measurer, stabilitySpec());
+    console.log(`[bench] stability: ${regret.cases.length} конфигураций`);
+  }
+
+  let robust = null;
+  if (SECTIONS_TO_RUN.includes("robust")) {
+    robust = runRobustVector(measurer, robustSpec());
+    console.log(
+      `[bench] robust: ${robust.scenarios.length} сценариев, средний ${robust.meanGapPct}%, худший ${robust.worstGapPct}%`,
+    );
+  }
+  const decision = buildDecision({ regret, robust });
+
   let virtualization = null;
   if (
     SECTIONS_TO_RUN.includes("product") ||
@@ -1746,7 +2395,10 @@ async function main() {
   }
 
   const useStability =
-    SECTIONS_TO_RUN.includes("matrix") || SECTIONS_TO_RUN.includes("product");
+    SECTIONS_TO_RUN.includes("matrix") ||
+    SECTIONS_TO_RUN.includes("product") ||
+    SECTIONS_TO_RUN.includes("stability") ||
+    SECTIONS_TO_RUN.includes("robust");
   const sampleStability = useStability ? runSampleStability(measurer) : [];
   const widthStability = useStability
     ? runStabilityAcrossWidths(measurer, matrixSchema.widths)
@@ -1758,6 +2410,8 @@ async function main() {
     sampleStability,
     widthStability,
     h4,
+    regret,
+    robust,
   });
 
   const meta = {
@@ -1782,6 +2436,8 @@ async function main() {
       product: product?.configs.length ?? 0,
       oracle: oracle?.cases.length ?? 0,
       sweep: sweep?.cases.length ?? 0,
+      stability: regret?.cases.length ?? 0,
+      robust: robust?.scenarios.length ?? 0,
       virtualization: virtualization?.cases.length ?? 0,
     },
   };
@@ -1827,6 +2483,9 @@ async function main() {
     measurerAgreement,
     h4,
     hypotheses,
+    stability: regret,
+    robust,
+    decision,
   };
   writeFileSync(
     resolve(RESULTS_DIR, "bench.json"),
@@ -1847,6 +2506,9 @@ async function main() {
     h4,
     hypotheses,
     measurerAgreement,
+    regret,
+    robust,
+    decision,
   });
   writeFileSync(resolve(RESULTS_DIR, "report.md"), `${report}\n`, "utf8");
 
@@ -1883,6 +2545,29 @@ async function main() {
         `${clampLabel(item.clamp).padEnd(14)} ${String(item.meanHeight).padStart(7)} px   потеряно ${String(item.meanTextTruncatedShare).padStart(6)}%   время ${String(item.meanRuntimeMs).padStart(6)} мс`,
       );
     }
+  }
+  if (regret) {
+    console.log("");
+    console.log("Перенос долей с W0 (проценты) против оптимума на W':");
+    for (const item of regret.byWidth) {
+      console.log(
+        `W'=${String(item.tableWidth).padStart(4)}  средняя ${String(item.meanScaledRegretPct).padStart(6)}%  худшая ${String(item.worstScaledRegretPct).padStart(6)}%  нарушений ${item.scaledViolations}`,
+      );
+    }
+  }
+  if (robust) {
+    console.log("");
+    console.log("Робастный вектор (доли гибких колонок):");
+    for (const [id, share] of Object.entries(robust.shares)) {
+      console.log(`  ${id.padEnd(14)} ${round(share * 100, 2)}%`);
+    }
+    console.log(
+      `  средний gap ${robust.meanGapPct}%, худший ${robust.worstGapPct}%`,
+    );
+  }
+  if (decision) {
+    console.log("");
+    console.log(`Решение #482: (${decision.option}) — ${decision.reason}`);
   }
   console.log("");
   for (const item of hypotheses) {

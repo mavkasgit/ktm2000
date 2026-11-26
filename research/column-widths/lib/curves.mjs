@@ -273,6 +273,14 @@ function buildFlexCurve(prepared, column, index, context) {
     column,
     index,
     max,
+    min,
+    minUsable,
+    limit,
+    wrap: Boolean(column.wrap),
+    // Сырые пороги строк: позволяют оценить `cost` на произвольной ширине,
+    // а не только на сетке кандидатов (`costAtWidths`). Нужно робастному
+    // вектору долей: он проверяет одну долю на нескольких W.
+    thresholds: thresholdRows,
     candidates: tables.map((table) => table.width),
     lines: tables.map((table) => table.lines),
     trunc: tables.map((table) => table.trunc),
@@ -527,6 +535,53 @@ export function buildCostModel(prepared, contentWidth, options = {}) {
     costOfColumnCandidates,
     widthSumOf,
   };
+}
+
+/**
+ * `cost` на произвольных ширинах, а не только на сетке кандидатов.
+ *
+ * Робастный вектор долей задаёт ширины как `доля × бюджет` на каждой `W'`;
+ * это почти никогда не совпадает с порогом из сетки. Оценка идёт по тем же
+ * сырым порогам, что и `costOf`, поэтому результат бит-в-бит совпадает с
+ * `evaluate` на тех же ширинах (тест).
+ */
+export function costAtWidths(model, widths) {
+  const { curves, rowCount } = model;
+  const rowMax = new Int32Array(rowCount);
+  rowMax.set(model.fixedLines);
+  let truncTotal = model.fixedTruncTotal;
+
+  for (let c = 0; c < curves.length; c += 1) {
+    const curve = curves[c];
+    const usable = widths[curve.column.id] - CELL_PADDING_PX;
+    const { thresholds, limit, wrap } = curve;
+    for (let row = 0; row < rowCount; row += 1) {
+      const entry = thresholds[row];
+      let lines = 1;
+      const list = entry.lines;
+      if (list.length > 0) {
+        // Первый порог, который больше ширины: `lines = 1 + #{threshold > u}`.
+        let low = 0;
+        let high = list.length;
+        while (low < high) {
+          const middle = (low + high) >> 1;
+          if (list[middle] <= usable) low = middle + 1;
+          else high = middle;
+        }
+        const above = list.length - low;
+        lines = wrap ? Math.min(limit, 1 + above) : 1;
+      }
+      if (entry.truncAt > usable) truncTotal += 1;
+      if (lines > rowMax[row]) rowMax[row] = lines;
+    }
+  }
+
+  let total = 0;
+  for (let row = 0; row < rowCount; row += 1) {
+    const height = rowMax[row] * LINE_HEIGHT_PX + ROW_PADDING_PX;
+    total += height > MIN_ROW_HEIGHT_PX ? height : MIN_ROW_HEIGHT_PX;
+  }
+  return total + model.lambda * truncTotal;
 }
 
 /**
