@@ -60,6 +60,7 @@ export const warningLabels: Record<string, string> = {
   "paired_hanger_adjusted": "Округлено до кратности подвеса",
   "paired_row_auto_included": "Автодобавлена парная строка",
   "period_not_detected": "не определен",
+  "plan_group_balance_mismatch": "Баланс раскроя не сходится",
   "product_name_missing": "Отсутствует наименование",
   "route_auto_fallback": "Маршрут скорректирован автоматически — проверьте корректность",
   "row_selection_applied": "Применён фильтр строк",
