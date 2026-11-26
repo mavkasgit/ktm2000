@@ -6,18 +6,25 @@ import { ARRIVAL_BUDGET_MS, gotoRoute } from "./route-arrival.mjs";
 
 /**
  * @ui-narrow — E2E режима оптимальных ширин предпросмотра остатков (#484,
- * эпик #475; интеграция — #483, спека `docs/specs/preview-column-widths.md`).
+ * эпик #475; интеграция — #483, адаптивная политика — #489, спека
+ * `docs/specs/preview-column-widths.md`).
  *
  * Что доказывается в реальном браузере:
  *
+ * - **Адаптивная политика (#489)**: дешёвый лист (`realistic`) получает полный
+ *   текст (`data-column-layout="optimal"`), дорогой (`long-tail`) — текущий
+ *   фикс (`baseline`): `H_full > H_trunc × 1.05`. Цена видна в
+ *   `data-height-delta-pct`.
  * - **Ширины колонок не «дышат»**: до и после прокрутки виртуализированной
  *   таблицы `getBoundingClientRect` заголовков и `<col>` совпадает (допуск 1 px).
  *   Поиск, сортировка и переключение чипа ширины не меняют; прокрутка не
  *   сбрасывается (при том же числе строк).
  * - **Предсказанная высота строки = фактическая** (`|predicted − actual| ≤ 1 px`)
- *   по каждой отрисованной строке; строка-нарушитель называется в сообщении.
- * - **Полный текст**: под флагом «Наименование» и «Ошибки» переносятся, а не
- *   обрезаются, `title` сохранён.
+ *   по каждой отрисованной строке — **в обеих ветках** политики.
+ * - **Полный текст** (ветка `full-text`): «Наименование» и «Ошибки» переносятся,
+ *   а не обрезаются, `title` сохранён.
+ * - **Текущий фикс** (ветка `baseline`): ширины — доли `remainderPreviewColumns`
+ *   (15/11/21%), «Наименование» — `truncate` в одну строку, `title` сохранён.
  * - **Пилюли «Операций»**: доля строк с обрезанной пилюлей не выше лимита
  *   текущего фикса на этой ширине (`pillsTruncationLimitAtWidth`, отдаётся
  *   таблицей в `data-pills-limit-share`).
@@ -30,25 +37,50 @@ import { ARRIVAL_BUDGET_MS, gotoRoute } from "./route-arrival.mjs";
  * у оператора: `useImportClipboardPaste`). 320 строк проходят порог
  * виртуализации (300), поэтому прокрутка действительно меняет монтированные
  * строки. Артикулы создаются через API в `beforeEach`.
+ *
+ * Профили листа (#489) — как в исследовании: `realistic` (короткие имена,
+ * длинное — каждое десятое) и `long-tail` (длинные имена во всех строках).
+ * Обе ветки политики проверяются на одном и том же стенде и одном наборе
+ * инвариантов, поэтому «дорогой» лист не может тихо сломать стабильность.
  */
 
-const PRODUCTS: Array<{ sku: string; name: string }> = [
-  { sku: "E2E-OPT-01", name: "Плинтус алюминиевый декоративный 2,7 м" },
-  { sku: "E2E-OPT-02", name: "Профиль ПВХ с закрывающей планкой" },
-  { sku: "E2E-OPT-03", name: "Уголок декоративный алюминиевый" },
-  { sku: "E2E-OPT-04", name: "Наличник телескопический с фрезеровкой" },
-  { sku: "E2E-OPT-05", name: "Соединитель профиля скрытого монтажа" },
-  { sku: "E2E-OPT-06", name: "Заглушка торцевая для профиля" },
-  {
-    sku: "E2E-OPT-LONG",
-    name: "Соединитель декоративный армированный для профиля скрытого монтажа с уплотнителем",
-  },
+type SheetProfile = "realistic" | "long-tail";
+
+/** Короткие имена реалистичного профиля (p50–p90 калибровки). */
+const REALISTIC_PRODUCTS: Array<{ sku: string; name: string }> = [
+  { sku: "E2E-RL-01", name: "Плинтус 2,7 м" },
+  { sku: "E2E-RL-02", name: "Профиль ПВХ" },
+  { sku: "E2E-RL-03", name: "Уголок алюминиевый" },
+  { sku: "E2E-RL-04", name: "Наличник 2,1 м" },
+  { sku: "E2E-RL-05", name: "Соединитель" },
+  { sku: "E2E-RL-06", name: "Заглушка торцевая" },
+  { sku: "E2E-RL-07", name: "Порог дверной 0,9 м" },
+];
+
+/** Одно длинное имя на цикл: даёт перенос в полном тексте, но дешевле 5%. */
+const REALISTIC_LONG = {
+  sku: "E2E-RL-LONG",
+  name: "Наличник телескопический с фрезеровкой",
+};
+
+/** Тяжёлый хвост: каждая строка — длинное имя (стресс, а не калибровка). */
+const LONG_TAIL_PRODUCTS: Array<{ sku: string; name: string }> = [
   {
     sku: "E2E-OPT-OUTLIER",
     name:
       "Профиль алюминиевый анодированный декоративный с терморазрывом " +
       "и интегрированным уплотнителем для фасадных конструкций",
   },
+  {
+    sku: "E2E-OPT-LONG",
+    name: "Соединитель декоративный армированный для профиля скрытого монтажа с уплотнителем",
+  },
+];
+
+const CATALOG_PRODUCTS = [
+  ...REALISTIC_PRODUCTS,
+  REALISTIC_LONG,
+  ...LONG_TAIL_PRODUCTS,
 ];
 
 /**
@@ -92,12 +124,14 @@ async function arriveAtSpgWithFlag(page: Page, optimal: boolean): Promise<void> 
 }
 
 /**
- * Синтетический лист ручного шаблона. Каждая 9-я строка — несуществующий
- * артикул: она даёт длинный текст «Ошибок» (и чип «Ошибки»), остальные —
- * валидные строки с пилюлями. Длинные наименования идут каждые 8 строк, чтобы
- * они попадали в первый экран и реально переносились.
+ * Синтетический лист ручного шаблона. Каждая 40-я строка — несуществующий
+ * артикул: она даёт текст «Ошибок» (и чип «Ошибки»), остальные — валидные
+ * строки с пилюлями. В `realistic` длинное имя идёт каждой десятой строкой —
+ * этого хватает, чтобы перенос был виден, но полный текст остаётся в пределах
+ * 5% (`full-text`). В `long-tail` длинное имя в каждой строке — полный текст
+ * дороже фикса, и политика обязана выбрать `baseline` (#489).
  */
-function buildPreviewTsv(sectionName: string): string {
+function buildPreviewTsv(sectionName: string, profile: SheetProfile = "realistic"): string {
   const header = [
     "Артикул",
     "Количество",
@@ -108,11 +142,22 @@ function buildPreviewTsv(sectionName: string): string {
     "Длина",
   ];
   const rows: string[][] = [header];
+  // Ошибочных строк должно остаться достаточно, чтобы после чипа «Ошибки»
+  // таблица всё ещё прокручивалась: иначе исчезнувший скроллбар меняет ширину
+  // контейнера, и проверка «ширины не дышат» доказывала бы не то.
+  const invalidEvery = profile === "long-tail" ? 9 : 12;
   for (let index = 0; index < ROW_COUNT; index += 1) {
-    const isInvalid = index % 9 === 8;
-    const product = PRODUCTS[index % PRODUCTS.length];
+    const isInvalid = index % invalidEvery === invalidEvery - 1;
+    const product =
+      profile === "long-tail"
+        ? LONG_TAIL_PRODUCTS[index % LONG_TAIL_PRODUCTS.length]
+        : index % 10 === 9
+          ? REALISTIC_LONG
+          : REALISTIC_PRODUCTS[index % REALISTIC_PRODUCTS.length];
     rows.push([
-      isInvalid ? `E2E-MISSING-${index}-LONG-TAIL-НЕ-В-КАТАЛОГЕ` : product.sku,
+      // «E2E» в артикуле обязателен: общий поиск «E2E» должен совпадать и с
+      // ошибочными строками, иначе чип «Ошибки» + поиск дают пустой лист.
+      isInvalid ? `E2E-MISS-${index}` : product.sku,
       String(10 + (index % 90)),
       "Годный",
       OPERATION_SETS[index % OPERATION_SETS.length],
@@ -143,7 +188,9 @@ async function openPreviewFromClipboard(
     );
   }, tsv);
 
-  const table = dialog.locator("table").first();
+  // Таблица предпросмотра помечена `data-column-layout`; пример структуры на
+  // шаге загрузки — нет, поэтому локатор не может схватить не ту таблицу.
+  const table = dialog.locator("table[data-column-layout]").first();
   await expect(table).toHaveAttribute("data-column-layout", expectedLayout, {
     timeout: 30_000,
   });
@@ -307,7 +354,7 @@ test.describe("@ui @ui-narrow Ширины колонок предпросмот
   test.beforeEach(async ({ loginAsAdmin }) => {
     await loginAsAdmin();
     await Promise.all(
-      PRODUCTS.map((product) =>
+      CATALOG_PRODUCTS.map((product) =>
         apiEnsureCatalogProduct({
           sku: product.sku,
           name: product.name,
@@ -317,7 +364,7 @@ test.describe("@ui @ui-narrow Ширины колонок предпросмот
     );
   });
 
-  test("под флагом: ширины не дышат, высота предсказана, текст виден", async ({
+  test("под флагом, дешёвый лист: полный текст (optimal), ширины не дышат, высота предсказана", async ({
     page,
   }) => {
     test.slow();
@@ -390,6 +437,8 @@ test.describe("@ui @ui-narrow Ширины колонок предпросмот
     const heightReport = await measureHeights(table, rowsAfterScroll);
     logMetrics("optimal", {
       tableWidth: (await table.evaluate((element) => element.getBoundingClientRect().width)),
+      policy: await table.getAttribute("data-column-layout"),
+      heightDeltaPct: Number(await table.getAttribute("data-height-delta-pct")),
       widthsTop: widthsTop.ths.map((width) => Number(width.toFixed(2))),
       widthsAfterScroll: widthsAfterScroll.ths.map((width) => Number(width.toFixed(2))),
       avgRowPx: Number(heightReport.avg.toFixed(2)),
@@ -452,6 +501,9 @@ test.describe("@ui @ui-narrow Ширины колонок предпросмот
     const errorsChip = dialog.getByRole("button", { name: /^Ошибки \d+$/ });
     await errorsChip.click();
     await expect(errorsChip).toHaveAttribute("aria-pressed", "true");
+    // Чип — представление уже загруженного листа (#472): раскладка остаётся
+    // той же, таблица не пропадает.
+    await expect(table).toHaveAttribute("data-column-layout", "optimal");
     expectWidthsEqual(widthsTop, await measureWidths(table), "после чипа «Ошибки»");
     await expect
       .poll(() => container.evaluate((element) => element.scrollTop), {
@@ -467,9 +519,9 @@ test.describe("@ui @ui-narrow Ширины колонок предпросмот
     // ── 5. Полный текст под флагом, title сохранён ────────────────────
     const longSearchResponse = waitPreviewResponse(
       page,
-      (body) => body.includes('name="search"') && body.includes("E2E-OPT-LONG"),
+      (body) => body.includes('name="search"') && body.includes("E2E-RL-LONG"),
     );
-    await search.fill("E2E-OPT-LONG");
+    await search.fill("E2E-RL-LONG");
     await longSearchResponse;
     await expect(dialog.locator("tbody tr[data-row-key]").first()).toBeVisible();
 
@@ -478,7 +530,7 @@ test.describe("@ui @ui-narrow Ширины колонок предпросмот
     await expect(nameCell).not.toHaveClass(/truncate/);
     // Ждём именно длинную строку: предыдущий лист тоже переносит текст, и
     // проверка классов сама по себе прошла бы на старых данных.
-    await expect(nameCell).toHaveAttribute("title", PRODUCTS[6].name, {
+    await expect(nameCell).toHaveAttribute("title", REALISTIC_LONG.name, {
       timeout: 15_000,
     });
     const nameState = await nameCell.evaluate((element) => {
@@ -491,17 +543,17 @@ test.describe("@ui @ui-narrow Ширины колонок предпросмот
       };
     });
     expect(nameState.whiteSpace).toBe("pre-line");
-    expect(nameState.title, "title наименования потерян").toBe(PRODUCTS[6].name);
-    expect(nameState.text.trim()).toBe(PRODUCTS[6].name);
+    expect(nameState.title, "title наименования потерян").toBe(REALISTIC_LONG.name);
+    expect(nameState.text.trim()).toBe(REALISTIC_LONG.name);
     expect(nameState.overflowX, "наименование вылезло за ячейку").toBeLessThanOrEqual(1);
 
     // «Ошибки»: ищем лист с несуществующими артикулами — текст переносится и
     // не обрезается.
     const invalidSearchResponse = waitPreviewResponse(
       page,
-      (body) => body.includes('name="search"') && body.includes("E2E-MISSING"),
+      (body) => body.includes('name="search"') && body.includes("MISS-"),
     );
-    await search.fill("E2E-MISSING");
+    await search.fill("MISS-");
     await invalidSearchResponse;
     const invalidRow = dialog.locator("tbody tr[data-row-key]").first();
     const errorsCell = invalidRow.locator("td").nth(11);
@@ -519,14 +571,14 @@ test.describe("@ui @ui-narrow Ширины колонок предпросмот
     expect(errorsState.text.length).toBeGreaterThan(30);
     expect(errorsState.overflowX, "ошибки вылезли за ячейку").toBeLessThanOrEqual(1);
 
-    // title операции (пилюли) сохранён. У «E2E-OPT-02» все строки с пилюлями
+    // title операции (пилюли) сохранён. У «E2E-RL-02» все строки с пилюлями
     // (наборы операций чередуются так, что пустой не попадает); иначе первая
     // строка могла бы оказаться без этапов.
     const pillsSearchResponse = waitPreviewResponse(
       page,
-      (body) => body.includes('name="search"') && body.includes("E2E-OPT-02"),
+      (body) => body.includes('name="search"') && body.includes("E2E-RL-02"),
     );
-    await search.fill("E2E-OPT-02");
+    await search.fill("E2E-RL-02");
     await pillsSearchResponse;
     const pillTitle = dialog
       .locator("tbody tr[data-row-key]")
@@ -536,6 +588,122 @@ test.describe("@ui @ui-narrow Ширины колонок предпросмот
       .locator("span[title]")
       .first();
     await expect(pillTitle).toHaveAttribute("title", /: /);
+  });
+
+  test("под флагом, дорогой лист: baseline на текущих долях, truncate и предсказанная высота", async ({
+    page,
+  }) => {
+    test.slow();
+    const rawSection = await apiGetSectionByCode("RAW_STOCK");
+    const tsv = buildPreviewTsv(rawSection.name, "long-tail");
+
+    await arriveAtSpgWithFlag(page, true);
+    const { dialog, table } = await openPreviewFromClipboard(page, tsv, "baseline");
+
+    // Политика выбрана правилом θ, а не «на глаз»: цена полного текста > 5%.
+    const heightDeltaPct = Number(await table.getAttribute("data-height-delta-pct"));
+    expect(
+      Number.isFinite(heightDeltaPct),
+      "таблица не отдала data-height-delta-pct",
+    ).toBe(true);
+    expect(heightDeltaPct, "дорогой лист обязан давать baseline").toBeGreaterThan(5);
+
+    // Ширины — текущие доли `remainderPreviewColumns`, а не посчитанные.
+    const tableWidth = await table.evaluate((element) => element.getBoundingClientRect().width);
+    const widths = await measureWidths(table);
+    // Шапка: [шеврон, #, Код 1С, Артикул, Наименование, Кол-во, Метры, Длина,
+    //        Операции, Качество, Участок, Ошибки, сброс].
+    const expectShare = (index: number, share: number, label: string) => {
+      expect(
+        Math.abs(widths.ths[index] - tableWidth * share),
+        `${label}: ${widths.ths[index].toFixed(2)} px при таблице ${tableWidth.toFixed(2)} px ` +
+          `и доле ${(share * 100).toFixed(1)}%`,
+      ).toBeLessThanOrEqual(2);
+    };
+    expectShare(4, 0.15, "Наименование");
+    expectShare(8, 0.21, "Операции");
+    expectShare(11, 0.11, "Ошибки");
+
+    // «Наименование» — truncate в одну строку (#489), title сохранён.
+    const nameCell = dialog.locator("tbody tr[data-row-key]").first().locator("td").nth(4);
+    await expect(nameCell).toHaveClass(/truncate/);
+    await expect(nameCell).not.toHaveClass(/whitespace-pre-line/);
+    const nameState = await nameCell.evaluate((element) => ({
+      whiteSpace: getComputedStyle(element).whiteSpace,
+      textOverflow: getComputedStyle(element).textOverflow,
+      title: element.getAttribute("title") ?? "",
+      overflowX: element.scrollWidth - element.clientWidth,
+    }));
+    expect(nameState.whiteSpace).toBe("nowrap");
+    expect(nameState.textOverflow).toBe("ellipsis");
+    expect(nameState.title.length).toBeGreaterThan(0);
+    // У обрезанной ячейки содержимое шире клиентской области — это и есть
+    // `truncate`: имя не влезло в одну строку, текст скрыт, а не потерян.
+    expect(nameState.overflowX, "длинное имя не обрезано в одну строку").toBeGreaterThan(0);
+
+    // Ширины на скролле и предсказанная высота — те же инварианты, что #484.
+    const container = table.locator("xpath=..");
+    const firstKeyBefore = await dialog
+      .locator("tbody tr[data-row-key]")
+      .first()
+      .getAttribute("data-row-key");
+    await container.evaluate((element) => {
+      element.scrollTop = Math.max(0, element.scrollHeight * 0.4);
+    });
+    await expect
+      .poll(
+        () =>
+          dialog
+            .locator("tbody tr[data-row-key]")
+            .first()
+            .getAttribute("data-row-key"),
+        { message: "прокрутка не сменила виртуализированные строки" },
+      )
+      .not.toBe(firstKeyBefore);
+    expectWidthsEqual(widths, await measureWidths(table), "baseline после прокрутки");
+
+    const rows = await measureRows(table);
+    expect(rows.length).toBeGreaterThan(5);
+    for (const row of rows) {
+      expect(row.predicted, `строка ${row.key}: нет data-predicted-height`).not.toBeNull();
+      expect(
+        Math.abs((row.predicted as number) - row.actual),
+        `строка ${row.key}: предсказано ${row.predicted} px, фактически ${row.actual.toFixed(2)} px`,
+      ).toBeLessThanOrEqual(1);
+    }
+    const heights = new Set(rows.map((row) => Math.round(row.actual)));
+    expect(
+      heights.size,
+      `видимые строки одной высоты (${[...heights].join(", ")}) — «Ошибки» не переносятся`,
+    ).toBeGreaterThan(1);
+
+    const heightReport = await measureHeights(table, rows);
+    expect(
+      heightReport.predictedTotal,
+      "в baseline предсказанная суммарная высота всё равно нужна",
+    ).not.toBeNull();
+    logMetrics("baseline-adaptive", {
+      tableWidth,
+      policy: await table.getAttribute("data-column-layout"),
+      heightDeltaPct,
+      widths: widths.ths.map((width) => Number(width.toFixed(2))),
+      avgRowPx: Number(heightReport.avg.toFixed(2)),
+      p95RowPx: Number(heightReport.p95.toFixed(2)),
+      totalTableScrollPx: heightReport.total,
+      predictedTotalPx: heightReport.predictedTotal,
+      visibleRows: heightReport.rowCount,
+    });
+
+    // Поиск не пересчитывает раскладку: политика закэширована по листу.
+    const search = dialog.getByPlaceholder(SEARCH_PLACEHOLDER);
+    const searchResponse = waitPreviewResponse(
+      page,
+      (body) => body.includes('name="search"') && body.includes("E2E"),
+    );
+    await search.fill("E2E");
+    await searchResponse;
+    await expect(table).toHaveAttribute("data-column-layout", "baseline");
+    expectWidthsEqual(widths, await measureWidths(table), "baseline после поиска");
   });
 
   test("без флага: прежний truncate и текущие доли", async ({ page }) => {

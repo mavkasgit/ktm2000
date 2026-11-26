@@ -33,6 +33,22 @@
  * Потеря текста в этом сценарии — **ноль**: у обеих текстовых колонок нет
  * `clamp`/`truncate`, а ширина каждой не меньше `maxWordWidth + padding`
  * (#479/H4), поэтому ни одно слово не обрезается и не вылезает за строку.
+ *
+ * ## Адаптивная политика (#489)
+ *
+ * Полный текст не всегда бесплатен: на тяжёлом хвосте наименований перенос
+ * добавляет строки. Поэтому под флагом считаются **обе** раскладки, а
+ * применяется та, что дешевле по высоте:
+ *
+ * - `H_full` — сумма предсказанных высот на посчитанных ширинах (выше);
+ * - `H_trunc` — сумма на текущих долях `remainderPreviewColumns`, где
+ *   «Наименование» обрезано в одну строку (`truncate`), а «Ошибки» переносятся
+ *   как сегодня.
+ *
+ * Правило: полный текст, если `H_full ≤ H_trunc × (1 + θ)`, иначе — текущий
+ * фикс. `θ = 0.05` зафиксирован до прогона (спека §4/§15, тикет #489) и не
+ * подбирается по результату. Обе высоты считаются по всем строкам листа до
+ * первого показа таблицы, поэтому режим не переключается на глазах.
  */
 import { remainderPreviewColumns } from "./remainderPreviewColumns";
 import type {
@@ -62,6 +78,15 @@ const MAX_LINES = 64;
 export const PREVIEW_FIT_ROWS = 300;
 /** Потолок кандидатов после прореживания. */
 const MAX_CANDIDATES = 32;
+/**
+ * Порог адаптивной политики (#489): полный текст включается, если он не дороже
+ * текущего фикса по предсказанной высоте листа больше чем на 5%. Зафиксирован
+ * до прогона (спека §4/§15); меняется отдельным решением с числами.
+ */
+export const ADAPTIVE_HEIGHT_THRESHOLD = 0.05;
+
+/** Применённая раскладка: полный текст (#483) или текущий фикс. */
+export type PreviewLayoutPolicy = "full-text" | "baseline";
 
 export type PreviewColumnPolicy = "fixed" | "wrap" | "pills";
 
@@ -154,6 +179,11 @@ export interface PreviewWidthInput {
   pillLimitShare?: number;
   /** Потолок подвыборки (тесты); по умолчанию `PREVIEW_FIT_ROWS`. */
   fitRows?: number;
+  /**
+   * Принудительная раскладка — только для тестов и отладки: прод всегда
+   * `auto` и выбирает по правилу θ (#489).
+   */
+  layoutPolicy?: PreviewLayoutPolicy | "auto";
 }
 
 export interface PreviewWidthResult {
@@ -165,19 +195,30 @@ export interface PreviewWidthResult {
   rowHeights: ReadonlyMap<number, number>;
   nameWidthPx: number;
   errorsWidthPx: number;
-  /** Всегда 0: у текстовых колонок нет `clamp`/`truncate` — текст не теряется. */
+  /**
+   * Ячеек, где текст скрыт обрезкой. В полном тексте — 0 (у текстовых колонок
+   * нет `clamp`/`truncate`); в `baseline` — имена, не влезшие в одну строку.
+   */
   textTruncatedCells: number;
-  /** Ячейки, где слово шире колонки (инвариант #479/H4); должно быть 0. */
+  /** Ячейки, где слово шире колонки (инвариант #479/H4); в полном тексте 0. */
   wordOverflowCells: number;
   /** Строк в подвыборке, на которой выбраны ширины. */
   fitRows: number;
-  /** Суммарная предсказанная высота листа (для сравнения раскладок). */
+  /** Суммарная предсказанная высота листа применённой раскладки. */
   totalHeightPx: number;
   overflow: boolean;
   minTableWidthPx: number;
   pillsFloorPx: number;
   pillsTruncatedShare: number;
   pillsLimitShare: number;
+  /** Применённая раскладка (#489): `full-text` или `baseline`. */
+  policy: PreviewLayoutPolicy;
+  /** `H_full` — высота листа на посчитанных ширинах, px. */
+  fullTextHeightPx: number;
+  /** `H_trunc` — высота листа на текущих долях, `truncate` наименования, px. */
+  baselineHeightPx: number;
+  /** `(H_full / H_trunc − 1) × 100` — вход правила θ (#489). */
+  heightDeltaPct: number;
 }
 
 interface FitRow {
@@ -233,6 +274,28 @@ export function predictRowHeight(
   rowPaddingPx: number = PREVIEW_ROW_PADDING_PX,
 ): number {
   return Math.max(minRowHeightPx, lines * lineHeightPx + rowPaddingPx);
+}
+
+/**
+ * Выбор раскладки по цене в высоте (#489).
+ *
+ * `H_full ≤ H_trunc × (1 + θ)` → полный текст; иначе текущий фикс. Сравнение
+ * идёт по пикселям на фактической ширине, а не по долям: на узкой таблице тот
+ * же перенос стоит дороже. Допуск `1e-9` — только против шума float на ровно
+ * граничном отношении (синтетический тест θ); он не «расширяет» порог.
+ *
+ * `H_trunc ≤ 0` (нет строк) — сравнивать нечего, остаётся текущий фикс.
+ */
+export function resolveLayoutPolicy(
+  fullTextHeightPx: number,
+  baselineHeightPx: number,
+  threshold = ADAPTIVE_HEIGHT_THRESHOLD,
+): PreviewLayoutPolicy {
+  if (!(baselineHeightPx > 0)) return "baseline";
+  const limit = baselineHeightPx * (1 + threshold);
+  return fullTextHeightPx <= limit + Math.max(1, Math.abs(limit)) * 1e-9
+    ? "full-text"
+    : "baseline";
 }
 
 /**
@@ -353,6 +416,16 @@ export function computePreviewColumnWidths(input: PreviewWidthInput): PreviewWid
     throw new Error("previewColumnWidths: нужны переносимые source_name и errors");
   }
 
+  // Раскладка текущего фикса: доли из `remainderPreviewColumns` для всех колонок.
+  // Это и `H_trunc` адаптивного правила (#489), и выход, если политика `baseline`.
+  const baselineWidths: Record<string, number> = {};
+  for (const spec of specs) {
+    baselineWidths[spec.id] = Math.max(
+      spec.minPx,
+      (spec.baselineShare / 100) * tableWidth,
+    );
+  }
+
   const pillWidths = input.rows.map((row) => row.pillWidth);
   // Пилюли не уже текущей доли: лимит «не хуже текущего» — по построению.
   const pillsCurrent = pillsSpec
@@ -398,7 +471,6 @@ export function computePreviewColumnWidths(input: PreviewWidthInput): PreviewWid
     : Number.POSITIVE_INFINITY;
 
   const budget = contentWidth - fixedTotal - pillsWidth;
-  const overflow = budget + 0.5 < nameMin + errorsMin;
   const nameCeiling = Math.max(
     nameMin,
     Math.min(nameMax, budget - errorsMin),
@@ -475,8 +547,13 @@ export function computePreviewColumnWidths(input: PreviewWidthInput): PreviewWid
 
   const errorsUsable = best.errorsWidth - cellPadding;
   const nameUsable = best.nameWidth - cellPadding;
+  const baselineNameUsable = baselineWidths[nameSpec.id] - cellPadding;
+  const baselineErrorsUsable = baselineWidths[errorsSpec.id] - cellPadding;
   const rowHeights = new Map<number, number>();
+  const baselineRowHeights = new Map<number, number>();
   let totalHeight = 0;
+  let baselineTotalHeight = 0;
+  let truncatedNameCells = 0;
   let wordOverflowCells = 0;
   for (const prepared of preparedRows) {
     const { row } = prepared;
@@ -508,16 +585,49 @@ export function computePreviewColumnWidths(input: PreviewWidthInput): PreviewWid
     );
     rowHeights.set(row.rowKey, height);
     totalHeight += height;
+
+    // `H_trunc` (#489): наименование в текущем фиксе — `truncate`, то есть
+    // ровно одна строка, поэтому его ширина на высоту не влияет. Переносится
+    // только «Ошибки» — их строки и считаются на текущей доле колонки.
+    const baselineErrorsLines =
+      row.errorsWraps && row.errorsText
+        ? Math.max(
+            1,
+            input.measurer.lineCount(prepared.errorsPrepared, baselineErrorsUsable),
+          )
+        : 1;
+    const baselineHeight = Math.max(
+      minRowHeight,
+      Math.max(
+        input.fonts.name.lineHeightPx,
+        baselineErrorsLines * input.fonts.errors.lineHeightPx,
+      ) + rowPadding,
+    );
+    baselineRowHeights.set(row.rowKey, baselineHeight);
+    baselineTotalHeight += baselineHeight;
+    if (prepared.nameNatural > baselineNameUsable + 0.5) truncatedNameCells += 1;
   }
 
-  const totalContent = Object.values(widths).reduce((sum, width) => sum + width, 0);
-  const minTableWidthPx =
-    totalContent > contentWidth + 0.5
-      ? Math.ceil(totalContent / PREVIEW_CONTENT_SHARE)
-      : PREVIEW_TABLE_MIN_WIDTH_PX;
+  const policy =
+    input.layoutPolicy && input.layoutPolicy !== "auto"
+      ? input.layoutPolicy
+      : resolveLayoutPolicy(totalHeight, baselineTotalHeight);
+  const fullText = policy === "full-text";
+  const layoutWidths = fullText ? widths : baselineWidths;
+  const layoutRowHeights = fullText ? rowHeights : baselineRowHeights;
+  const layoutTotalHeight = fullText ? totalHeight : baselineTotalHeight;
+
+  const totalContent = Object.values(layoutWidths).reduce(
+    (sum, width) => sum + width,
+    0,
+  );
+  const layoutOverflow = totalContent > contentWidth + 0.5;
+  const minTableWidthPx = layoutOverflow
+    ? Math.ceil(totalContent / PREVIEW_CONTENT_SHARE)
+    : PREVIEW_TABLE_MIN_WIDTH_PX;
 
   const shares: Record<string, string> = {};
-  for (const [id, width] of Object.entries(widths)) {
+  for (const [id, width] of Object.entries(layoutWidths)) {
     shares[id] = `${round((width / tableWidth) * 100, 3)}%`;
   }
 
@@ -525,20 +635,34 @@ export function computePreviewColumnWidths(input: PreviewWidthInput): PreviewWid
     tableWidthPx: tableWidth,
     contentWidthPx: contentWidth,
     widthsPx: Object.fromEntries(
-      Object.entries(widths).map(([id, width]) => [id, round(width, 2)]),
+      Object.entries(layoutWidths).map(([id, width]) => [id, round(width, 2)]),
     ),
     shares,
-    rowHeights,
-    nameWidthPx: round(best.nameWidth, 2),
-    errorsWidthPx: round(best.errorsWidth, 2),
-    textTruncatedCells: 0,
-    wordOverflowCells,
+    rowHeights: layoutRowHeights,
+    nameWidthPx: round(layoutWidths[nameSpec.id], 2),
+    errorsWidthPx: round(layoutWidths[errorsSpec.id], 2),
+    textTruncatedCells: fullText ? 0 : truncatedNameCells,
+    // Слово шире колонки — нарушение только там, где текст обязан влезть:
+    // в `baseline` наименование сознательно обрезается.
+    wordOverflowCells: fullText ? wordOverflowCells : 0,
     fitRows: fitRowsData.length,
-    totalHeightPx: round(totalHeight, 2),
-    overflow,
+    totalHeightPx: round(layoutTotalHeight, 2),
+    overflow: layoutOverflow,
     minTableWidthPx,
-    pillsFloorPx: round(pillsWidth, 2),
-    pillsTruncatedShare: pillsTruncatedShareAt(pillWidths, pillsWidth, cellPadding),
+    pillsFloorPx: round(layoutWidths[pillsSpec?.id ?? ""] ?? 0, 2),
+    pillsTruncatedShare: pillsTruncatedShareAt(
+      pillWidths,
+      layoutWidths[pillsSpec?.id ?? ""] ?? 0,
+      cellPadding,
+    ),
     pillsLimitShare: limitShare,
+    policy,
+    fullTextHeightPx: round(totalHeight, 2),
+    baselineHeightPx: round(baselineTotalHeight, 2),
+    heightDeltaPct:
+      baselineTotalHeight > 0
+        ? round((totalHeight / baselineTotalHeight - 1) * 100, 3)
+        : 0,
   };
 }
+
