@@ -71,6 +71,7 @@ from app.stock.import_1c_osv import (
     _lookup_1c_products,
     describe_remainder_sheets,
     parse_remainders_sheet,
+    resolve_1c_osv_completed_operations,
     resolve_1c_osv_quantities,
     resolve_1c_storage_section,
 )
@@ -163,6 +164,10 @@ async def _parse_remainder_import_source(
     if parsed.source_kind == SOURCE_KIND_1C_OSV:
         await _lookup_1c_products(db, parsed.items)
         await resolve_1c_osv_quantities(db, parsed.items)
+        # Ось выполненных операций — префикс маршрута по маркерам наименования
+        # (#468). Полуфабрикат получает свой участок (Склад ГП), поэтому
+        # участок листа ниже ставится только строкам без собственного.
+        await resolve_1c_osv_completed_operations(db, parsed.items)
         section_id, section_name = await resolve_1c_storage_section(
             db, parsed.header_rows
         )

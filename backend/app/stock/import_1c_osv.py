@@ -22,6 +22,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING, Literal
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm import selectinload
 
 from app.domain.dimensions import (
     LENGTH_MM,
@@ -31,13 +32,19 @@ from app.domain.dimensions import (
 )
 from app.models.product import Product, Product1CCode, ProductLength
 from app.models.product_1c_skipped import SKIP_REASON_LABELS, Product1CSkipped
+from app.models.route import RouteRuleProfile
 from app.models.section import Section
 from app.services.import_normalization import match_sku_cell, normalize_sku, sku_entry
 from app.services.product_alias_groups import (
     AliasGroups,
     load_alias_groups,
 )
+from app.services.route_builder import (
+    build_route_from_profile,
+    load_route_build_batch_cache,
+)
 from app.services.route_storage_classifier import STOCK_TYPES
+from app.stock.import_1c_markers import ColorVocabulary, extract_osv_markers
 from app.stock.import_service import (
     _EMPTY_CELL_VALUES,
     RemainderItem,
@@ -1245,3 +1252,247 @@ async def resolve_1c_osv_quantities(
         item.quantity = float(pieces)
         item.dimensions = build_length_dimensions(length_mm)
         item.dimensions_label = describe_length(length_mm)
+
+
+# ─── Выполненные операции по маркерам наименования (#468) ─────────────────────
+
+#: Профиль маршрута, по которому собирается префикс: та же «Упаковочная карта
+#: РП», что у плана. Правила цвета/пресса — данные профиля, а не константы.
+_PACKAGING_PROFILE_CODE = "packaging_map_rp"
+_COLOR_RULE_CODE = "anod_colors"
+_PRESS_RULE_CODE = "press_types"
+_ANODIZING_SECTION = "ANODIZING"
+_PRESSING_SECTION = "PRESSING"
+_FINISHED_STOCK_SECTION = "FINISHED_STOCK"
+
+
+async def _load_packaging_profile(db: AsyncSession) -> RouteRuleProfile | None:
+    return (
+        await db.execute(
+            select(RouteRuleProfile)
+            .where(
+                RouteRuleProfile.code == _PACKAGING_PROFILE_CODE,
+                RouteRuleProfile.is_active.is_(True),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+def _marker_vocabulary(rules, operation_names: dict[str, str]) -> ColorVocabulary:
+    """Словарь цвета/пресса из правил профиля и имён операций участков.
+
+    Ключевые слова берутся из действий ``set_operation_by_mapping``: порядок
+    правила значим (составные цвета стоят раньше общих).
+    """
+    color_keywords: list[tuple[str, str]] = []
+    press_keywords: list[tuple[str, str]] = []
+    for rule in rules:
+        rule_code = getattr(rule, "code", "")
+        if rule_code not in {_COLOR_RULE_CODE, _PRESS_RULE_CODE}:
+            continue
+        target = color_keywords if rule_code == _COLOR_RULE_CODE else press_keywords
+        for action in rule.actions or []:
+            if str(action.get("action") or "") != "set_operation_by_mapping":
+                continue
+            for entry in action.get("mapping") or []:
+                keyword = str(entry.get("keyword") or "").lower()
+                code = str(entry.get("operation_code") or "")
+                if keyword and code:
+                    target.append((keyword, code))
+    color_codes = {code for _, code in color_keywords}
+    names = {
+        code: operation_names[code]
+        for code in color_codes
+        if code in operation_names
+    }
+    return ColorVocabulary(
+        color_keywords=tuple(color_keywords),
+        color_names=names,
+        press_keywords=tuple(press_keywords),
+    )
+
+
+async def _load_marker_products(
+    db: AsyncSession, product_ids: set[int]
+) -> tuple[dict[int, Product], dict[int, set[str]]]:
+    """Продукты строк и их «якоря» — все написания группы алиасов.
+
+    Суффикс ``-NN`` считается цветом только сразу после якоря. Якорь — SKU
+    любого участника группы, а не только канона: 1С пишет ``ЮП-3473-06``, а
+    канон группы — ``ЮП-2910``. Алиас, совпавший с SKU другого продукта,
+    якорем не становится: он уже представлен своей карточкой (правило
+    ``_load_catalog``).
+    """
+    groups = await load_alias_groups(db)
+    expanded: set[int] = set(product_ids)
+    for product_id in product_ids:
+        group = groups.group_for(product_id)
+        if group is not None:
+            expanded.update(group.product_ids)
+    products = {
+        product.id: product
+        for product in (
+            await db.execute(
+                select(Product)
+                .options(selectinload(Product.processing_flags))
+                .where(Product.id.in_(expanded))
+            )
+        ).scalars()
+    }
+    all_skus = {
+        normalize_sku(sku)
+        for sku in (await db.scalars(select(Product.sku))).all()
+        if sku
+    }
+    anchors: dict[int, set[str]] = {}
+    for product_id in product_ids:
+        group = groups.group_for(product_id)
+        member_ids = group.product_ids if group is not None else (product_id,)
+        members = [
+            products[member_id]
+            for member_id in member_ids
+            if member_id in products
+        ]
+        skus = {normalize_sku(member.sku) for member in members} - {""}
+        aliases = {
+            normalize_sku(alias)
+            for member in members
+            for alias in (member.aliases or [])
+        } - all_skus - {""}
+        anchors[product_id] = skus | aliases
+    return products, anchors
+
+
+def _prefix_operation_names(route, target_section: str) -> list[str]:
+    """Операции маршрута до последнего этапа ``target_section`` включительно.
+
+    Этап — участок целиком: у ``ANODIZING`` две группы (цвет и упаковка),
+    и ``PACK_SPUNBOND``/``PACK_STRETCH`` входят в префикс вместе с цветом.
+    Транспортные и незначимые операции пропускаются: ось остатка состоит из
+    ``operation_code`` справочника, а не из проходов склада.
+    """
+    target_steps = [
+        step for step in route.steps if step.section_code == target_section
+    ]
+    if not target_steps:
+        return []
+    last_sequence = max(step.sequence for step in target_steps)
+    names: list[str] = []
+    for step in route.steps:
+        if step.sequence > last_sequence:
+            continue
+        if not step.operation_code or not step.is_significant:
+            continue
+        if step.operation_name not in names:
+            names.append(step.operation_name)
+    return names
+
+
+async def resolve_1c_osv_completed_operations(
+    db: AsyncSession,
+    items: Sequence[RemainderItem],
+) -> None:
+    """Заполнить ось выполненных операций по маркерам наименования, in-place.
+
+    Маршрут собирается тем же профилем, что у плана, но **не сохраняется**:
+    остатку нужен только префикс операций (ADR-0055, ADR-0061). Строка без
+    маркеров получает пустой список — «прошёл маршрут, операций не было», а
+    не ``None``: иначе остаток не выдаётся в маршрут (ADR-0055 п.6).
+
+    Полуфабрикат (``ПФ``) лежит на «Складе готовой продукции»: заказчик
+    считает склады сырья и ГП едиными (26.11.2026), поэтому участок листа для
+    таких строк не подходит.
+
+    Без профиля маршрута разбор не выполняется: непросеянная база — это не
+    дефект строки, и превращать весь предпросмотр в ошибки нельзя.
+    """
+    candidates = [
+        item
+        for item in items
+        if item.status == "valid" and item.product_id is not None
+    ]
+    if not candidates:
+        return
+
+    profile = await _load_packaging_profile(db)
+    if profile is None:
+        return
+
+    batch = await load_route_build_batch_cache(db, profile)
+    vocabulary = _marker_vocabulary(batch.rules, batch.operation_name_by_code)
+    if not vocabulary.color_keywords and not vocabulary.press_keywords:
+        return
+
+    finished = (
+        await db.execute(
+            select(Section).where(Section.code == _FINISHED_STOCK_SECTION)
+        )
+    ).scalar_one_or_none()
+
+    products, anchors_by_product = await _load_marker_products(
+        db, {item.product_id for item in candidates if item.product_id is not None}
+    )
+
+    for item in candidates:
+        product = products.get(item.product_id)  # type: ignore[arg-type]
+        if product is None:
+            continue
+        markers = extract_osv_markers(
+            item.source_name,
+            anchors=anchors_by_product.get(product.id, set()),
+            vocabulary=vocabulary,
+        )
+        if markers.errors:
+            item.errors.extend(markers.errors)
+            item.status = "invalid"
+            continue
+        if markers.color_code is not None and markers.color_name is None:
+            item.errors.append(
+                f"Цвет {markers.color_code} не найден в справочнике операций"
+            )
+            item.status = "invalid"
+            continue
+        if not markers.has_markers:
+            item.completed_operations_raw = ""
+            continue
+        if markers.is_semi_finished and finished is None:
+            item.errors.append(
+                "Участок «Склад готовой продукции» не найден — "
+                "полуфабрикат некуда положить"
+            )
+            item.status = "invalid"
+            continue
+
+        payload = {
+            "product_id": product.id,
+            "source_name": item.source_name,
+            "color": markers.color_name,
+            "operation": markers.press_keyword,
+            "output_kind": "П/ф" if markers.is_semi_finished else "ГП",
+        }
+        route = await build_route_from_profile(
+            db, profile, payload, product=product, batch=batch
+        )
+        if route.error:
+            item.errors.append(f"Маршрут не собран: {route.error}")
+            item.status = "invalid"
+            continue
+
+        target_section = (
+            _ANODIZING_SECTION
+            if markers.color_code or markers.is_semi_finished
+            else _PRESSING_SECTION
+        )
+        names = _prefix_operation_names(route, target_section)
+        if not names:
+            item.errors.append(
+                f"В маршруте нет пройденных операций участка {target_section}"
+            )
+            item.status = "invalid"
+            continue
+
+        item.completed_operations_raw = ", ".join(names)
+        if markers.is_semi_finished and finished is not None:
+            item.target_section_id = finished.id
+            item.target_section_name = finished.name
