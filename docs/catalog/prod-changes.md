@@ -18,6 +18,8 @@
 | `#463-renames-leftover` | 2026-11-26 | 7 арт., name, aliases | После #461 семь артикулов остались со старым именем: #461 переименовывал только те, что были в файле 1С. Имя приводится к тому же правилу, что и переименованные соседи: «У1010»… | `backup_ktm2000_prod_2026-11-25_22-28-30.zip` | `backup_ktm2000_prod_2026-11-25_22-28-52.zip` | accepted |
 | `#463-styk-26` | 2026-11-26 | 2 арт., name, aliases | Имя «Стык Т-образный 23мм» у 325 и ЮП-2910 противоречит геометрии: КТМ/325.pdf и плакат дают сечение 26x8, P=69,3; в БД mount_width=26. 23 мм — издание 2021 года (23,2x8,5, P=64… | `backup_ktm2000_prod_2026-11-25_22-34-57.zip` | `backup_ktm2000_prod_2026-11-25_22-35-18.zip` | accepted |
 | `#466-2464-sku-rename` | 2026-11-26 | 2 арт., sku, aliases | 1С пишет полуфабрикаты как «ЮП-2464-01 ПФ» / «ЮП-2464-05 ПФ», то есть артикул с суффиксом исполнения. Наш SKU «ЮП-2464-1» в такой строке не распознавался: токен обрезался до «ЮП… | `backup_ktm2000_prod_2026-11-26_06-13-27.zip` | `backup_ktm2000_prod_2026-11-26_06-13-59.zip` | applied |
+| `#466-codes-1c` | 2026-11-26 | 13 арт., `product_1c_codes` | Сверка ОСВ: 13 кодов 1С не были привязаны (круглые трубы, уголки, полосы, Ш-профиль). Привязка через ORM: `PATCH /api/products` коды не принимает. | `backup_ktm2000_prod_2026-11-26_08-19-29.zip` | `backup_ktm2000_prod_2026-11-26_08-21-12.zip` | applied |
+| `#469-2083-37` | 2026-11-26 | 2 арт., `name`, `attributes.mount_width_mm` | Вопрос издания 2083/3328 (38×3,7 vs 36,9×3,3) оставляем открытым; рабочий размер — 37 мм по решению заказчика. | `backup_ktm2000_prod_2026-11-26_08-21-12.zip` | `backup_ktm2000_prod_2026-11-26_08-23-33.zip` | applied |
 
 ## Артефакты
 
@@ -29,6 +31,8 @@
 - `#463-renames-leftover` — data/storage-prod/backups/changesets/#463-renames-leftover/
 - `#463-styk-26` — data/storage-prod/backups/changesets/#463-styk-26/
 - `#466-2464-sku-rename` — data/storage-prod/backups/changesets/#466-2464-sku-rename/
+- `#466-codes-1c` — data/storage-prod/backups/changesets/#466-codes-1c/
+- `#469-2083-37` — data/storage-prod/backups/changesets/#469-2083-37/
 
 ## Как откатывать
 

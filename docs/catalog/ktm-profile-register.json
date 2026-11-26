@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-26T06:14:50+00:00",
-  "db_fingerprint": "73219f4778ba7153",
+  "generated_at": "2026-11-26T08:25:48+00:00",
+  "db_fingerprint": "e381ebad186a1fc9",
   "review_fingerprint": "45a1bfcd976aaf46",
   "db": {
     "container": "ktm2000-postgres-prod",
@@ -7266,7 +7266,7 @@
       "id": 42,
       "sku": "ЮП-2083",
       "code": "",
-      "name": "Стык 38мм",
+      "name": "Стык 37мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -7293,9 +7293,13 @@
       ],
       "length_primary_mm": 2700,
       "perimeter_mm": 81.5,
-      "mount_width_mm": 36.9,
+      "mount_width_mm": 37.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
+        "1800": {
+          "auto": 50,
+          "manual": null
+        },
         "2700": {
           "auto": 50,
           "manual": 50
@@ -7318,8 +7322,12 @@
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 81.5,
-        "mount_width_mm": 36.9,
+        "mount_width_mm": 37.0,
         "quantity_per_hanger": {
+          "1800": {
+            "auto": 50,
+            "manual": null
+          },
           "2700": {
             "auto": 50,
             "manual": 50
@@ -34061,7 +34069,7 @@
       "id": 215,
       "sku": "3328",
       "code": "",
-      "name": "Стык 38мм",
+      "name": "Стык 37мм",
       "type": "component",
       "unit": "шт",
       "is_active": true,
@@ -34083,7 +34091,7 @@
       ],
       "length_primary_mm": 2700,
       "perimeter_mm": 81.5,
-      "mount_width_mm": 36.9,
+      "mount_width_mm": 37.0,
       "hanger_mode": "auto",
       "quantity_per_hanger": {
         "2700": {
@@ -34108,7 +34116,7 @@
       "attributes_json": {
         "hanger_mode": "auto",
         "perimeter_mm": 81.5,
-        "mount_width_mm": 36.9,
+        "mount_width_mm": 37.0,
         "quantity_per_hanger": {
           "2700": {
             "auto": 50,
