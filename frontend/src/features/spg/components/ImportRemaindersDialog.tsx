@@ -1502,8 +1502,10 @@ export function ImportRemaindersDialog({
                                 )}
                               </td>
                               <td
-                                className={`px-1.5 py-0.5 font-medium leading-snug whitespace-pre-line ${
-                                  isSkipped ? "text-amber-700 dark:text-amber-400" : "text-destructive"
+                                className={`px-1.5 py-0.5 font-medium leading-snug ${
+                                  isSkipped
+                                    ? "whitespace-nowrap text-amber-700 dark:text-amber-400"
+                                    : "whitespace-pre-line text-destructive"
                                 }`}
                               >
                                 {isSkipped

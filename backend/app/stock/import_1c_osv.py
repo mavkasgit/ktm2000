@@ -1216,6 +1216,23 @@ async def resolve_1c_osv_quantities(
     lengths_by_product = await _load_lengths_by_product(
         db, [item.product_id for item in items if item.product_id is not None]
     )
+    # Единица не поддерживается, но артикул мог найтись ложно (номер декора в
+    # скобках совпал с чужим SKU). Если строка при этом записана в реестре
+    # исключений, оператору честнее показать «есть в исключениях»: решение
+    # каталога объясняет строку, а «нет совпадения» рядом с ним читается как
+    # ошибка данных. Пропуск в обоих случаях одинаковый — меняется только
+    # подпись.
+    unit_skipped_candidates = [
+        item
+        for item in items
+        if item.product_id is not None
+        and _classify_unit(item.source_unit or "") == "other"
+    ]
+    skipped_registry = (
+        await _load_skipped(db, unit_skipped_candidates)
+        if unit_skipped_candidates
+        else _SkippedRegistry(by_code={}, by_name={})
+    )
 
     for item in items:
         if item.product_id is None:
@@ -1229,7 +1246,11 @@ async def resolve_1c_osv_quantities(
             # заказчика (26.11.2026), а не тихое проглатывание.
             item.status = "skipped"
             item.skip_reason = SKIP_REASON_NOT_MES
-            item.skip_reason_label = SKIP_LABEL_NO_MATCH
+            item.skip_reason_label = (
+                SKIP_LABEL_IN_REGISTRY
+                if skipped_registry.match(item) is not None
+                else SKIP_LABEL_NO_MATCH
+            )
             item.skip_note = _unit_error(item.source_unit)
             continue
         if unit_kind == "pcs":

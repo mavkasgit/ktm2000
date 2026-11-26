@@ -826,6 +826,36 @@ async def test_resolve_quantities_unsupported_unit_is_skipped(
     assert items[0].skip_note == "Единица измерения 'кг' не поддерживается"
 
 
+async def test_resolve_quantities_registry_explains_unsupported_unit(
+    session: AsyncSession,
+) -> None:
+    """Единица не поддерживается, но строка из реестра — «есть в исключениях».
+
+    Номер декора в скобках может совпасть с чужим SKU каталога, и строка
+    приезжает с найденным артикулом. Пропуск от этого не меняется (площадь не
+    импортируется), но подпись обязана назвать решение каталога, а не
+    «нет совпадения» рядом с записью реестра.
+    """
+    product = await _make_product(session, "SKU-314")
+    await _bind_1c_code(session, product, "16616")
+    session.add(
+        _skipped_entry(
+            code="16616",
+            name="Пленка ПВХ 0.18мм/Шпон 3Д графит софт (314)",
+            reason="not_mes",
+        )
+    )
+    items = _items([
+        _osv_row("16616", "Пленка ПВХ 0.18мм/Шпон 3Д графит софт (314)", "м2", 3.46),
+    ])
+
+    await _resolve_quantities(session, items)
+
+    assert items[0].status == "skipped"
+    assert items[0].skip_reason == "not_mes"
+    assert items[0].skip_reason_label == "есть в исключениях"
+
+
 # ─── Автоучасток ──────────────────────────────────────────────────────────────
 
 

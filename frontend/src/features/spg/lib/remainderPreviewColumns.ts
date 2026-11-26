@@ -97,7 +97,7 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     label: "Операции",
     filterField: "operations",
     sortField: "operations",
-    headerClassName: "min-w-[160px]",
+    headerClassName: "min-w-[140px]",
     sortValues: (a, b) => a.localeCompare(b, "ru"),
     // Значения списка фильтра — серверные подписи (их собирает
     // `getImportItemOperationsServerLabel` по `completed_operations_raw` и
@@ -119,7 +119,7 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     label: "Участок",
     filterField: "section",
     sortField: "section",
-    headerClassName: "min-w-[150px]",
+    headerClassName: "min-w-[135px]",
     sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
   {
@@ -127,7 +127,11 @@ export const remainderPreviewColumns: RemainderPreviewColumn[] = [
     label: "Ошибки",
     filterField: "errors",
     sortField: "errors",
-    headerClassName: "min-w-[140px]",
+    // Подпись пропуска («Пропущено: есть в исключениях») печатается одной
+    // строкой: перенос растягивал строку таблицы выше общего ритма
+    // `TABLE_ROW_COMPACT` (40px, ADR-0030). Ширина — под самый длинный
+    // базовый вариант; длинные ошибки по-прежнему переносятся.
+    headerClassName: "min-w-[200px]",
     mapValue: errorValueOnly,
     sortValues: (a, b) => a.localeCompare(b, "ru"),
   },
