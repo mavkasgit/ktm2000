@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-11-26T13:14:17+00:00",
+  "generated_at": "2026-11-26T15:33:20+00:00",
   "db_fingerprint": "191f0f27cd9d5498",
   "review_fingerprint": "309fa2e391ef09aa",
   "db": {
-    "container": "ktm2000-postgres",
+    "container": "ktm2000-postgres-prod",
     "database": "ktm2000_prod",
     "products": 216
   },
