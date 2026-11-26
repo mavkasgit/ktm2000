@@ -74,8 +74,8 @@ test.describe("@ui Предпросмотр импорта остатков из
     await expect(dialog.getByRole("row").filter({ hasText: "11820" })).toHaveCount(0);
     await expect(dialog.getByRole("row").filter({ hasText: "99999" })).toHaveCount(1);
 
-    const skippedChip = dialog.getByRole("button", { name: /^Пропущенные/ });
-    const errorsChip = dialog.getByRole("button", { name: /^Ошибки/ });
+    const skippedChip = dialog.getByRole("button", { name: /^Пропущенные \d+$/ });
+    const errorsChip = dialog.getByRole("button", { name: /^Ошибки \d+$/ });
     await expect(skippedChip).toHaveAttribute("aria-pressed", "false");
     await expect(errorsChip).toHaveAttribute("aria-pressed", "false");
 
@@ -108,7 +108,7 @@ test.describe("@ui Предпросмотр импорта остатков из
     expect(previewRequests).toBe(requestsAfterPreview);
 
     // «Сбросить» возвращает дефолт и снимает чип.
-    await dialog.getByRole("button", { name: "Сбросить" }).click();
+    await dialog.getByRole("button", { name: "Сбросить", exact: true }).click();
     await expect(rows).toHaveCount(2);
     await expect(errorsChip).toHaveAttribute("aria-pressed", "false");
     expect(previewRequests).toBe(requestsAfterPreview);
@@ -120,9 +120,7 @@ test.describe("@ui Предпросмотр импорта остатков из
         request.url().includes("/stock/import/remainders/preview") &&
         (request.postData() ?? "").includes("source_token"),
     );
-    const sortButton = dialog
-      .getByRole("columnheader", { name: /Артикул/ })
-      .getByRole("button");
+    const sortButton = dialog.getByRole("button", { name: /^Артикул, сортировка/ });
     await sortButton.click();
     const tokenPayload = (await tokenRequest).postDataBuffer()?.toString("utf8") ?? "";
     expect(tokenPayload).toContain("source_token");
