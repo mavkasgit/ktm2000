@@ -21,6 +21,7 @@ import {
   buildColumns,
 } from "../lib/columns.mjs";
 import { FONT_PX, createMeasurer } from "../lib/measurers.mjs";
+import { FONT_SAMPLE, loadFonts } from "./fonts.mjs";
 
 /** Один seed на все профили: прогон воспроизводим. */
 const SEED = 1;
@@ -43,8 +44,6 @@ const MONO_WIDTHS = [60, 90, 120, 150, 220];
 const H4_THRESHOLD = 0.01;
 const MAX_PRODUCT_MISMATCH_SAMPLES = 200;
 const MAX_OTHER_MISMATCH_SAMPLES = 40;
-
-const FONT_SAMPLE = "АБВГДабвгдЁё 0123456789 .,—№ %";
 
 function emptyStats() {
   return {
@@ -109,32 +108,6 @@ function summarize(stats) {
       stats.belowWordWidth,
     ),
   };
-}
-
-async function loadFonts() {
-  const [inter, mono] = await Promise.all([
-    document.fonts.load(`400 ${FONT_PX}px "Inter"`, FONT_SAMPLE),
-    document.fonts.load(`400 ${FONT_PX}px "JetBrains Mono"`, FONT_SAMPLE),
-  ]);
-  await document.fonts.ready;
-
-  const describe = (family, faces) => ({
-    family,
-    faces: faces.length,
-    loaded: faces.length > 0 && faces.every((face) => face.status === "loaded"),
-    check: document.fonts.check(`400 ${FONT_PX}px "${family}"`, FONT_SAMPLE),
-  });
-
-  const fonts = {
-    sans: describe("Inter", inter),
-    mono: describe("JetBrains Mono", mono),
-  };
-  if (!fonts.sans.loaded || !fonts.mono.loaded) {
-    throw new Error(
-      `webfont не загрузился: ${JSON.stringify(fonts)} — измерять fallback бессмысленно`,
-    );
-  }
-  return fonts;
 }
 
 function renderTable(column, width, values) {
