@@ -118,6 +118,10 @@ const PREVIEW_COLUMNS = [
     font: "sans",
     wrap: true,
     clamp: 3,
+    // Статический пол ниже самого широкого слова листа («поддерживается»:
+    // 86.9 px в табличных метриках, 90.84 px в браузере). Честный минимум
+    // считает `effectiveMinWidth` в lib/curves.mjs: max(minPx, maxWordWidth +
+    // CELL_PADDING_PX) по всему листу — см. #479/H4.
     minPx: 90,
     maxShare: 0.3,
     baselineShare: 11,
