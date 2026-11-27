@@ -968,6 +968,33 @@ async def test_resolve_quantities_tail_becomes_short_position(
     assert residue.errors == []
 
 
+async def test_resolve_quantities_tail_keeps_early_warnings_on_both_positions(
+    session: AsyncSession,
+) -> None:
+    """Длина из карточки + остаток: оба предупреждения на обеих позициях (#495).
+
+    Производная короткая позиция обязана унаследовать ранние предупреждения
+    строки, иначе её список разойдётся с основной, а предпросмотр считает
+    высоту строки по общему номеру строки.
+    """
+    product = await _make_product(session, "PLINTH-25", lengths=[(2500, None, True)])
+    await _bind_1c_code(session, product, "20933")
+    items = _items([_osv_row("20933", "Плинтус 100 мм", "м", 5.2)])
+
+    await _resolve_quantities(session, items)
+
+    card_warning = "Длина взята из карточки: 2,5 м (в наименовании не указана)"
+    residue_warning = (
+        "Остаток 0,2 м после 2 шт × 2,5 м — импортируется одной штукой 0,2 м"
+    )
+    assert len(items) == 2
+    base, residue = items
+    assert base.warnings == [card_warning, residue_warning]
+    assert residue.warnings == base.warnings
+    # Списки не общие: правка одной позиции не меняет соседнюю.
+    assert residue.warnings is not base.warnings
+
+
 async def test_resolve_quantities_exact_multiple_has_no_tail(
     session: AsyncSession,
 ) -> None:
