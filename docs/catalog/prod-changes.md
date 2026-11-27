@@ -23,6 +23,7 @@
 | `#474-als-sku` | 2026-11-26 | 11 арт., `sku`, `aliases` | Канон ALS без дефиса: `ALS-####` → `ALS####` в артикуле и эквивалентах, отмена 083. Применено миграцией 089 при деплое (086→089); резервные копии — `pg_dump -Fc`. | `pre-089-20261126-182414.dump` | `post-089-20261126-182646.dump` | applied |
 | `#490-pipe-length-3000` | 2026-11-27 | 5 арт., `product_lengths`, `attributes.quantity_per_hanger`, `product_dimensions` | 1С пишет «3,0» у труб 8/10/12/20/28 мм; в карточках была 2,7 (28 — 2,5), но в 1С таких строк нет — только 3,0 (2,75 — сырьевая у 16 мм). Добавлена 3000/3050 и норма по π·D (102/96/90/67/48); старые 2700/2500 удалены, 3000 стала основной, типовой размер переведён на 3000. Прямой SQL, без alembic: схема осталась на 089. | `pre-490-20261127-093123.dump` | `post-490-cleanup-20261127-093738.dump` | applied |
 | `#493-raw-lengths-1c` | 2026-11-27 | 6 арт., `product_lengths.raw_length_mm`, `products.notes` | ОСВ 1С пишет в наименовании сырьевую длину (2,54/2,55/2,76/2,75/2,08), а в карточках поле было пусто или равно нормальной. Проставлены пары нормальная → сырьевая: КП-5813 2500→2550, ЮП-3688 2500→2540, ЮП-3690 2500→2550, ЮП-2815 2750→2760, ЮП-2080 2700→2750, ЮП-009 2000→2080. Нормальная длина и `is_primary` не менялись; нормы на подвес не изменились (82/51). Источник дописан в примечания. Прямой SQL, без alembic: схема осталась на 090. | `pre-493-20261127-120718.dump` | `post-493-20261127-120718.dump` | applied |
+| `#492-porog-alum` | 2026-11-27 | 36 арт., `product_lengths` (49), `product_1c_codes` (257) | 347 строк «Порог алюм.» ОСВ 1С: код ведёт на канон группы, длина (`К` 0,9 / `Н` 1,35 / `Т` 1,8 / `М` 2,7) — ось остатка, цвет — операции (ADR-0077). На проде не хватало 49 длин и 257 кодов; dev-`apply.sql` не переносится — `1212` на проде `id=225`, в dev `227`. Применён prod-`apply_prod.sql` по SKU: 306 insert + 6 `is_primary`; preview ОСВ — 347 «Нулевой остаток», проводок нет. | `pre-492-20261127-152343.dump` | `post-492-20261127-152343.dump` | applied |
 
 ## Артефакты
 
@@ -39,6 +40,7 @@
 - `#474-als-sku` — data/storage-prod/backups/changesets/#474-als-sku/
 - `#490-pipe-length-3000` — data/backups/changesets/#490-pipe-length-3000/ (dev: `direct.sql`, `cleanup-27.sql`, `report.md`, `before_rows.json`) и data/backups/prod/ (дампы prod)
 - `#493-raw-lengths-1c` — data/backups/changesets/#493-raw-lengths-1c/ (`direct.sql`, `before_rows.json`, `after_rows.json`, `report.md`, `meta.json`) и data/backups/prod/ (дампы prod)
+- `#492-porog-alum` — data/storage-prod/backups/changesets/#492-porog-alum/ (`apply_prod.sql`, `apply_prod.py`, `before/after_rows_prod.json`, `ids_prod.json`, `preview_after_prod.json`, `report.md`, `meta.json`) и data/backups/prod/ (дампы prod); dev-черновик — data/backups/changesets/#492-porog-alum/
 
 ## Как откатывать
 
