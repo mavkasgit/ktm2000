@@ -40,7 +40,7 @@
 - `#474-als-sku` — data/storage-prod/backups/changesets/#474-als-sku/
 - `#490-pipe-length-3000` — data/backups/changesets/#490-pipe-length-3000/ (dev: `direct.sql`, `cleanup-27.sql`, `report.md`, `before_rows.json`) и data/backups/prod/ (дампы prod)
 - `#493-raw-lengths-1c` — data/backups/changesets/#493-raw-lengths-1c/ (`direct.sql`, `before_rows.json`, `after_rows.json`, `report.md`, `meta.json`) и data/backups/prod/ (дампы prod)
-- `#492-porog-alum` — data/storage-prod/backups/changesets/#492-porog-alum/ (`apply_prod.sql`, `apply_prod.py`, `before/after_rows_prod.json`, `ids_prod.json`, `preview_after_prod.json`, `report.md`, `meta.json`) и data/backups/prod/ (дампы prod); dev-черновик — data/backups/changesets/#492-porog-alum/
+- `#492-porog-alum` — data/storage-prod/backups/changesets/#492-porog-alum/ (`review.html` — обзор «было → стало», `apply_prod.sql`, `apply_prod.py`, `before/after_rows_prod.json`, `ids_prod.json`, `preview_after_prod.json`, `report.md`, `meta.json`) и data/backups/prod/ (дампы prod); dev-черновик — data/backups/changesets/#492-porog-alum/
 
 ## Как откатывать
 
