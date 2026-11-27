@@ -414,6 +414,14 @@ def _format_mm_as_meters(length_mm: float) -> str:
     return text if "," in text else f"{text},0"
 
 
+#: Припуск сырьевой длины над нормальной, мм (спека §8.2). Заготовка длиннее
+#: изделия на торцовку, и в наименовании 1С стоит именно заготовка: 2,55 при
+#: нормальной 2,5, 2,08 при 2,0. Пока расхождение в этих пределах, это та же
+#: длина, и она приводится к нормальной без предупреждения. Больше — уже другая
+#: длина (3,0 при 2,7 — 300 мм), ошибка строки: импорт не угадывает.
+RAW_LENGTH_ALLOWANCE_MM = 100
+
+
 @dataclass(frozen=True)
 class NormalLength:
     """Результат приведения длины к нормальной ``length_mm`` артикула."""
@@ -429,10 +437,12 @@ def resolve_normal_length(
 ) -> NormalLength:
     """Привести длину из наименования к нормальной ``length_mm`` (спека §8.2).
 
-    Совпадение обязано быть точным: ``length_mm`` или ``raw_length_mm``.
-    «Ближайшая снизу» не подбирается: 3,0 м и 2,7 м — разные длины, и подмена
-    одной другой кредитует склад не тем, что пришло из 1С. Нет точного
-    совпадения — ошибка строки, а не тихая замена.
+    Точное совпадение с ``length_mm`` или ``raw_length_mm`` — эта длина.
+    Длина больше нормальной не более чем на :data:`RAW_LENGTH_ALLOWANCE_MM` —
+    сырьевая заготовка без записи в карточке, приводится к ближайшей меньшей
+    нормальной. Дальше не подбираем: 3,0 м и 2,7 м — разные длины, и подмена
+    одной другой кредитует склад не тем, что пришло из 1С. Нет подходящей
+    длины — ошибка строки, а не тихая замена.
     """
     normal = sorted({round(length.length_mm) for length in lengths if length.length_mm})
     if written_mm is None:
@@ -471,6 +481,13 @@ def resolve_normal_length(
             continue
         if round(length.raw_length_mm) == written_mm:
             return NormalLength(round(length.length_mm))
+
+    # Сырьевая длина, не объявленная в карточке: заготовка выше нормальной на
+    # припуск. Приводим к ближайшей меньшей нормальной, пока расхождение в
+    # пределах припуска; большую разницу не угадываем (ADR-0077 п.5).
+    lower = [value for value in normal if value < written_mm]
+    if lower and written_mm - lower[-1] <= RAW_LENGTH_ALLOWANCE_MM:
+        return NormalLength(lower[-1])
 
     if written_mm < normal[0]:
         return NormalLength(

@@ -416,12 +416,39 @@ def test_resolve_normal_length_no_exact_match_is_error() -> None:
     assert resolved.error == "Длина 3,0 не совпадает с длинами артикула (2,7)"
 
 
-def test_resolve_normal_length_small_deviation_is_error() -> None:
-    """Даже 50 мм расхождения не подменяются: 2,55 при карточке 2,5 — ошибка."""
-    resolved = resolve_normal_length(2550, _lengths((2500, None, True)))
+def test_resolve_normal_length_small_deviation_beyond_allowance_is_error() -> None:
+    """2,61 при карточке 2,5 — 110 мм, больше припуска: ошибка, а не подмена."""
+    resolved = resolve_normal_length(2610, _lengths((2500, None, True)))
 
     assert resolved.length_mm is None
-    assert resolved.error == "Длина 2,55 не совпадает с длинами артикула (2,5)"
+    assert resolved.warning is None
+    assert resolved.error == "Длина 2,61 не совпадает с длинами артикула (2,5)"
+
+
+@pytest.mark.parametrize(
+    ("written_mm", "rows", "expected_mm"),
+    [
+        # Сырьевая длина без записи в карточке: заготовка выше нормальной на
+        # припуск (≤ 100 мм) — это та же длина, приводится к нормальной.
+        (2550, ((2500, None, True),), 2500),
+        (2540, ((2500, None, True),), 2500),
+        (2760, ((2700, None, True),), 2700),
+        # Ближайшая меньшая, а не ближайшая вообще: 2,08 при длинах 2,0 и 3,0.
+        (2080, ((2000, None, False), (3000, None, True)), 2000),
+        # Объявленная сырьевая длина по-прежнему важнее припуска.
+        (2780, ((2700, 2780, True),), 2700),
+    ],
+)
+def test_resolve_normal_length_billet_maps_to_normal(
+    written_mm: int,
+    rows: tuple[tuple[float, float | None, bool], ...],
+    expected_mm: int,
+) -> None:
+    resolved = resolve_normal_length(written_mm, _lengths(*rows))
+
+    assert resolved.length_mm == expected_mm
+    assert resolved.warning is None
+    assert resolved.error is None
 
 
 
@@ -722,6 +749,31 @@ async def test_resolve_quantities_length_not_in_card_is_error(
     assert item.quantity is None
     assert item.warnings == []
     assert item.errors == ["Длина 2,61 не совпадает с длинами артикула (2,5)"]
+
+
+async def test_resolve_quantities_billet_length_counts_by_normal(
+    session: AsyncSession,
+) -> None:
+    """2,08 у артикула с длинами 2,0/3,0: заготовка, штуки по нормальной 2,0."""
+    product = await _make_product(
+        session,
+        "UGOLOK-15",
+        lengths=[(2000, None, True), (3000, None, False)],
+    )
+    await _bind_1c_code(session, product, "12611")
+    items = _items([
+        _osv_row("12611", "Уголок 15*15 2,08 алюминий (сырье)", "м", 1098),
+    ])
+
+    await _resolve_quantities(session, items)
+
+    item = items[0]
+    assert item.status == "valid"
+    assert item.quantity == 549
+    assert item.dimensions == {"length_mm": 2000}
+    assert item.dimensions_label == "2 м"
+    assert item.warnings == []
+    assert item.errors == []
 
 
 async def test_resolve_quantities_without_name_length_uses_primary(
