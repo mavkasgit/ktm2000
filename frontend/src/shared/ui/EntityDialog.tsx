@@ -47,7 +47,7 @@ const ICON_LIST = [
   "Flame","Sparkle","Hammer","Droplet","BoxSelect","PackageOpen",
   "PackageCheck","PackagePlus","PackageMinus","PackageSearch","PackageX",
   "Fan","FlaskConical","Beaker","TestTube","Construction","PenTool","Pickaxe",
-  "SprayCan","LetterO","LetterSh",
+  "SprayCan","Layers","LetterO","LetterSh",
 ]
 
 // Custom letter icon components

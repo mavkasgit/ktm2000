@@ -11,6 +11,7 @@ SECTIONS_DATA = [
     {"code": "SHOT_BLAST", "is_output_default": False, "name": "Дробеструй", "sort_order": 40, "type": "production", "icon": "SprayCan", "icon_color": "#6B7280"},
     {"code": "PREP_STOCK", "is_output_default": False, "name": "Склад подготовки", "sort_order": 45, "type": "wip_stock", "icon": "PackageX", "icon_color": "#7C3AED"},
     {"code": "ANODIZING", "is_output_default": False, "name": "Анодирование", "sort_order": 50, "type": "production", "icon": "FlaskConical", "icon_color": "#06B6D4"},
+    {"code": "LAMINATION", "is_output_default": False, "name": "Ламинация", "sort_order": 55, "type": "production", "icon": "Layers", "icon_color": "#8B5CF6"},
     {"code": "WIP_STOCK", "is_output_default": False, "name": "Склад полуфабриката", "sort_order": 60, "type": "wip_stock", "icon": "Boxes", "icon_color": "#84CC16"},
     {"code": "SAWING", "is_output_default": False, "name": "Пила", "sort_order": 70, "type": "production", "icon": "Fan", "icon_color": "#F97316"},
     {"code": "PACKING", "is_output_default": False, "name": "Упаковка", "sort_order": 80, "type": "production", "icon": "Package", "icon_color": "#10B981"},
@@ -78,6 +79,39 @@ SECTION_OPS: dict[str, list[tuple[str | None, str | None, int, str | None, str, 
 
         ("PACK", "Упаковка", 20, "PACK_STRETCH", "Стрейч", True, None, "#0891B2", None, {}, "production"),
         ("PACK", "Упаковка", 20, "PACK_SPUNBOND", "Спанбонд", True, None, "#06B6D4", None, {}, "production"),
+    ],
+    "LAMINATION": [
+        # Справочник декоров ламинированных порогов (#491, ОСВ 27.11.2026):
+        # код операции = код декора 1С (`LAM_<декор>`), цвет — операция, а не
+        # артикул (ADR-0077). Иконки и hex пока пустые: палитра будет вместе с
+        # файлами, поэтому здесь `icon=None`/`icon_color=None`. `LAM_TRIM`
+        # (торцовка) не заводим: порядок операций и место резки ещё открыты.
+        # Маршрутов и правил выбора нет — секции в `route_sections` не место.
+        ("LAMINATION", "Ламинация", 10, "LAM_013", "Ламинация: Белый", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_017", "Ламинация: Дуб", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_018", "Ламинация: Дуб натуральный", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_106", "Ламинация: Дуб сибириана", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_107", "Ламинация: Орех светлый", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_117", "Ламинация: Дуб деревенский", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_301", "Ламинация: Клен северный", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_307", "Ламинация: Дуб топаз", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_308", "Ламинация: Орех золотой", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_310", "Ламинация: Орех темный", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_313", "Ламинация: Черное дерево", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_408", "Ламинация: Ясень темный", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_409", "Ламинация: Ясень белый", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_410", "Ламинация: Дуб кантри", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_415", "Ламинация: Дуб светлый", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_417", "Ламинация: Дуб золотой", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_418", "Ламинация: Дуб античный", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_614", "Ламинация: Дуб грэй", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_615", "Ламинация: Дуб верден", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_616", "Ламинация: Дуб ваниль", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_617", "Ламинация: Дуб беленый", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_618", "Ламинация: Дуб снежный", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_619", "Ламинация: Дуб каньон", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_620", "Ламинация: Дуб тобакко", True, None, None, None, {}, "production"),
+        ("LAMINATION", "Ламинация", 10, "LAM_717", "Ламинация: Дуб глина", True, None, None, None, {}, "production"),
     ],
     "WIP_STOCK": [
         ("WIP_STOCK", "Передача на склад", 10, "MOVE_TO_WIP", "Передача на склад полуфабриката", False, "Truck", "#84CC16", None, {}, "transport"),
