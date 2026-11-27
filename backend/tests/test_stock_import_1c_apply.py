@@ -81,8 +81,29 @@ MANUAL_TRANSACTION_COMMENT = "Импорт остатков из Excel"
 # ─── Синтетические xlsx ───────────────────────────────────────────────────────
 
 
-def _osv_row(code: object, name: object, unit: object, quantity: object) -> list:
-    return [code, name, unit, None, None, None, None, None, None, None, quantity, None]
+def _osv_row(
+    code: object,
+    name: object,
+    unit: object,
+    quantity: object,
+    *,
+    debit_quantity: object = None,
+    credit_quantity: object = None,
+) -> list:
+    return [
+        code,
+        name,
+        unit,
+        None,
+        None,
+        None,
+        debit_quantity,
+        None,
+        credit_quantity,
+        None,
+        quantity,
+        None,
+    ]
 
 
 def _make_sheets(sheets: list[tuple[str, list[list]]]) -> bytes:
@@ -357,6 +378,117 @@ async def test_code_conflict_marks_row_invalid_and_never_rebinds(
     assert txs[0].product_id == other.id
 
     await assert_no_invariants_violations(session, context="osv-conflict")
+
+
+async def test_free_padded_code_is_learned_without_leading_zeros(
+    session: AsyncSession,
+) -> None:
+    """Изучение кода ОСВ пишет каноническую запись: ``0000014471`` → ``14471``."""
+    from app.stock.import_service import _resolve_1c_code_bindings
+
+    product = await _make_product(session, "OSV-PADDED")
+    item = RemainderItem(
+        source_row_number=10,
+        sku=product.sku,
+        quantity=5.0,
+        comment=None,
+        product_id=product.id,
+        product_name=product.name,
+        status="valid",
+        errors=[],
+        raw_values=[],
+        source_code="0000014471",
+    )
+
+    pending = await _resolve_1c_code_bindings(session, [item], None)
+
+    assert [(binding.code, binding.product_id) for binding in pending] == [
+        ("14471", product.id)
+    ]
+
+
+async def test_import_osv_zero_balance_not_imported_but_counted(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Нулевой остаток «Порог алюм.» не создаёт проводку и виден в счётчике.
+
+    Строка с приходом = расходом — не ошибка файла: батч пишет её в
+    ``skipped_rows`` и отдельным ``summary.skipped_zero_balance``.
+    """
+    section = await _make_section(session, "RAW_STOCK", "Склад сырья")
+    product = await _make_product(
+        session, "OSV-ZERO-OK", name="Кант универсальный", lengths=[(2700, None, True)]
+    )
+    await session.commit()
+
+    content = _make_osv_workbook([
+        _osv_row("20933", "Кант (OSV-ZERO-OK) 2,7м", "м", 2700),
+        _osv_row(
+            "33",
+            "Порог алюм. 033-01 К 0,9 серебро",
+            "шт",
+            None,
+            debit_quantity=295,
+            credit_quantity=295,
+        ),
+    ])
+
+    resp = await _post_import(client, section, content)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is True
+    assert body["imported_count"] == 1
+    assert body["errors"] == []
+
+    txs = await _transactions(session, body["action_id"])
+    assert [tx.product_id for tx in txs] == [product.id]
+
+    batch = await get_batch(session, body["batch_id"])
+    assert batch.total_rows == 2
+    assert batch.imported_rows == 1
+    assert batch.skipped_rows == 1
+    assert batch.summary["skipped_zero_balance"] == 1
+    assert batch.summary["skipped_registry"] == 0
+
+    rows = await get_batch_rows(session, body["batch_id"])
+    assert [row.source_code for row in rows] == ["20933"]
+
+    await assert_no_invariants_violations(session, context="osv-zero-balance")
+
+
+async def test_padded_codes_bound_to_two_products_block_learning(
+    session: AsyncSession,
+) -> None:
+    """Один канонический код у двух артикулов — строка invalid, код не изучается."""
+    from app.stock.import_service import _resolve_1c_code_bindings
+
+    first = await _make_product(session, "OSV-AMB-A")
+    second = await _make_product(session, "OSV-AMB-B")
+    session.add(Product1CCode(product_id=first.id, code="0000014471"))
+    session.add(Product1CCode(product_id=second.id, code="14471"))
+    await session.commit()
+
+    item = RemainderItem(
+        source_row_number=10,
+        sku=second.sku,
+        quantity=5.0,
+        comment=None,
+        product_id=second.id,
+        product_name=second.name,
+        status="valid",
+        errors=[],
+        raw_values=[],
+        source_code="14471",
+    )
+
+    pending = await _resolve_1c_code_bindings(session, [item], None)
+
+    assert pending == []
+    assert item.status == "invalid"
+    assert item.errors == [
+        "Код 14471 привязан к разным артикулам в справочнике"
+    ]
 
 
 async def test_same_free_code_for_two_products_in_file_is_conflict(

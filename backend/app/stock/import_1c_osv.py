@@ -37,7 +37,13 @@ from app.models.product_1c_skipped import (
 )
 from app.models.route import RouteRuleProfile
 from app.models.section import Section
-from app.services.import_normalization import match_sku_cell, normalize_sku, sku_entry
+from app.services.import_normalization import (
+    canonicalize_1c_code,
+    canonicalize_1c_code_sql,
+    match_sku_cell,
+    normalize_sku,
+    sku_entry,
+)
 from app.services.product_alias_groups import (
     AliasGroups,
     load_alias_groups,
@@ -52,6 +58,8 @@ from app.stock.import_service import (
     _EMPTY_CELL_VALUES,
     SKIP_LABEL_IN_REGISTRY,
     SKIP_LABEL_NO_MATCH,
+    SKIP_LABEL_ZERO_BALANCE,
+    SKIP_REASON_ZERO_BALANCE,
     RemainderItem,
     SheetSummary,
     _attach_remainder_product,
@@ -74,6 +82,12 @@ SourceKind = Literal["1c_osv", "manual_template", "unknown"]
 
 # Группы остатка в шапке, между которыми выбирается количество.
 _FINAL_BALANCE_MARKERS = ("конечное сальдо", "остаток на конец")
+#: Оборот по дебету/кредиту. Только полные названия групп: «Сальдо на начало,
+#: Дебет» тоже содержит слово «дебет», и первое совпадение дало бы количество
+#: начального сальдо вместо оборота — нулевой остаток классифицировался бы
+#: неверно. Нет группы — строку неоткуда отличить, она молча пропускается.
+_DEBIT_MARKERS = ("оборот по дебету",)
+_CREDIT_MARKERS = ("оборот по кредиту",)
 
 
 def _norm_cell(value: object) -> str:
@@ -101,10 +115,47 @@ class OsvLayout:
     name_index: int
     unit_index: int | None
     quantity_index: int
+    #: Количество оборота по дебету/кредиту (``None`` — колонок нет в листе).
+    #: Нужны только чтобы отличить нулевой остаток от пустой строки.
+    debit_index: int | None = None
+    credit_index: int | None = None
 
 
 def _find_index(cells: Sequence[str], predicate) -> int | None:
     return next((index for index, cell in enumerate(cells) if predicate(cell)), None)
+
+
+def _group_quantity_index(
+    cells: Sequence[str],
+    sub_cells: Sequence[str],
+    markers: tuple[str, ...],
+) -> int | None:
+    """Колонка «Количество» внутри группы шапки; ``None`` — группы нет.
+
+    Поиск ограничен колонками группы — до следующей непустой ячейки шапки.
+    Иначе у группы без своего «Количества» нашлось бы количество соседней.
+    """
+    group_index = _find_index(
+        cells, lambda cell: any(marker in cell for marker in markers)
+    )
+    if group_index is None:
+        return None
+    end = next(
+        (
+            index
+            for index in range(group_index + 1, len(cells))
+            if cells[index]
+        ),
+        len(cells),
+    )
+    return next(
+        (
+            index
+            for index in range(group_index, min(end, len(sub_cells)))
+            if sub_cells[index].startswith("количество")
+        ),
+        None,
+    )
 
 
 def detect_1c_osv(rows: Sequence[Sequence]) -> OsvLayout | None:
@@ -125,20 +176,9 @@ def detect_1c_osv(rows: Sequence[Sequence]) -> OsvLayout | None:
         name_index = _find_index(cells, lambda cell: cell.startswith("наименование"))
         if name_index is None:
             continue
-        group_index = _find_index(
-            cells,
-            lambda cell: any(marker in cell for marker in _FINAL_BALANCE_MARKERS),
-        )
-        if group_index is None:
-            continue
         sub_cells = [_norm_cell(value) for value in rows[header_index + 1]]
-        quantity_index = next(
-            (
-                index
-                for index, cell in enumerate(sub_cells)
-                if index >= group_index and cell.startswith("количество")
-            ),
-            None,
+        quantity_index = _group_quantity_index(
+            cells, sub_cells, _FINAL_BALANCE_MARKERS
         )
         if quantity_index is None:
             continue
@@ -150,6 +190,8 @@ def detect_1c_osv(rows: Sequence[Sequence]) -> OsvLayout | None:
             name_index=name_index,
             unit_index=unit_index,
             quantity_index=quantity_index,
+            debit_index=_group_quantity_index(cells, sub_cells, _DEBIT_MARKERS),
+            credit_index=_group_quantity_index(cells, sub_cells, _CREDIT_MARKERS),
         )
     return None
 
@@ -178,22 +220,6 @@ def detect_manual_template(rows: Sequence[Sequence]) -> bool:
 # ─── Строки ОСВ ───────────────────────────────────────────────────────────────
 
 
-def _normalize_1c_code(raw: str) -> str | None:
-    """Код номенклатуры 1С из ячейки; ``None`` — не код номенклатуры.
-
-    Коды приходят как ``20933`` и ``20933.0`` (Excel-число) — оба дают
-    ``20933``. Групповые счета (``10.1``) и итоги (пусто) кодом номенклатуры
-    не являются и строку не дают.
-    """
-    text = raw.strip().replace("\xa0", "").replace(" ", "")
-    if not text:
-        return None
-    if re.fullmatch(r"\d+", text):
-        return text
-    fractional_zero = re.fullmatch(r"(\d+)[.,]0+", text)
-    return fractional_zero.group(1) if fractional_zero else None
-
-
 def _classify_unit(raw: str) -> Literal["m", "pcs", "other"]:
     """Единица измерения по спеке §6.3: метры, штуки, всё прочее."""
     normalized = "".join(
@@ -217,6 +243,50 @@ def _parse_osv_quantity(raw: str) -> Decimal | None:
         return None
 
 
+def _has_turnover(row: Sequence, layout: OsvLayout) -> bool:
+    """Были ли по строке движения: ненулевой дебет или кредит."""
+    if layout.debit_index is None and layout.credit_index is None:
+        # Колонок оборотов нет (нестандартная выгрузка): отличить «приход =
+        # расход» от пустой позиции нечем. Показываем нулевой остаток — его
+        # подпись верна и без оборотов, а молчаливое исчезновение строки —
+        # ровно тот симптом, который чинит #492.
+        return True
+    for index in (layout.debit_index, layout.credit_index):
+        raw = _cell(row, index)
+        if not raw or raw in _EMPTY_CELL_VALUES:
+            continue
+        value = _parse_osv_quantity(raw)
+        if value is not None and value != 0:
+            return True
+    return False
+
+
+def _zero_balance_item(
+    offset: int,
+    row: Sequence,
+    code: str,
+    name: str,
+    unit_raw: str,
+) -> RemainderItem:
+    """Строка ОСВ с нулевым остатком: видна пропуском, проводки не создаёт."""
+    return RemainderItem(
+        source_row_number=offset,
+        sku="",
+        quantity=None,
+        comment=None,
+        product_id=None,
+        product_name=None,
+        status="skipped",
+        errors=[],
+        raw_values=list(row),
+        source_code=code,
+        source_name=name,
+        source_unit=unit_raw or None,
+        skip_reason=SKIP_REASON_ZERO_BALANCE,
+        skip_reason_label=SKIP_LABEL_ZERO_BALANCE,
+    )
+
+
 def parse_1c_osv_rows(
     rows: Sequence[Sequence],
     row_selection: str | None = None,
@@ -237,6 +307,7 @@ def parse_1c_osv_rows(
     items: list[RemainderItem] = []
     valid_count = 0
     invalid_count = 0
+    skipped_count = 0
     quantity_total = Decimal(0)
 
     for offset, row in enumerate(
@@ -244,7 +315,7 @@ def parse_1c_osv_rows(
     ):
         if selected_rows is not None and offset not in selected_rows:
             continue
-        code = _normalize_1c_code(_cell(row, layout.code_index))
+        code = canonicalize_1c_code(_cell(row, layout.code_index))
         if code is None:
             # Итоги, групповые счета и пустые строки — не позиции номенклатуры.
             continue
@@ -254,15 +325,31 @@ def parse_1c_osv_rows(
             # не строка номенклатуры, в предпросмотр не попадает.
             continue
         quantity_raw = _cell(row, layout.quantity_index)
-        if not quantity_raw or quantity_raw in _EMPTY_CELL_VALUES:
-            # Пустое количество — не остаток, но и не ошибка строки.
+        empty_quantity = not quantity_raw or quantity_raw in _EMPTY_CELL_VALUES
+        quantity = None if empty_quantity else _parse_osv_quantity(quantity_raw)
+        if empty_quantity or quantity == 0:
+            # Нулевой остаток: проводки не будет. С движениями по счёту это
+            # разобранная позиция «приход = расход» — она видна под чипом
+            # «Пропущено» с причиной «Нулевой остаток»; без движений строка
+            # ни о чём не говорит и молча не попадает в предпросмотр (спека
+            # §6.1, ADR-0077).
+            if _has_turnover(row, layout):
+                items.append(
+                    _zero_balance_item(
+                        offset,
+                        row,
+                        code,
+                        name,
+                        _cell(row, layout.unit_index),
+                    )
+                )
+                skipped_count += 1
             continue
 
         unit_raw = _cell(row, layout.unit_index)
         unit_kind = _classify_unit(unit_raw)
 
         errors: list[str] = []
-        quantity = _parse_osv_quantity(quantity_raw)
         if quantity is None:
             errors.append("Количество не является числом")
         elif quantity < 0:
@@ -306,6 +393,7 @@ def parse_1c_osv_rows(
         valid=valid_count,
         invalid=invalid_count,
         quantity_total=float(round(quantity_total, 3)),
+        skipped=skipped_count,
     )
     return items, summary
 
@@ -398,6 +486,34 @@ def parse_length_from_name(name: str | None) -> int | None:
     if bare is not None:
         return _meters_to_mm(bare.group(1))
     return None
+
+
+#: Буква размера штучной позиции в наименовании 1С → нормальная длина, мм.
+#: Формы записи: «Порог алюм. 033-01 К 0,9 серебро», «031-012К 0,9»,
+#: «033-06Н 1,35м», «2212-02М 2.7м зол.». Буква — код размера, число рядом
+#: повторяет его в метрах. Размер берём по букве: у 1С число пишется с
+#: разными разделителями, а размеров у профиля ровно четыре (ADR-0077).
+_PCS_LENGTH_MARKERS: dict[str, int] = {
+    "К": 900,
+    "Н": 1350,
+    "Т": 1800,
+    "М": 2700,
+}
+# Заглавная буква, приклеенная к артикулу («031-012К») или отдельная.
+# Строчная «м» — единица измерения, поэтому в набор не входит.
+_PCS_LENGTH_RE = re.compile(
+    r"(?<![А-Яа-яЁёA-Za-z])([КНТМ])\s*\d+(?:[.,]\d+)?\s*м?(?![а-яё])"
+)
+
+
+def parse_pcs_length_from_name(name: str | None) -> int | None:
+    """Длина штучной позиции из буквы размера К/Н/Т/М; ``None`` — буквы нет."""
+    if not name:
+        return None
+    match = _PCS_LENGTH_RE.search(name)
+    if match is None:
+        return None
+    return _PCS_LENGTH_MARKERS[match.group(1)]
 
 
 # ─── Нормальная длина ─────────────────────────────────────────────────────────
@@ -497,6 +613,14 @@ def build_length_dimensions(length_mm: int) -> dict | None:
 def describe_length(length_mm: int | None) -> str:
     """Подпись габарита для предпросмотра («2,7 м» / «—»)."""
     return format_dimensions(build_length_dimensions(length_mm) if length_mm else None)
+
+
+def _card_length_warning(length_mm: int) -> str:
+    """Предупреждение «длина взята из карточки» — одно на метры и штуки (#490)."""
+    return (
+        f"Длина взята из карточки: {describe_length(length_mm)} "
+        "(в наименовании не указана)"
+    )
 
 
 @dataclass
@@ -1063,26 +1187,54 @@ async def _lookup_1c_products(
     ``skipped`` с причиной и перестаёт быть ошибкой. Неоднозначность и
     конфликт кода с наименованием реестр не глушит — это дефект данных.
     """
-    rows_items = [item for item in items if item.source_code]
+    rows_items = [
+        item for item in items if item.source_code and item.status != "skipped"
+    ]
     if not rows_items:
         return
 
     catalog = await _load_catalog(db)
-    codes = list({item.source_code for item in rows_items if item.source_code})
+    codes = {
+        canonical
+        for item in rows_items
+        if (canonical := canonicalize_1c_code(item.source_code))
+    }
     code_rows = (
         await db.execute(
             select(Product1CCode.code, Product1CCode.product_id).where(
-                Product1CCode.code.in_(codes)
+                # Код в базе может быть записан с ведущими нулями или
+                # Excel-хвостом (старые привязки): «0000014471» и «14471» —
+                # один код (ADR-0077).
+                canonicalize_1c_code_sql(Product1CCode.code).in_(codes)
             )
         )
     ).all()
-    code_products = {str(code): int(product_id) for code, product_id in code_rows}
+    code_products: dict[str, int] = {}
+    ambiguous_codes: set[str] = set()
+    for code, product_id in code_rows:
+        canonical = canonicalize_1c_code(code)
+        if canonical is None:
+            continue
+        known = code_products.setdefault(canonical, int(product_id))
+        if known != int(product_id):
+            # Один код в двух написаниях привязан к разным артикулам —
+            # дефект справочника, а не повод выбрать последний молча.
+            ambiguous_codes.add(canonical)
 
     decisions: dict[int, _MatchDecision] = {}
     pending: list[RemainderItem] = []
     for item in rows_items:
         name = _match_name_candidates(item.source_name, catalog)
-        code_product_id = code_products.get(item.source_code or "")
+        canonical = canonicalize_1c_code(item.source_code) or ""
+        if canonical in ambiguous_codes:
+            decisions[id(item)] = _MatchDecision(
+                errors=[
+                    f"Код {item.source_code} привязан к разным артикулам "
+                    "в справочнике"
+                ]
+            )
+            continue
+        code_product_id = code_products.get(canonical)
         if code_product_id is not None:
             decisions[id(item)] = _decide_code_match(
                 item,
@@ -1209,6 +1361,61 @@ def _unit_error(unit_raw: str | None) -> str:
     return f"Единица измерения '{unit_raw.strip()}' не поддерживается"
 
 
+def _resolve_pcs_dimensions(
+    item: RemainderItem,
+    lengths: Sequence[ProductLength],
+) -> None:
+    """Длина штучной строки ОСВ (ADR-0077): из наименования, иначе из карточки.
+
+    У штук длина — ось остатка: 0,9 м и 2,7 м не складываются. Буква размера
+    К/Н/Т/М в наименовании главнее карточки. Длины может не быть в
+    ``product_lengths`` — это отставание справочника, а не дефект строки:
+    остаток импортируется по наименованию с предупреждением. Если буквы нет,
+    берётся единственная/основная длина карточки; несколько длин без основной
+    или ни одной — предупреждение, строка импортируется без длины.
+    """
+    registered = sorted(
+        {round(length.length_mm) for length in lengths if length.length_mm}
+    )
+    written_mm = parse_pcs_length_from_name(item.source_name)
+    if written_mm is None:
+        # Обычная запись длины в метрах («Уголок 10*10 3,0 шт»). Буква размера
+        # главнее, потому что «М» в артикуле порога — не единица измерения.
+        written_mm = parse_length_from_name(item.source_name)
+        if written_mm is not None:
+            # Объявленная сырьевая длина важнее совпадения цифр: 2,75 на
+            # карточке с raw 2750 — это нормальная 2,7, как и у метров (§8.3).
+            resolved = resolve_normal_length(written_mm, lengths)
+            if resolved.length_mm is not None:
+                written_mm = resolved.length_mm
+    if written_mm is not None:
+        item.dimensions = build_length_dimensions(written_mm)
+        item.dimensions_label = describe_length(written_mm)
+        if written_mm not in registered:
+            known = (
+                f" ({', '.join(describe_length(value) for value in registered)})"
+                if registered
+                else ""
+            )
+            item.warnings.append(
+                f"Длина {describe_length(written_mm)} не указана в карточке "
+                f"артикула{known} — строка импортируется по наименованию"
+            )
+        return
+
+    resolved = resolve_normal_length(None, lengths)
+    if resolved.length_mm is not None:
+        item.dimensions = build_length_dimensions(resolved.length_mm)
+        item.dimensions_label = describe_length(resolved.length_mm)
+        item.warnings.append(_card_length_warning(resolved.length_mm))
+        return
+
+    # Текст причины — тот же, что у метров: одно правило длины, а не два.
+    item.warnings.append(
+        f"{resolved.error} — строка импортируется без длины"
+    )
+
+
 async def resolve_1c_osv_quantities(
     db: AsyncSession,
     items: Sequence[RemainderItem],
@@ -1259,7 +1466,11 @@ async def resolve_1c_osv_quantities(
             item.skip_note = _unit_error(item.source_unit)
             continue
         if unit_kind == "pcs":
-            # Штуки как есть: количества уже в item.quantity, длина не нужна.
+            # Штуки как есть, но длина остаётся осью остатка: у профилей
+            # разной длины разные SKU-остатки (ADR-0077).
+            _resolve_pcs_dimensions(
+                item, lengths_by_product.get(item.product_id, [])
+            )
             continue
 
         meters = item.source_quantity_m
@@ -1281,10 +1492,7 @@ async def resolve_1c_osv_quantities(
         if written_mm is None:
             # Длины в строке 1С нет: штуки считаются по длине карточки.
             # Показываем её оператору, чтобы расчёт не выглядел взятым из воздуха.
-            item.warnings.append(
-                f"Длина взята из карточки: {describe_length(length_mm)} "
-                "(в наименовании не указана)"
-            )
+            item.warnings.append(_card_length_warning(length_mm))
         pieces = int(Decimal(str(meters)) / (Decimal(length_mm) / Decimal(1000)))
         if pieces <= 0:
             item.errors.append("Остаток меньше одной штуки")

@@ -73,6 +73,44 @@ def sku_loose_sql(column):
     )
 
 
+def canonicalize_1c_code(value: object) -> str | None:
+    """Каноническая запись кода номенклатуры 1С: цифры без ведущих нулей.
+
+    ``0000014471`` и ``14471`` — один код (ADR-0077): код — внешний ключ
+    позиции, и нули слева его не меняют. Коды приходят из Excel числом
+    (``20933.0``), поэтому хвост ``.0``/``,00`` тоже отбрасывается.
+    Нечисловая ячейка (``10.1`` — групповой счёт, пустая строка) кодом
+    номенклатуры не является: ``None``.
+    """
+    text = str(value if value is not None else "").strip()
+    text = text.replace("\xa0", "").replace(" ", "")
+    if not text:
+        return None
+    if text.isascii() and text.isdigit():
+        return text.lstrip("0") or "0"
+    fractional_zero = re.fullmatch(r"(\d+)[.,]0+", text)
+    if fractional_zero is None:
+        return None
+    return fractional_zero.group(1).lstrip("0") or "0"
+
+
+def canonicalize_1c_code_sql(column):
+    """SQL-клон :func:`canonicalize_1c_code` — одна форма с обеих сторон.
+
+    Иначе копии тихо расходятся: Python отбрасывает хвост ``.0`` (Excel-число),
+    а SQL оставил бы ``14471.0`` несравнимым с ``14471``.
+    """
+    return func.coalesce(
+        func.nullif(
+            func.regexp_replace(
+                func.regexp_replace(column, r"[.,]0+$", ""), "^0+", ""
+            ),
+            "",
+        ),
+        "0",
+    )
+
+
 def numeric_sku_key(value: str) -> str | None:
     """Числовой ключ чисто цифрового артикула без ведущих нулей (#444).
 

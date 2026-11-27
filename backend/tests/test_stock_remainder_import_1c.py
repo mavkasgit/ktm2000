@@ -29,6 +29,7 @@ from app.stock.import_1c_osv import (
     detect_1c_osv,
     detect_manual_template,
     parse_length_from_name,
+    parse_pcs_length_from_name,
     parse_remainders_1c_osv,
     resolve_normal_length,
 )
@@ -206,6 +207,8 @@ def test_detect_1c_osv_two_row_header() -> None:
     assert layout.name_index == 1
     assert layout.unit_index == 2
     assert layout.quantity_index == 10
+    assert layout.debit_index == 6
+    assert layout.credit_index == 8
 
 
 def test_detect_1c_osv_supports_ostatok_na_konec() -> None:
@@ -289,6 +292,91 @@ async def test_parse_osv_takes_quantity_from_final_balance() -> None:
 
     assert len(items) == 1
     assert items[0].source_quantity_m == pytest.approx(100.0)
+
+
+async def test_parse_osv_zero_balance_with_turnover_is_skipped() -> None:
+    """«Порог алюм.» приход = расход: строка видна пропуском, а не ошибкой."""
+    rows = _osv_rows([
+        _osv_row(
+            "33",
+            "Порог алюм. 033-01 К 0,9 серебро",
+            "шт",
+            None,
+            debit_quantity=295,
+            credit_quantity=295,
+        ),
+        # Без остатка и без движений — не позиция, в предпросмотр не идёт.
+        _osv_row("20934", "Пустая позиция", "шт", None),
+        _osv_row("20935", "Уголок 7 шт", "шт", 7),
+    ])
+
+    _sheet, _total, items, summary = await parse_remainders_1c_osv(
+        _make_workbook_sheets([("Склад сырой", rows)]).getvalue()
+    )
+
+    assert [item.source_code for item in items] == ["33", "20935"]
+    zero = items[0]
+    assert zero.status == "skipped"
+    assert zero.errors == []
+    assert zero.quantity is None
+    assert zero.source_quantity_m is None
+    assert zero.skip_reason == "zero_balance"
+    assert zero.skip_reason_label == "Нулевой остаток"
+    assert zero.skip_note is None
+    assert summary.skipped == 1
+    assert summary.valid == 1
+    assert summary.invalid == 0
+
+
+async def test_parse_osv_explicit_zero_balance_is_skipped() -> None:
+    """Явное ``0`` в «Конечном сальдо» с оборотами — тот же нулевой остаток."""
+    rows = _osv_rows([
+        _osv_row("38", "Порог алюм. 031-01 Н 1,35 серебро", "шт.", 0,
+                 debit_quantity=2, credit_quantity=2),
+    ])
+
+    _sheet, _total, items, summary = await parse_remainders_1c_osv(
+        _make_workbook_sheets([("Склад сырой", rows)]).getvalue()
+    )
+
+    assert items[0].status == "skipped"
+    assert items[0].skip_reason_label == "Нулевой остаток"
+    assert summary.skipped == 1
+    assert summary.invalid == 0
+
+
+async def test_parse_osv_zero_balance_without_turnover_columns_is_visible() -> None:
+    """Нет колонок оборотов — нулевой остаток всё равно виден, а не исчезает."""
+    header = ("Код", "Наименование ТМЦ", "Ед. изм.", "Цена за ед.", "Конечное сальдо", None)
+    subheader = (None, None, None, None, "Количество", None)
+    rows = _osv_rows(
+        [["33", "Порог алюм. 033-01 К 0,9 серебро", "шт", 19.7, None, None]],
+        header=header,
+        subheader=subheader,
+    )
+
+    _sheet, _total, items, summary = await parse_remainders_1c_osv(
+        _make_workbook_sheets([("Склад сырой", rows)]).getvalue()
+    )
+
+    assert items[0].status == "skipped"
+    assert items[0].skip_reason == "zero_balance"
+    assert summary.skipped == 1
+    assert summary.invalid == 0
+
+
+async def test_parse_osv_canonicalizes_1c_code_without_leading_zeros() -> None:
+    """``0000014471`` и ``14471`` — один код номенклатуры (ADR-0077)."""
+    rows = _osv_rows([
+        _osv_row("0000014471", "Профиль 2,7", "м", 10),
+        _osv_row("14471.0", "Профиль 2,7", "м", 5),
+    ])
+
+    _sheet, _total, items, _summary = await parse_remainders_1c_osv(
+        _make_workbook_sheets([("Склад сырой", rows)]).getvalue()
+    )
+
+    assert [item.source_code for item in items] == ["14471", "14471"]
 
 
 async def test_parse_osv_negative_quantity_is_row_error() -> None:
@@ -379,6 +467,28 @@ def test_parse_length_from_name_ignores_number_inside_hyphenated_code(
     name: str, expected_mm: int | None
 ) -> None:
     assert parse_length_from_name(name) == expected_mm
+
+
+@pytest.mark.parametrize(
+    ("name", "expected_mm"),
+    [
+        # Штучные позиции порогов: размер задан буквой К/Н/Т/М (#492).
+        ("Порог алюм. 033-01 К 0,9 м.п. серебро", 900),
+        ("Порог алюм. 031-012К 0,9 дуб вайт", 900),
+        ("Порог алюм. 033-06Н 1,35м шам", 1350),
+        ("Порог алюм. 035-02Н 1.35н зол", 1350),
+        ("Порог алюм. 031-301Т 1,8 клен северный", 1800),
+        # «М», приклеенная к артикулу, — размер, а не единица «м».
+        ("Порог алюм. 314-410М 2,7 дуб кантри", 2700),
+        ("Порог алюм. 2212-02М 2.7м зол.", 2700),
+        # Букв размера нет — это не штучная форма порога.
+        ("Профиль (ЮП-3098) 2,75м", None),
+        ("РП-АКП-01,02 (КП5179/ АТ-4863) 2,7", None),
+        ("Кант 2,7 м", None),
+    ],
+)
+def test_parse_pcs_length_from_name(name: str, expected_mm: int | None) -> None:
+    assert parse_pcs_length_from_name(name) == expected_mm
 
 
 # ─── Нормальная длина ─────────────────────────────────────────────────────────
@@ -705,6 +815,26 @@ async def test_resolve_quantities_meters_to_pieces_by_normal_length(
     assert item.warnings == []
 
 
+async def test_lookup_1c_padded_codes_bound_to_different_products_is_error(
+    session: AsyncSession,
+) -> None:
+    """``0000014471`` и ``14471`` у разных артикулов — дефект, а не матч."""
+    first = await _make_product(session, "PADDED-A")
+    second = await _make_product(session, "PADDED-B")
+    await _bind_1c_code(session, first, "0000014471")
+    await _bind_1c_code(session, second, "14471")
+    items = _items([_osv_row("14471", "Профиль 2,7", "м", 10)])
+
+    from app.stock.import_1c_osv import _lookup_1c_products
+
+    await _lookup_1c_products(session, items)
+
+    assert items[0].status == "invalid"
+    assert items[0].errors == [
+        "Код 14471 привязан к разным артикулам в справочнике"
+    ]
+
+
 async def test_resolve_quantities_length_not_in_card_is_error(
     session: AsyncSession,
 ) -> None:
@@ -868,7 +998,7 @@ async def test_resolve_quantities_less_than_one_piece_is_error(
 async def test_resolve_quantities_pieces_unit_keeps_quantity(
     session: AsyncSession,
 ) -> None:
-    """`шт` — штуки как есть, без пересчёта и без длины."""
+    """`шт` — штуки как есть; длина из наименования становится осью остатка."""
     product = await _make_product(session, "UGOLOK", lengths=[(3000, None, True)])
     await _bind_1c_code(session, product, "20935")
     items = _items([_osv_row("20935", "Уголок 10*10 3,0", "шт.", 485)])
@@ -877,8 +1007,172 @@ async def test_resolve_quantities_pieces_unit_keeps_quantity(
 
     assert items[0].status == "valid"
     assert items[0].quantity == 485
-    assert items[0].dimensions is None
+    assert items[0].dimensions == {"length_mm": 3000}
+    assert items[0].dimensions_label == "3 м"
+    assert items[0].warnings == []
     assert items[0].source_quantity_m is None
+
+
+async def test_resolve_quantities_pcs_length_from_name(
+    session: AsyncSession,
+) -> None:
+    """Штучная строка порога: длина из буквы размера, даже если её нет в карточке."""
+    product = await _make_product(
+        session,
+        "ЮП-2630",
+        lengths=[(1800, None, False), (2700, None, True)],
+    )
+    await _bind_1c_code(session, product, "102")
+    items = _items([
+        _osv_row(
+            "102",
+            "Порог алюм. 033-01 К 0,9 м.п. серебро",
+            "шт",
+            12,
+        ),
+    ])
+
+    await _resolve_quantities(session, items)
+
+    item = items[0]
+    assert item.status == "valid"
+    assert item.quantity == 12
+    assert item.dimensions == {"length_mm": 900}
+    assert item.dimensions_label == "0,9 м"
+    assert item.warnings == [
+        "Длина 0,9 м не указана в карточке артикула (1,8 м, 2,7 м) — "
+        "строка импортируется по наименованию"
+    ]
+    assert item.errors == []
+
+
+async def test_resolve_quantities_pcs_length_in_card_has_no_warning(
+    session: AsyncSession,
+) -> None:
+    """Длина из наименования совпала с карточкой — строка без предупреждений."""
+    product = await _make_product(
+        session,
+        "ЮП-2630",
+        lengths=[(900, None, False), (2700, None, True)],
+    )
+    await _bind_1c_code(session, product, "102")
+    items = _items([
+        _osv_row("102", "Порог алюм. 033-01 К 0,9 серебро", "шт", 12),
+    ])
+
+    await _resolve_quantities(session, items)
+
+    assert items[0].status == "valid"
+    assert items[0].dimensions == {"length_mm": 900}
+    assert items[0].warnings == []
+
+
+async def test_resolve_quantities_pcs_raw_length_maps_to_normal(
+    session: AsyncSession,
+) -> None:
+    """2,75 у карточки с сырьевой 2750 — нормальная 2,7 и без предупреждения."""
+    product = await _make_product(
+        session, "POROG-RAW", lengths=[(2700, 2750, True)]
+    )
+    await _bind_1c_code(session, product, "20935")
+    items = _items([_osv_row("20935", "Порог алюм. 2,75 серебро", "шт", 12)])
+
+    await _resolve_quantities(session, items)
+
+    item = items[0]
+    assert item.status == "valid"
+    assert item.dimensions == {"length_mm": 2700}
+    assert item.dimensions_label == "2,7 м"
+    assert item.warnings == []
+
+
+async def test_resolve_quantities_pcs_without_marker_uses_card_length(
+    session: AsyncSession,
+) -> None:
+    """Без буквы размера штучная строка берёт длину карточки, как метры (#490)."""
+    product = await _make_product(session, "UGOLOK", lengths=[(2700, None, True)])
+    await _bind_1c_code(session, product, "20935")
+    items = _items([
+        _osv_row("20935", "Уголок 10*10 алюминий", "шт", 485),
+    ])
+
+    await _resolve_quantities(session, items)
+
+    item = items[0]
+    assert item.status == "valid"
+    assert item.quantity == 485
+    assert item.dimensions == {"length_mm": 2700}
+    assert item.dimensions_label == "2,7 м"
+    assert item.warnings == [
+        "Длина взята из карточки: 2,7 м (в наименовании не указана)"
+    ]
+
+
+async def test_resolve_quantities_pcs_without_marker_and_primary_is_warning(
+    session: AsyncSession,
+) -> None:
+    """Несколько длин без основной: штуки импортируются, но без длины."""
+    product = await _make_product(
+        session,
+        "POROG",
+        lengths=[(900, None, False), (2700, None, False)],
+    )
+    await _bind_1c_code(session, product, "20935")
+    items = _items([
+        _osv_row("20935", "Порог алюм. 033-01 серебро", "шт", 12),
+    ])
+
+    await _resolve_quantities(session, items)
+
+    item = items[0]
+    assert item.status == "valid"
+    assert item.quantity == 12
+    assert item.dimensions is None
+    assert item.warnings == [
+        "В наименовании не указана длина, у артикула несколько длин — "
+        "строка импортируется без длины"
+    ]
+    assert item.errors == []
+
+
+async def test_resolve_quantities_pcs_card_without_lengths_is_warning(
+    session: AsyncSession,
+) -> None:
+    """У карточки нет длин: штучная строка импортируется без длины."""
+    product = await _make_product(session, "POROG-EMPTY")
+    await _bind_1c_code(session, product, "20935")
+    items = _items([
+        _osv_row("20935", "Порог алюм. 033-01 серебро", "шт", 12),
+    ])
+
+    await _resolve_quantities(session, items)
+
+    item = items[0]
+    assert item.status == "valid"
+    assert item.dimensions is None
+    assert item.warnings == [
+        "Длина не определена: в наименовании её нет, у артикула она не задана "
+        "— строка импортируется без длины"
+    ]
+
+
+async def test_resolve_quantities_finds_binding_for_padded_1c_code(
+    session: AsyncSession,
+) -> None:
+    """Привязка находится и по ``14471``, и по написанию с ведущими нулями."""
+    product = await _make_product(session, "YU-347", lengths=[(2700, None, True)])
+    await _bind_1c_code(session, product, "14471")
+    items = _items([
+        _osv_row("0000014471", "Профиль (ЮП-347) 2,7", "м", 5400),
+    ])
+
+    await _resolve_quantities(session, items)
+
+    item = items[0]
+    assert item.status == "valid"
+    assert item.product_id == product.id
+    assert item.quantity == 2000
+    assert item.errors == []
 
 
 @pytest.mark.parametrize("unit", ["м", "м.п.", "п.м.", "мп"])
@@ -1380,6 +1674,53 @@ async def test_preview_osv_counts_skipped_and_filters_by_it(
     filtered = resp.json()
     assert filtered["items_total"] == 1
     assert [item["source_code"] for item in filtered["items"]] == ["16944"]
+
+
+async def test_preview_osv_counts_zero_balance_as_skipped(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Нулевой остаток виден пропуском в предпросмотре и не создаёт проводку."""
+    await _make_section(session, "RAW_STOCK", "Склад сырья")
+    excel = _make_osv_workbook([
+        _osv_row(
+            "33",
+            "Порог алюм. 033-01 К 0,9 серебро",
+            "шт",
+            None,
+            debit_quantity=295,
+            credit_quantity=295,
+        ),
+    ])
+
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={"file": ("osv.xlsx", excel, XLSX_MIME)},
+        data={"sheet_index": "0"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["summary"] == {
+        "total": 1,
+        "valid": 0,
+        "skipped": 1,
+        "invalid": 0,
+        "quantity_total": 0,
+    }
+    item = body["items"][0]
+    assert item["status"] == "skipped"
+    assert item["skip_reason"] == "zero_balance"
+    assert item["skip_reason_label"] == "Нулевой остаток"
+    assert item["errors"] == []
+
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={"file": ("osv.xlsx", excel, XLSX_MIME)},
+        data={"sheet_index": "0", "filter_status": "skipped"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items_total"] == 1
 
 
 async def test_lookup_1c_matches_pf_variant_of_suffixed_sku(

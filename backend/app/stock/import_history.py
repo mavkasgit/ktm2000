@@ -76,6 +76,8 @@ class BatchView:
     total_rows: int
     imported_rows: int
     skipped_rows: int
+    #: Из ``skipped_rows`` — нулевые остатки ОСВ (#492); у ручного шаблона 0.
+    skipped_zero_balance: int
     created_at: datetime
     created_by_name: str | None
     rolled_back_at: datetime | None
@@ -222,6 +224,7 @@ def _batch_view(
         total_rows=batch.total_rows,
         imported_rows=batch.imported_rows,
         skipped_rows=batch.skipped_rows,
+        skipped_zero_balance=(batch.summary or {}).get("skipped_zero_balance", 0),
         created_at=batch.created_at,
         created_by_name=batch.created_by_name,
         rolled_back_at=batch.rolled_back_at,
