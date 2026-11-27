@@ -204,6 +204,10 @@ GitHub Actions — фоновый второй взгляд. Готовност�
   исходник и путь вызовов. Grep/read — для точечной строки или когда
   инструмента нет в сессии.
 - Внешние best practices — **Exa MCP** (`web_search_exa` / `web_search`).
+- Машинное окружение — toolchain и версии CLI, профиль PowerShell, кириллица в
+  выводе shell, обновление инструментов — `../harness/docs/INDEX.md`
+  §«Операционные ветки» (mise → `stack/toolchain.md` §7; профиль и глобальный
+  mise-конфиг генерируются harness).
 - Полная матрица MCP → [`docs/agent-registry.md`](docs/agent-registry.md).
 - После значимых правок кода: `npx @colbymchenry/codegraph sync`. Индекс стареет незаметно — ответы по коду, изменённому после последнего `sync`, берутся из устаревшей выдачи, и это выглядит как правда. Сверить возраст: индекс лежит в `.codegraph/codegraph.db`, если он старше последнего коммита — `sync` ещё не делали.
 - Индекс CodeGraph локальный и не в git (`.codegraph/` в `.gitignore`), поэтому на новой машине/клоне — один раз `npx @colbymchenry/codegraph init -y`, и только потом `sync`. `sync` не инициализирует: без индекса он падает с `CodeGraph not initialized`.
