@@ -59,6 +59,7 @@ const batch = (overrides: Partial<StockImportBatch> = {}): StockImportBatch => (
   total_rows: 2,
   imported_rows: 2,
   skipped_rows: 0,
+  skipped_zero_balance: 0,
   created_at: "2026-09-28T14:02:00Z",
   created_by_name: "Иван",
   rolled_back_at: null,
@@ -159,6 +160,18 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("ImportHistoryPanel — счётчики пропусков", () => {
+  it("показывает нулевой остаток из общего числа пропущенных", async () => {
+    vi.mocked(getStockImportBatches).mockResolvedValue([
+      batch({ imported_rows: 517, skipped_rows: 574, skipped_zero_balance: 574 }),
+    ]);
+
+    renderPanel();
+
+    expect(await screen.findByText(/нулевой остаток: 574/)).toBeTruthy();
+  });
 });
 
 describe("ImportHistoryPanel — «посмотреть»", () => {

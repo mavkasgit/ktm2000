@@ -39,6 +39,8 @@ export type StockImportBatch = {
   total_rows: number;
   imported_rows: number;
   skipped_rows: number;
+  /** Из `skipped_rows` — нулевые остатки ОСВ; у ручного шаблона 0. */
+  skipped_zero_balance?: number;
   created_at: string;
   created_by_name: string | null;
   rolled_back_at: string | null;

@@ -272,6 +272,9 @@ export function ImportHistoryPanel() {
                       <td className={cn(CELL, "tabular-nums whitespace-nowrap")}>
                         {batch.imported_rows}
                         {batch.skipped_rows > 0 ? ` / ${batch.skipped_rows} проп.` : ""}
+                        {batch.skipped_zero_balance
+                          ? ` (нулевой остаток: ${batch.skipped_zero_balance})`
+                          : ""}
                       </td>
                       <td className={cn(CELL, "whitespace-nowrap")}>{statusLabel(batch)}</td>
                       <td className={CELL}>

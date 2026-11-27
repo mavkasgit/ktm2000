@@ -46,6 +46,8 @@ class ImportBatchOut(BaseModel):
     total_rows: int
     imported_rows: int
     skipped_rows: int
+    #: Из ``skipped_rows`` — нулевые остатки ОСВ (#492).
+    skipped_zero_balance: int
     created_at: str
     created_by_name: str | None
     rolled_back_at: str | None
@@ -113,6 +115,7 @@ def _batch_out(view: history.BatchView) -> ImportBatchOut:
         total_rows=view.total_rows,
         imported_rows=view.imported_rows,
         skipped_rows=view.skipped_rows,
+        skipped_zero_balance=view.skipped_zero_balance,
         created_at=view.created_at.isoformat(),
         created_by_name=view.created_by_name,
         rolled_back_at=view.rolled_back_at.isoformat() if view.rolled_back_at else None,

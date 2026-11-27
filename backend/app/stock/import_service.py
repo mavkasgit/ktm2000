@@ -42,6 +42,8 @@ from app.services.excel_import import parse_row_selection
 from app.services.import_column_resolver import detect_header_row, resolve_columns
 from app.services.import_normalization import (
     SkuEntry,
+    canonicalize_1c_code,
+    canonicalize_1c_code_sql,
     match_sku_cell,
     normalize_sku,
     normalize_sku_sql,
@@ -166,7 +168,8 @@ class SheetSummary:
     valid: int
     invalid: int
     quantity_total: float
-    # Разобранные строки реестра исключений (#464) — не ошибки и не импорт.
+    # Разобранные строки (#464, нулевой остаток ОСВ #492) — не ошибки и не
+    # импорт: причина в `skip_reason`, счётчик — в `summary.skipped`.
     skipped: int = 0
 
 
@@ -1099,13 +1102,29 @@ async def _resolve_1c_code_bindings(
     if not rows:
         return []
 
-    codes = {item.source_code for item in rows}
-    bindings: dict[str, Product1CCode] = {
-        binding.code: binding
-        for binding in (
-            await db.scalars(select(Product1CCode).where(Product1CCode.code.in_(codes)))
-        ).all()
+    codes = {
+        canonical
+        for item in rows
+        if (canonical := canonicalize_1c_code(item.source_code))
     }
+    found_bindings = (
+        await db.scalars(
+            select(Product1CCode).where(
+                canonicalize_1c_code_sql(Product1CCode.code).in_(codes)
+            )
+        )
+    ).all()
+    bindings: dict[str, Product1CCode] = {}
+    ambiguous_codes: set[str] = set()
+    for binding in found_bindings:
+        canonical = canonicalize_1c_code(binding.code)
+        if canonical is None:
+            continue
+        known = bindings.setdefault(canonical, binding)
+        if known.product_id != binding.product_id:
+            # Один код в двух написаниях привязан к разным артикулам —
+            # дефект справочника: строку не угадываем и код не изучаем.
+            ambiguous_codes.add(canonical)
     groups = await load_alias_groups(db)
 
     def group_key(product_id: int) -> int:
@@ -1125,9 +1144,15 @@ async def _resolve_1c_code_bindings(
     pending: list[Product1CCode] = []
     free_rows: dict[str, list[RemainderItem]] = {}
     for item in rows:
-        code = item.source_code
+        code = canonicalize_1c_code(item.source_code)
         product_id = item.product_id
         if code is None or product_id is None:  # отобрано выше; защита от мутации
+            continue
+        if code in ambiguous_codes:
+            item.status = "invalid"
+            item.errors.append(
+                f"Код {code} привязан к разным артикулам в справочнике"
+            )
             continue
         binding = bindings.get(code)
         if binding is None:
@@ -1214,9 +1239,11 @@ async def apply_remainders_import(
        or ``item.target_section_id`` (fallback to ``location_id``).
        If ``item.completed_stages`` is non-empty, appends operation names
        to the transaction comment.
-    4а. Строки со статусом ``skipped`` (реестр исключений #464) не грузятся и
-       не попадают в ``errors``: это разобранные позиции, а не дефект файла.
-       Их число уходит в ``skipped_rows`` батча и ``summary.skipped_registry``.
+    4а. Строки со статусом ``skipped`` — не импорт: нулевой остаток ОСВ
+       (``zero_balance``, #492) и позиции, разобранные реестром исключений
+       (#464). В ``errors`` они не попадают: это не дефект файла. Общее число —
+       ``skipped_rows`` батча; по причинам — ``summary.skipped_zero_balance``
+       и ``summary.skipped_registry``.
     5. Commits the database session.
     6. Writes the batch header and per-row records into the import history
        (``stock_import_batches`` / ``stock_import_rows``, ADR-0052): the
@@ -1412,6 +1439,9 @@ async def apply_remainders_import(
         imported_count += 1
 
     # --- История импорта (ADR-0052) ------------------------------------------
+    zero_balance_skipped = sum(
+        1 for item in skipped_items if item.skip_reason == SKIP_REASON_ZERO_BALANCE
+    )
     batch = StockImportBatch(
         action_id=action.id,
         file_id=file_id,
@@ -1422,13 +1452,16 @@ async def apply_remainders_import(
         sheet_name=sheet_name,
         total_rows=len(items),
         imported_rows=imported_count,
-        # Пропущенные — и ошибки, и разобранные реестром (#464): «не загружено»
-        # у них общее, а причина видна в предпросмотре и в summary.
+        # Пропущенные — и ошибки, и разобранные строки (#464, #492): «не
+        # загружено» у них общее, а причина видна в предпросмотре и в summary.
+        # `skipped_registry` — строки, объяснённые каталогом; `skipped_zero_balance`
+        # — нулевые остатки ОСВ.
         skipped_rows=len(invalid_items) + len(skipped_items),
         summary={
             "quality_state": quality_state.value,
             "source": "clipboard" if file_id is None else "excel",
-            "skipped_registry": len(skipped_items),
+            "skipped_registry": len(skipped_items) - zero_balance_skipped,
+            "skipped_zero_balance": zero_balance_skipped,
         },
         created_by=user.id if user else None,
         created_by_name=(
@@ -1440,9 +1473,9 @@ async def apply_remainders_import(
 
     for item in items:
         if item.status == "skipped":
-            # Разобранная реестром строка (#464) — не вердикт импорта: она не
-            # грузилась и не ошибка. Её число несут `skipped_rows` и
-            # `summary.skipped_registry`, а `valid`/`invalid` остаются тем, что
+            # Пропуск (#464, нулевой остаток #492) — не вердикт импорта: строка
+            # не грузилась и не ошибка. Её число несут `skipped_rows` и
+            # `summary.skipped_*`, а `valid`/`invalid` остаются тем, что
             # импорт действительно рассматривал.
             continue
         row_quality = _resolve_item_quality_state(
@@ -1685,6 +1718,10 @@ def _preview_section_label(
 # таблице достаточно одного короткого ответа (CODING_STANDARDS п.10–11).
 SKIP_LABEL_IN_REGISTRY = "есть в исключениях"
 SKIP_LABEL_NO_MATCH = "нет совпадения"
+#: Нулевой остаток ОСВ: строка с оборотами, но без остатка. Не реестр
+#: исключений — позиция наша, проводки просто не будет (ADR-0077).
+SKIP_REASON_ZERO_BALANCE = "zero_balance"
+SKIP_LABEL_ZERO_BALANCE = "Нулевой остаток"
 
 
 def _preview_errors_label(item: RemainderItem) -> str:
