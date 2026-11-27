@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-26T15:33:20+00:00",
-  "db_fingerprint": "191f0f27cd9d5498",
+  "generated_at": "2026-11-27T06:38:59+00:00",
+  "db_fingerprint": "eb6b90d7f0ebf178",
   "review_fingerprint": "309fa2e391ef09aa",
   "db": {
     "container": "ktm2000-postgres-prod",
@@ -23172,17 +23172,17 @@
       ],
       "lengths": [
         {
-          "length_mm": 2700,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 2700,
+      "length_primary_mm": 3000,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "2700": {
+        "3000": {
           "auto": null,
           "manual": 96
         }
@@ -23204,7 +23204,7 @@
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
-          "2700": {
+          "3000": {
             "auto": null,
             "manual": 96
           }
@@ -23214,7 +23214,7 @@
         {
           "dimension_type_id": 1,
           "is_required": true,
-          "default_value": 2700
+          "default_value": 3000
         }
       ],
       "notes": "",
@@ -23306,17 +23306,17 @@
       ],
       "lengths": [
         {
-          "length_mm": 2700,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 2700,
+      "length_primary_mm": 3000,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "2700": {
+        "3000": {
           "auto": null,
           "manual": 90
         }
@@ -23338,7 +23338,7 @@
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
-          "2700": {
+          "3000": {
             "auto": null,
             "manual": 90
           }
@@ -23348,7 +23348,7 @@
         {
           "dimension_type_id": 1,
           "is_required": true,
-          "default_value": 2700
+          "default_value": 3000
         }
       ],
       "notes": "",
@@ -23440,17 +23440,17 @@
       ],
       "lengths": [
         {
-          "length_mm": 2700,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 2700,
+      "length_primary_mm": 3000,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "2700": {
+        "3000": {
           "auto": null,
           "manual": 67
         }
@@ -23472,7 +23472,7 @@
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
-          "2700": {
+          "3000": {
             "auto": null,
             "manual": 67
           }
@@ -23482,7 +23482,7 @@
         {
           "dimension_type_id": 1,
           "is_required": true,
-          "default_value": 2700
+          "default_value": 3000
         }
       ],
       "notes": "",
@@ -23574,17 +23574,17 @@
       ],
       "lengths": [
         {
-          "length_mm": 2500,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 2500,
+      "length_primary_mm": 3000,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "2500": {
+        "3000": {
           "auto": null,
           "manual": 48
         }
@@ -23606,7 +23606,7 @@
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
-          "2500": {
+          "3000": {
             "auto": null,
             "manual": 48
           }
@@ -23616,7 +23616,7 @@
         {
           "dimension_type_id": 1,
           "is_required": true,
-          "default_value": 2500
+          "default_value": 3000
         }
       ],
       "notes": "",
@@ -23736,17 +23736,17 @@
       ],
       "lengths": [
         {
-          "length_mm": 2700,
-          "raw_length_mm": null,
-          "is_primary": false
+          "length_mm": 3000,
+          "raw_length_mm": 3050,
+          "is_primary": true
         }
       ],
-      "length_primary_mm": 2700,
+      "length_primary_mm": 3000,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "manual",
       "quantity_per_hanger": {
-        "2700": {
+        "3000": {
           "auto": null,
           "manual": 102
         }
@@ -23768,7 +23768,7 @@
       "attributes_json": {
         "hanger_mode": "manual",
         "quantity_per_hanger": {
-          "2700": {
+          "3000": {
             "auto": null,
             "manual": 102
           }
@@ -23778,7 +23778,7 @@
         {
           "dimension_type_id": 1,
           "is_required": true,
-          "default_value": 2700
+          "default_value": 3000
         }
       ],
       "notes": "",
