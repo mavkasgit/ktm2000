@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-11-27T07:26:04+00:00",
-  "db_fingerprint": "479cc00c99256104",
+  "generated_at": "2026-11-27T12:54:50+00:00",
+  "db_fingerprint": "d63badbc3f7579c6",
   "review_fingerprint": "309fa2e391ef09aa",
   "db": {
     "container": "ktm2000-postgres-prod",
@@ -1853,6 +1853,16 @@
       "dimension_state": "length",
       "aliases": [],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": null,
@@ -3899,6 +3909,21 @@
       ],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -4507,7 +4532,7 @@
       "lengths": [
         {
           "length_mm": 2500,
-          "raw_length_mm": null,
+          "raw_length_mm": 2550,
           "is_primary": true
         }
       ],
@@ -4551,7 +4576,7 @@
           "default_value": 2500
         }
       ],
-      "notes": "Новый профиль из КПЗ; длина под вопросом; новый префикс КП; норма на подвес — из «Экранчика», не проверена",
+      "notes": "Новый профиль из КПЗ; длина под вопросом; новый префикс КП; норма на подвес — из «Экранчика», не проверена\nСырьевая длина 2,55 м — из наименования ОСВ 1С 27.11.2026",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -4649,6 +4674,16 @@
         "Кр.труба 25мм"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3080,
@@ -4807,6 +4842,16 @@
         "У2020"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3080,
@@ -4988,6 +5033,21 @@
       ],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -5161,6 +5221,11 @@
         "У1010"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2000,
           "raw_length_mm": null,
@@ -5355,6 +5420,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3080,
           "is_primary": true
@@ -5535,6 +5610,21 @@
       ],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2780,
           "is_primary": true
@@ -5689,6 +5779,21 @@
         "3329"
       ],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": null,
@@ -6204,6 +6309,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3080,
           "is_primary": true
@@ -6528,6 +6643,21 @@
       ],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -6842,6 +6972,21 @@
       ],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -7136,6 +7281,11 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2740,
           "is_primary": true
@@ -7280,6 +7430,16 @@
         "3328"
       ],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 1800,
           "raw_length_mm": null,
@@ -7617,9 +7777,24 @@
       ],
       "lengths": [
         {
-          "length_mm": 2500,
+          "length_mm": 900,
           "raw_length_mm": null,
           "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2500,
+          "raw_length_mm": null,
+          "is_primary": true
         },
         {
           "length_mm": 2510,
@@ -8124,6 +8299,26 @@
         "389"
       ],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2000,
           "raw_length_mm": null,
@@ -9676,6 +9871,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 1800,
           "raw_length_mm": null,
           "is_primary": false
@@ -10592,7 +10797,7 @@
       "lengths": [
         {
           "length_mm": 2700,
-          "raw_length_mm": 2750,
+          "raw_length_mm": 2760,
           "is_primary": true
         }
       ],
@@ -10638,7 +10843,7 @@
           "default_value": 2750
         }
       ],
-      "notes": "",
+      "notes": "Сырьевая длина 2,76 м — из наименования ОСВ 1С 27.11.2026",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -11181,9 +11386,24 @@
       ],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2780,
-          "is_primary": false
+          "is_primary": true
         }
       ],
       "length_primary_mm": 2700,
@@ -11494,6 +11714,11 @@
         "320"
       ],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2780,
@@ -11838,6 +12063,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": false
@@ -12006,6 +12241,16 @@
         "481"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2750,
@@ -12514,6 +12759,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2780,
           "is_primary": true
@@ -12670,6 +12925,16 @@
         "3418"
       ],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 1800,
           "raw_length_mm": null,
@@ -13432,6 +13697,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 1800,
           "raw_length_mm": null,
           "is_primary": false
@@ -14037,6 +14312,21 @@
         "1515"
       ],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2750,
@@ -15831,7 +16121,7 @@
       "lengths": [
         {
           "length_mm": 2500,
-          "raw_length_mm": 2500,
+          "raw_length_mm": 2540,
           "is_primary": false
         }
       ],
@@ -15875,7 +16165,7 @@
           "default_value": 2500
         }
       ],
-      "notes": "Нет чертежа",
+      "notes": "Нет чертежа\nСырьевая длина 2,54 м — из наименования ОСВ 1С 27.11.2026",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -15968,7 +16258,7 @@
       "lengths": [
         {
           "length_mm": 2500,
-          "raw_length_mm": 2500,
+          "raw_length_mm": 2550,
           "is_primary": false
         }
       ],
@@ -15984,8 +16274,8 @@
       },
       "n_per_hanger": 33,
       "n_per_hanger_manual": 33,
-      "n_per_hanger_auto": 34,
-      "n_mismatch": true,
+      "n_per_hanger_auto": 33,
+      "n_mismatch": false,
       "photo_full": "products/ЮП-3690_full.jpg",
       "photo_thumb": "products/ЮП-3690_thumb.jpg",
       "photo_full_exists": true,
@@ -16012,7 +16302,7 @@
           "default_value": 2500
         }
       ],
-      "notes": "Нет чертежа",
+      "notes": "Нет чертежа\nСырьевая длина 2,55 м — из наименования ОСВ 1С 27.11.2026",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -16072,7 +16362,6 @@
         "photo-origin:own",
         "photo-verdict:verified_best",
         "perimeter:чертёж",
-        "n-mismatch",
         "confidence:98",
         "status:confirmed"
       ],
@@ -16106,6 +16395,21 @@
         "324"
       ],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2750,
@@ -16566,6 +16870,11 @@
           "length_mm": 2700,
           "raw_length_mm": 2780,
           "is_primary": true
+        },
+        {
+          "length_mm": 3000,
+          "raw_length_mm": null,
+          "is_primary": false
         }
       ],
       "length_primary_mm": 2700,
@@ -17186,6 +17495,16 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3050,
           "is_primary": true
@@ -17637,8 +17956,13 @@
       ],
       "lengths": [
         {
-          "length_mm": 2000,
+          "length_mm": 1000,
           "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": 2080,
           "is_primary": true
         },
         {
@@ -17697,7 +18021,7 @@
           "default_value": 2000
         }
       ],
-      "notes": "Уголок ГОСТ",
+      "notes": "Уголок ГОСТ\nСырьевая длина 2,08 м — из наименования ОСВ 1С 27.11.2026",
       "source": "excel_catalog_import",
       "processing_flags": [],
       "composition": [],
@@ -18030,6 +18354,21 @@
       ],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -18192,8 +18531,28 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2550,
           "raw_length_mm": 2750,
+          "is_primary": true
+        },
+        {
+          "length_mm": 2700,
+          "raw_length_mm": null,
           "is_primary": false
         }
       ],
@@ -18336,8 +18695,28 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2500,
           "raw_length_mm": 2750,
+          "is_primary": true
+        },
+        {
+          "length_mm": 2700,
+          "raw_length_mm": null,
           "is_primary": false
         }
       ],
@@ -18623,8 +19002,28 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2500,
           "raw_length_mm": 2750,
+          "is_primary": true
+        },
+        {
+          "length_mm": 2700,
+          "raw_length_mm": null,
           "is_primary": false
         }
       ],
@@ -18773,6 +19172,21 @@
       "dimension_state": "length",
       "aliases": [],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2750,
@@ -18942,6 +19356,21 @@
       "dimension_state": "length",
       "aliases": [],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2750,
@@ -19400,9 +19829,24 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
-          "is_primary": false
+          "is_primary": true
         }
       ],
       "length_primary_mm": 2700,
@@ -20014,6 +20458,21 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -20165,9 +20624,24 @@
       "aliases": [],
       "lengths": [
         {
-          "length_mm": 2700,
+          "length_mm": 900,
           "raw_length_mm": null,
           "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2700,
+          "raw_length_mm": null,
+          "is_primary": true
         }
       ],
       "length_primary_mm": 2700,
@@ -20314,6 +20788,21 @@
       "dimension_state": "length",
       "aliases": [],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2750,
@@ -20898,9 +21387,24 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
-          "is_primary": false
+          "is_primary": true
         }
       ],
       "length_primary_mm": 2700,
@@ -21629,9 +22133,24 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
-          "is_primary": false
+          "is_primary": true
         }
       ],
       "length_primary_mm": 2700,
@@ -21935,6 +22454,21 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -22098,6 +22632,21 @@
       "dimension_state": "length",
       "aliases": [],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2750,
@@ -22587,6 +23136,21 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -22728,6 +23292,21 @@
       "dimension_state": "length",
       "aliases": [],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2750,
@@ -22873,6 +23452,21 @@
         "031"
       ],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2750,
@@ -23032,9 +23626,24 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
-          "is_primary": false
+          "is_primary": true
         }
       ],
       "length_primary_mm": 2700,
@@ -23177,6 +23786,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3050,
           "is_primary": true
@@ -23310,6 +23929,16 @@
         "Кр.труба 12мм"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3050,
@@ -23445,6 +24074,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3050,
           "is_primary": true
@@ -23578,6 +24217,16 @@
         "Кр.труба 28мм"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3050,
@@ -23740,6 +24389,16 @@
         "Кр.труба 8мм"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3050,
@@ -24444,6 +25103,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3050,
           "is_primary": true
@@ -24662,6 +25331,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3050,
           "is_primary": true
@@ -24877,6 +25556,16 @@
         "У4040"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3050,
@@ -25094,6 +25783,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3050,
           "is_primary": true
@@ -25309,6 +26008,16 @@
         "У5050"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3050,
@@ -26316,6 +27025,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3050,
           "is_primary": true
@@ -26500,6 +27219,16 @@
         "Кр.труба 25мм"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3050,
@@ -27152,6 +27881,16 @@
         "ЮП-2397"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3050,
@@ -28595,6 +29334,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3050,
           "is_primary": true
@@ -28822,6 +29571,16 @@
         "У1515"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3050,
@@ -29051,6 +29810,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3050,
           "is_primary": true
@@ -29278,6 +30047,16 @@
         "ЮП-2004"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3050,
@@ -29509,6 +30288,16 @@
       ],
       "lengths": [
         {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 3000,
           "raw_length_mm": 3050,
           "is_primary": true
@@ -29735,6 +30524,16 @@
         "Ш-15,6*8,8"
       ],
       "lengths": [
+        {
+          "length_mm": 1000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2000,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 3000,
           "raw_length_mm": 3050,
@@ -31928,6 +32727,21 @@
       "aliases": [],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -32763,6 +33577,21 @@
       ],
       "lengths": [
         {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
           "length_mm": 2700,
           "raw_length_mm": 2750,
           "is_primary": true
@@ -33298,6 +34127,21 @@
       "dimension_state": "length",
       "aliases": [],
       "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
         {
           "length_mm": 2700,
           "raw_length_mm": 2750,
@@ -34561,7 +35405,7 @@
       "lengths": [
         {
           "length_mm": 2700,
-          "raw_length_mm": null,
+          "raw_length_mm": 2750,
           "is_primary": true
         }
       ],
@@ -34594,7 +35438,7 @@
           "default_value": 2700
         }
       ],
-      "notes": "",
+      "notes": "Сырьевая длина 2,75 м — из наименования ОСВ 1С 27.11.2026",
       "source": "manual",
       "processing_flags": [],
       "composition": [],
@@ -35215,8 +36059,29 @@
       "anod_type": "",
       "dimension_state": "length",
       "aliases": [],
-      "lengths": [],
-      "length_primary_mm": null,
+      "lengths": [
+        {
+          "length_mm": 900,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1350,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 1800,
+          "raw_length_mm": null,
+          "is_primary": false
+        },
+        {
+          "length_mm": 2700,
+          "raw_length_mm": null,
+          "is_primary": true
+        }
+      ],
+      "length_primary_mm": 2700,
       "perimeter_mm": null,
       "mount_width_mm": null,
       "hanger_mode": "auto",
