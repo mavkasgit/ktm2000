@@ -275,6 +275,8 @@ const makeImportItem = (overrides: Partial<RemainderImportItem>): RemainderImpor
   length_raw: null,
   dimensions: null,
   dimensions_label: "—",
+  part: 0,
+  residue: false,
   ...overrides,
 });
 
@@ -523,7 +525,7 @@ describe("пропущенные строки и лист целиком", () =>
           sku: "BAD-001",
           quantity: null,
           status: "invalid",
-          errors: ["Остаток меньше одной штуки"],
+          errors: ["Длина 2,61 не совпадает с длинами артикула (2,5)"],
           target_section_id: 11,
         }),
       ],
@@ -852,6 +854,122 @@ describe("колонки предпросмотра ОСВ", () => {
   });
 });
 
+describe("остаток метров — отдельная короткая позиция (#495)", () => {
+  const tailWarning =
+    "Остаток 0,2 м после 2 шт × 2,5 м — импортируется одной штукой 0,2 м";
+
+  it("показывает две позиции строки: ключи уникальны, метры — только у источника", async () => {
+    vi.mocked(listSections).mockResolvedValue([
+      makeSection({ id: 11, code: "RAW", name: "Зона Альфа" }),
+    ]);
+    vi.mocked(getRemainderImportOperations).mockResolvedValue([]);
+    vi.mocked(getRemainderSheets).mockResolvedValue([
+      makeSheet({ index: 0, name: "Склад сырой", kind: "1c_osv", detected_section_id: 11 }),
+    ]);
+    const sourceRow = {
+      source_row_number: 2,
+      sku: "ЮП-3690",
+      product_name: "Плинтус алюм. SSZ-60мм",
+      source_code: "КП-3690-05",
+      source_name: "КП-3690-05 ПФ 2,5м",
+      source_unit: "м",
+      target_section_id: 11,
+      target_section_name: "Зона Альфа",
+      warnings: [tailWarning],
+    };
+    vi.mocked(previewRemaindersExcel).mockResolvedValue(
+      makePreview({
+        sheet_name: "Склад сырой",
+        source_kind: "1c_osv",
+        detected_section_id: 11,
+        detected_section_name: "Зона Альфа",
+        total_rows: 1,
+        // Счётчики — по позициям: одна строка файла, две позиции предпросмотра.
+        summary: { total: 2, valid: 2, skipped: 0, invalid: 0, quantity_total: 3 },
+        section_meta: [
+          {
+            source_row_number: 2,
+            status: "valid",
+            target_section_id: 11,
+            target_section_name: "Зона Альфа",
+          },
+          {
+            source_row_number: 2,
+            status: "valid",
+            target_section_id: 11,
+            target_section_name: "Зона Альфа",
+          },
+        ],
+        items_total: 2,
+        items: [
+          makeImportItem({
+            ...sourceRow,
+            part: 0,
+            quantity: 2,
+            source_quantity_m: 5.2,
+            dimensions: { length_mm: 2500 },
+            dimensions_label: "2,5 м",
+          }),
+          makeImportItem({
+            ...sourceRow,
+            part: 1,
+            residue: true,
+            quantity: 1,
+            source_quantity_m: null,
+            dimensions: { length_mm: 200 },
+            dimensions_label: "0,2 м",
+          }),
+        ],
+      }),
+    );
+
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { cleanup } = mountDialog();
+    try {
+      await selectFile();
+      await vi.waitFor(() => {
+        expect(document.body.textContent).toContain("Всего: 2");
+      });
+
+      // Одна строка файла — две позиции; номер строки у них общий, поэтому
+      // ключ React и `data-row-key` включают part, иначе вторая строка
+      // перезаписала бы первую.
+      const dataRows = screen.getAllByRole("row").slice(1);
+      expect(dataRows).toHaveLength(2);
+      expect(dataRows.map((row) => row.getAttribute("data-row-key"))).toEqual([
+        "2:0",
+        "2:1",
+      ]);
+      expect(consoleError).not.toHaveBeenCalledWith(
+        expect.stringContaining("same key"),
+        expect.anything(),
+      );
+
+      const [baseRow, residueRow] = tableRowsByHeader();
+      expect(baseRow.get("#")).toBe("2");
+      expect(residueRow.get("#")).toBe("2");
+      expect(baseRow.get("Кол-во, шт")).toBe("2");
+      expect(residueRow.get("Кол-во, шт")).toBe("1");
+      // «Метры» — что было в файле: у производной позиции их нет.
+      expect(baseRow.get("Метры")).toBe("5,2");
+      expect(residueRow.get("Метры")).toBe("—");
+      expect(baseRow.get("Длина")).toBe("2,5 м");
+      expect(residueRow.get("Длина")).toBe("0,2 м");
+
+      // Предупреждение одинаковое на обеих позициях — высота строк не
+      // разъезжается, причина видна у каждой позиции.
+      expect(screen.getAllByText(tailWarning)).toHaveLength(2);
+      // Пометка «остаток» — только у короткой позиции.
+      expect(screen.getAllByText("остаток")).toHaveLength(1);
+      expect(residueRow.get("Наименование")).toContain("остаток");
+      expect(baseRow.get("Наименование")).not.toContain("остаток");
+    } finally {
+      consoleError.mockRestore();
+      cleanup();
+    }
+  });
+});
+
 /** Таблица результата как список строк по именам колонок. */
 function tableRowsByHeader(): Map<string, string>[] {
   const rows = screen.getAllByRole("row");
@@ -921,7 +1039,7 @@ describe("импорт всех листов ОСВ", () => {
         ? makeImportResponse({ imported_count: 5 })
         : makeImportResponse({
             imported_count: 3,
-            errors: ["Строка 4: остаток меньше одной штуки"],
+            errors: ["Строка 4: длина 2,61 не совпадает с длинами артикула (2,5)"],
           }),
     );
 
@@ -958,7 +1076,7 @@ describe("импорт всех листов ОСВ", () => {
       expect(second.get("Лист")).toBe("Дробь");
       expect(second.get("Участок")).toContain("Зона Бета");
       expect(second.get("Импортировано")).toBe("3");
-      expect(second.get("Ошибки")).toContain("остаток меньше одной штуки");
+      expect(second.get("Ошибки")).toContain("не совпадает с длинами артикула");
     } finally {
       cleanup();
     }

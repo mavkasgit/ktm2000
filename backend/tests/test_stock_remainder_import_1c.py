@@ -903,18 +903,144 @@ async def test_resolve_quantities_profile_1212_without_length_is_error(
     ]
 
 
-async def test_resolve_quantities_less_than_one_piece_is_error(
+async def test_resolve_quantities_less_than_one_piece_is_short_position(
     session: AsyncSession,
 ) -> None:
-    product = await _make_product(session, "KANT-27", lengths=[(2700, None, True)])
+    """2,2 м при нормальной 2,5 м — одна короткая штука, не ошибка (#495)."""
+    product = await _make_product(session, "PLINTH-25", lengths=[(2500, None, True)])
     await _bind_1c_code(session, product, "20933")
-    items = _items([_osv_row("20933", "Кант 2,70м", "м", 2.5)])
+    items = _items([_osv_row("20933", "Плинтус 100 мм 2,5м", "м", 2.2)])
 
     await _resolve_quantities(session, items)
 
-    assert items[0].status == "invalid"
-    assert items[0].quantity is None
-    assert "Остаток меньше одной штуки" in items[0].errors
+    assert len(items) == 1
+    item = items[0]
+    assert item.status == "valid"
+    assert item.errors == []
+    assert item.quantity == 1
+    assert item.part == 0
+    assert item.residue is True
+    assert item.dimensions == {"length_mm": 2200}
+    assert item.dimensions_label == "2,2 м"
+    # Строка-источник: метры остаются «что было в файле».
+    assert item.source_quantity_m == pytest.approx(2.2)
+    assert item.warnings == [
+        "Остаток 2,2 м короче нормальной длины 2,5 м — импортируется одной "
+        "штукой 2,2 м"
+    ]
+
+
+async def test_resolve_quantities_tail_becomes_short_position(
+    session: AsyncSession,
+) -> None:
+    """5,2 м при 2,5 м — 2 шт нормальной длины + 1 шт × 0,2 м (#495)."""
+    product = await _make_product(session, "PLINTH-25", lengths=[(2500, None, True)])
+    await _bind_1c_code(session, product, "20933")
+    items = _items([_osv_row("20933", "Плинтус 100 мм 2,5м", "м", 5.2)])
+
+    await _resolve_quantities(session, items)
+
+    assert len(items) == 2
+    base, residue = items
+    warning = (
+        "Остаток 0,2 м после 2 шт × 2,5 м — импортируется одной штукой 0,2 м"
+    )
+    assert base.source_row_number == residue.source_row_number
+
+    assert base.status == "valid"
+    assert base.part == 0
+    assert base.residue is False
+    assert base.quantity == 2
+    assert base.dimensions == {"length_mm": 2500}
+    assert base.dimensions_label == "2,5 м"
+    assert base.source_quantity_m == pytest.approx(5.2)
+    assert base.warnings == [warning]
+
+    assert residue.status == "valid"
+    assert residue.part == 1
+    assert residue.residue is True
+    assert residue.quantity == 1
+    assert residue.dimensions == {"length_mm": 200}
+    assert residue.dimensions_label == "0,2 м"
+    # Производная позиция метров не несёт: это не «вторая строка файла».
+    assert residue.source_quantity_m is None
+    assert residue.warnings == [warning]
+    assert residue.errors == []
+
+
+async def test_resolve_quantities_tail_keeps_early_warnings_on_both_positions(
+    session: AsyncSession,
+) -> None:
+    """Длина из карточки + остаток: оба предупреждения на обеих позициях (#495).
+
+    Производная короткая позиция обязана унаследовать ранние предупреждения
+    строки, иначе её список разойдётся с основной, а предпросмотр считает
+    высоту строки по общему номеру строки.
+    """
+    product = await _make_product(session, "PLINTH-25", lengths=[(2500, None, True)])
+    await _bind_1c_code(session, product, "20933")
+    items = _items([_osv_row("20933", "Плинтус 100 мм", "м", 5.2)])
+
+    await _resolve_quantities(session, items)
+
+    card_warning = "Длина взята из карточки: 2,5 м (в наименовании не указана)"
+    residue_warning = (
+        "Остаток 0,2 м после 2 шт × 2,5 м — импортируется одной штукой 0,2 м"
+    )
+    assert len(items) == 2
+    base, residue = items
+    assert base.warnings == [card_warning, residue_warning]
+    assert residue.warnings == base.warnings
+    # Списки не общие: правка одной позиции не меняет соседнюю.
+    assert residue.warnings is not base.warnings
+
+
+async def test_resolve_quantities_exact_multiple_has_no_tail(
+    session: AsyncSession,
+) -> None:
+    """5,0 м при 2,5 м — ровно две штуки, второй позиции и предупреждения нет."""
+    product = await _make_product(session, "PLINTH-25", lengths=[(2500, None, True)])
+    await _bind_1c_code(session, product, "20933")
+    items = _items([_osv_row("20933", "Плинтус 100 мм 2,5м", "м", 5.0)])
+
+    await _resolve_quantities(session, items)
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.status == "valid"
+    assert item.quantity == 2
+    assert item.part == 0
+    assert item.residue is False
+    assert item.dimensions == {"length_mm": 2500}
+    assert item.warnings == []
+
+
+async def test_resolve_quantities_tail_below_millimetre_is_not_position(
+    session: AsyncSession,
+) -> None:
+    """Хвост меньше миллиметра округляется — второй позиции не появляется."""
+    product = await _make_product(session, "PLINTH-25", lengths=[(2500, None, True)])
+    await _bind_1c_code(session, product, "20933")
+    items = _items([_osv_row("20933", "Плинтус 100 мм 2,5м", "м", 5.0004)])
+
+    await _resolve_quantities(session, items)
+
+    assert len(items) == 1
+    assert items[0].quantity == 2
+    assert items[0].warnings == []
+
+
+async def test_resolve_quantities_residue_rounding_to_zero_creates_no_position(
+    session: AsyncSession,
+) -> None:
+    """0,4 мм в остатке — не позиция: строка не попадает в предпросмотр."""
+    product = await _make_product(session, "PLINTH-25", lengths=[(2500, None, True)])
+    await _bind_1c_code(session, product, "20933")
+    items = _items([_osv_row("20933", "Плинтус 100 мм 2,5м", "м", 0.0004)])
+
+    await _resolve_quantities(session, items)
+
+    assert items == []
 
 
 async def test_resolve_quantities_pieces_unit_keeps_quantity(
@@ -1181,6 +1307,63 @@ async def test_preview_osv_returns_source_fields_and_pieces(
     assert unsupported_unit["skip_reason"] == "not_mes"
     assert unsupported_unit["skip_reason_label"] == "нет совпадения"
     assert unsupported_unit["skip_note"] == "Единица измерения 'кг' не поддерживается"
+
+
+async def test_preview_osv_splits_tail_into_two_positions(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """5,2 м при 2,5 м: две позиции строки с общим номером и своими part/residue."""
+    section = await _make_section(session, "RAW_STOCK", "Склад сырья")
+    product = await _make_product(
+        session, "PLINTH-25", name="Плинтус алюм.", lengths=[(2500, None, True)]
+    )
+    await _bind_1c_code(session, product, "36905")
+    await session.commit()
+
+    excel = _make_osv_workbook(
+        [_osv_row("36905", "КП-3690-05 ПФ 2,5м", "м", 5.2)]
+    )
+
+    resp = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={"file": ("osv.xlsx", excel, XLSX_MIME)},
+        data={"sheet_index": "0"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    items = body["items"]
+    assert len(items) == 2
+    base, residue = items
+    warning = (
+        "Остаток 0,2 м после 2 шт × 2,5 м — импортируется одной штукой 0,2 м"
+    )
+
+    assert base["source_row_number"] == residue["source_row_number"]
+    assert base["part"] == 0
+    assert base["residue"] is False
+    assert base["quantity"] == 2
+    assert base["source_quantity_m"] == pytest.approx(5.2)
+    assert base["dimensions"] == {"length_mm": 2500}
+    assert base["dimensions_label"] == "2,5 м"
+    assert base["warnings"] == [warning]
+    assert base["target_section_id"] == section.id
+
+    assert residue["part"] == 1
+    assert residue["residue"] is True
+    assert residue["quantity"] == 1
+    assert residue["source_quantity_m"] is None
+    assert residue["dimensions"] == {"length_mm": 200}
+    assert residue["dimensions_label"] == "0,2 м"
+    assert residue["warnings"] == [warning]
+
+    # Счётчики — по позициям, строк файла по-прежнему одна.
+    assert body["summary"]["total"] == 2
+    assert body["summary"]["valid"] == 2
+    assert body["summary"]["quantity_total"] == pytest.approx(3)
+    # `total_rows` — строки листа (7 шапки + 2 заголовка + строка данных),
+    # а не число позиций: счётчики позиций живут в `summary`.
+    assert body["total_rows"] == 10
 
 
 async def test_preview_osv_search_finds_source_code(

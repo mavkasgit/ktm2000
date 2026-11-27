@@ -100,6 +100,19 @@ function hasSectionInFile(item: Pick<RemainderImportItem, "target_section_name">
 }
 
 /**
+ * Ключ позиции строки предпросмотра: строка файла + позиция (#495).
+ *
+ * ОСВ-строка с остатком метров даёт две позиции с одним номером строки
+ * (целые штуки и короткая штука), поэтому номер строки сам по себе — не
+ * уникальный ключ React.
+ */
+function getImportItemKey(
+  item: Pick<RemainderImportItem, "source_row_number" | "part">,
+): string {
+  return `${item.source_row_number}:${item.part}`;
+}
+
+/**
  * Истёк серверный токен источника (#472): сервер отвечает 410, и файл нужно
  * отправить заново. Это не ошибка листа — повтор прозрачен для оператора.
  */
@@ -305,7 +318,7 @@ type PreviewRowProps = {
    * Считается в обеих ветках политики #489; без флага — `null`.
    */
   predictedHeight: number | null;
-  onToggle: (rowNumber: number) => void;
+  onToggle: (rowKey: string) => void;
   onQualityChange: (rowNumber: number, state: QualityState) => void;
   onSectionChange: (rowNumber: number, sectionId: number | null) => void;
 };
@@ -339,7 +352,11 @@ const PreviewRow = memo(function PreviewRow({
   onQualityChange,
   onSectionChange,
 }: PreviewRowProps) {
-  const rowKey = item.source_row_number;
+  const rowKey = getImportItemKey(item);
+  // Номер строки — ключ оверрайдов качества/участка: обе позиции строки
+  // наследуют выбор оператора (#495). Ключ позиции — только для React и
+  // разворота сырых ячеек.
+  const rowNumber = item.source_row_number;
   const isSkipped = item.status === "skipped";
   const isInvalid = item.status === "invalid";
   const isInteractive = item.status === "valid";
@@ -390,7 +407,19 @@ const PreviewRow = memo(function PreviewRow({
           className={`px-1.5 py-0.5 ${previewNameCellClass(nameWraps)} ${item.product_name ? "text-foreground" : "text-muted-foreground"}`}
           title={item.source_name ?? item.product_name ?? undefined}
         >
-          {item.product_name ?? item.source_name ?? "—"}
+          <span className="flex items-start gap-1">
+            <span className={`min-w-0 ${previewNameCellClass(nameWraps)}`}>
+              {item.product_name ?? item.source_name ?? "—"}
+            </span>
+            {item.residue ? (
+              <span
+                className="shrink-0 rounded-sm border border-amber-200 bg-amber-50/70 px-1 text-[9px] font-medium leading-4 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-400"
+                title="Короткая штука из остатка метров"
+              >
+                остаток
+              </span>
+            ) : null}
+          </span>
         </td>
         <td className="px-1.5 py-0.5 font-semibold text-foreground tabular-nums text-right">
           {fmtQty(item.quantity)}
@@ -429,7 +458,7 @@ const PreviewRow = memo(function PreviewRow({
           {isInteractive ? (
             <Select
               value={qualityState}
-              onValueChange={(value) => onQualityChange(rowKey, value as QualityState)}
+              onValueChange={(value) => onQualityChange(rowNumber, value as QualityState)}
             >
               <SelectTrigger
                 className={`h-6 w-full text-[10px] font-semibold border px-2 ${qualityBadgeClass(
@@ -472,7 +501,7 @@ const PreviewRow = memo(function PreviewRow({
             <SectionSelect
               sections={sections}
               value={sectionOverride ?? item.target_section_id ?? null}
-              onValueChange={(sectionId) => onSectionChange(rowKey, sectionId)}
+              onValueChange={(sectionId) => onSectionChange(rowNumber, sectionId)}
               placeholder="Выберите участок"
               className="h-6 w-full text-[10px]"
             />
@@ -1260,7 +1289,7 @@ export function ImportRemaindersDialog({
   const hasExpandedPreviewRow = useMemo(
     () =>
       visibleItems.some(
-        (item) => item.raw_values.length > 0 && isRowExpanded(item.source_row_number),
+        (item) => item.raw_values.length > 0 && isRowExpanded(getImportItemKey(item)),
       ),
     [visibleItems, isRowExpanded],
   );
@@ -1268,11 +1297,11 @@ export function ImportRemaindersDialog({
   const renderPreviewRow = useCallback(
     (item: RemainderImportItem) => (
       <PreviewRow
-        key={item.source_row_number}
+        key={getImportItemKey(item)}
         item={item}
         sections={importableSections}
         operations={operations}
-        expanded={isRowExpanded(item.source_row_number)}
+        expanded={isRowExpanded(getImportItemKey(item))}
         qualityOverride={qualityStateOverrides[item.source_row_number] ?? null}
         sectionOverride={targetSectionOverrides[item.source_row_number] ?? null}
         // Наименование переносится только в раскладке полного текста: в

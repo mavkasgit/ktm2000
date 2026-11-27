@@ -450,6 +450,42 @@ async def test_preview_and_apply_semi_finished_row_to_finished_stock(
     ]
 
 
+async def test_preview_osv_tail_position_inherits_completed_operations(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Короткая позиция остатка наследует операции, участок и предупреждение."""
+    finished = await _seed_packaging_route(session)
+    product = await _make_product(session, "ALS-917")
+    session.add(Product1CCode(product_id=product.id, code="22063"))
+    await session.commit()
+
+    content = make_osv_workbook(
+        [osv_row("22063", "ALS-917-01 ПФ 2,7м", "м", 27.2)]
+    )
+    preview = await client.post(
+        "/api/stock/import/remainders/preview",
+        files={"file": ("osv.xlsx", content, XLSX_MIME)},
+        data={"sheet_index": "0"},
+    )
+    assert preview.status_code == 200, preview.text
+    items = preview.json()["items"]
+    assert len(items) == 2
+
+    base, residue = items
+    assert base["part"] == 0 and residue["part"] == 1
+    assert base["quantity"] == 10 and residue["quantity"] == 1
+    assert residue["residue"] is True
+    assert residue["warnings"] == base["warnings"]
+    assert len(base["warnings"]) == 1
+
+    for item in items:
+        assert item["status"] == "valid", item["errors"]
+        assert item["target_section_id"] == finished.id
+        assert {
+            stage["operation_code"] for stage in item["completed_stages"]
+        } >= {"SHOT", "ANOD_01", "PACK_SPUNBOND"}
+
+
 async def test_preview_osv_row_without_markers_has_empty_stages(
     client: AsyncClient, session: AsyncSession
 ) -> None:
