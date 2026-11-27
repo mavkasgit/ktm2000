@@ -47,17 +47,25 @@ describe("текст ячеек предпросмотра", () => {
     expect(previewErrorsWraps(skipped)).toBe(false);
   });
 
-  it("ошибки: у остальных только errors, предупреждения — в фильтр", () => {
+  it("ошибки: ячейка печатает warnings и errors, фильтр — только errors", () => {
     const withWarnings = item({
       warnings: ["предупреждение"],
       errors: ["ошибка импорта"],
     });
-    expect(previewErrorsCellText(withWarnings)).toBe("ошибка импорта");
-    expect(previewErrorsText(withWarnings)).toBe("предупреждение, ошибка импорта");
+    expect(previewErrorsCellText(withWarnings)).toBe("предупреждение, ошибка импорта");
+    expect(previewErrorsText(withWarnings)).toBe("ошибка импорта");
     expect(previewErrorsWraps(withWarnings)).toBe(true);
     expect(previewErrorsCellText(item())).toBe("—");
-    // Ячейка печатает только `errors`: «Ошибка» — подпись фильтра.
-    expect(previewErrorsCellText(item({ status: "invalid" }))).toBe("—");
     expect(previewErrorsText(item({ status: "invalid" }))).toBe("Ошибка");
+    expect(previewErrorsCellText(item({ status: "invalid" }))).toBe("Ошибка");
+  });
+
+  it("предупреждение о длине из карточки видно в ячейке", () => {
+    const warning = "Длина взята из карточки: 2,7 м (в наименовании не указана)";
+    const onlyWarning = item({ warnings: [warning] });
+
+    expect(previewErrorsCellText(onlyWarning)).toBe(warning);
+    // Фильтр «Ошибки» остаётся про invalid: предупреждение не ошибка.
+    expect(previewErrorsText(onlyWarning)).toBe("—");
   });
 });

@@ -737,6 +737,26 @@ async def test_resolve_quantities_without_name_length_uses_primary(
 
     assert items[0].quantity == 1000
     assert items[0].dimensions == {"length_mm": 2700}
+    assert items[0].warnings == [
+        "Длина взята из карточки: 2,7 м (в наименовании не указана)"
+    ]
+
+
+async def test_resolve_quantities_without_name_length_single_length_warns(
+    session: AsyncSession,
+) -> None:
+    product = await _make_product(session, "KANT-SINGLE", lengths=[(2500, None, False)])
+    await _bind_1c_code(session, product, "20933")
+    items = _items([_osv_row("20933", "Кант 26мм алюминий", "м", 5000)])
+
+    await _resolve_quantities(session, items)
+
+    assert items[0].status == "valid"
+    assert items[0].quantity == 2000
+    assert items[0].dimensions == {"length_mm": 2500}
+    assert items[0].warnings == [
+        "Длина взята из карточки: 2,5 м (в наименовании не указана)"
+    ]
 
 
 async def test_resolve_quantities_without_name_length_and_primary_is_error(

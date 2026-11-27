@@ -15,19 +15,19 @@ function skipReasonLabel(item: RemainderImportItem): string {
 }
 
 /**
- * Печатаемый текст колонки «Ошибки». Правило повторяет
- * `_preview_errors_label` (`stock/import_service.py`): пропуск — не ошибка, но
- * колонка объясняет строку, и по этой же подписи сервер фильтрует `?errors=`.
+ * Подпись фильтра «Ошибки». Правило повторяет `_preview_errors_label`
+ * (`stock/import_service.py`): пропуск — не ошибка, но колонка объясняет
+ * строку, и по этой же подписи сервер фильтрует `?errors=`. Предупреждения
+ * в фильтр не входят — иначе значения поповера не находили бы строк на сервере.
  */
 export function previewErrorsText(item: RemainderImportItem): string {
   if (item.status === "skipped") {
     return `Пропущено: ${skipReasonLabel(item)}`;
   }
-  const messages = [...item.warnings, ...item.errors];
-  if (messages.length === 0) {
+  if (item.errors.length === 0) {
     return item.status === "valid" ? "—" : "Ошибка";
   }
-  return messages.map(translateImportError).join(", ");
+  return item.errors.map(translateImportError).join(", ");
 }
 
 /**
@@ -49,12 +49,17 @@ export function previewNameCellText(item: RemainderImportItem): string {
 
 /**
  * Текст, который печатает ячейка «Ошибки»: у пропуска — подпись причины,
- * у остальных — только `errors` (предупреждения видны в подсказке/фильтре, но
- * в клетку не попадают). Модель считает строки по этому тексту.
+ * у остальных — предупреждения и ошибки. Предупреждение о длине, взятой из
+ * карточки, обязано быть видно в строке, а не только в подсказке. Модель
+ * считает строки по этому тексту.
  */
 export function previewErrorsCellText(item: RemainderImportItem): string {
   if (item.status === "skipped") return previewErrorsText(item);
-  return item.errors.map(translateImportError).join(", ") || "—";
+  const messages = [...item.warnings, ...item.errors];
+  if (messages.length === 0) {
+    return item.status === "valid" ? "—" : "Ошибка";
+  }
+  return messages.map(translateImportError).join(", ");
 }
 
 /**

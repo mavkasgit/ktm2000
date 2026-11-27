@@ -43,6 +43,7 @@ import { isOptimalColumnWidthsEnabled } from "../lib/optimalColumnWidthsFlag";
 import {
   previewErrorsCellText,
   previewErrorsText,
+  previewErrorsWraps,
   previewNameCellClass,
 } from "../lib/remainderPreviewErrors";
 import { PREVIEW_MIN_ROW_HEIGHT_PX } from "../lib/previewColumnWidths";
@@ -481,9 +482,13 @@ const PreviewRow = memo(function PreviewRow({
         </td>
         <td
           className={`px-1.5 py-0.5 font-medium leading-snug ${
-            isSkipped
-              ? "whitespace-nowrap text-amber-700 dark:text-amber-400"
-              : "whitespace-pre-line text-destructive"
+            previewErrorsWraps(item) ? "whitespace-pre-line" : "whitespace-nowrap"
+          } ${
+            isSkipped || (item.status === "valid" && item.warnings.length > 0)
+              ? "text-amber-700 dark:text-amber-400"
+              : item.status === "valid"
+                ? "text-muted-foreground"
+                : "text-destructive"
           }`}
         >
           {previewErrorsCellText(item)}

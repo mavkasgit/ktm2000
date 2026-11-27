@@ -1282,6 +1282,13 @@ async def resolve_1c_osv_quantities(
             continue
 
         length_mm = resolved.length_mm
+        if written_mm is None:
+            # Длины в строке 1С нет: штуки считаются по длине карточки.
+            # Показываем её оператору, чтобы расчёт не выглядел взятым из воздуха.
+            item.warnings.append(
+                f"Длина взята из карточки: {describe_length(length_mm)} "
+                "(в наименовании не указана)"
+            )
         pieces = int(Decimal(str(meters)) / (Decimal(length_mm) / Decimal(1000)))
         if pieces <= 0:
             item.errors.append("Остаток меньше одной штуки")
