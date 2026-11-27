@@ -66,6 +66,9 @@ VOCABULARY = ColorVocabulary(
     [
         # Суффикс сразу после артикула: ALS-917-01 → серебро.
         ("ALS-917-01 ПФ 2,7м", {"ALS-917"}, "ANOD_01", None, True),
+        # После #474 SKU без дефиса, 1С по-прежнему пишет ALS-1360-01.
+        ("ALS-1360-01 ПФ 2,5м", {"ALS1360"}, "ANOD_01", None, True),
+        ("ALS-798-05 ПФ 2,5м", {"ALS798"}, "ANOD_05", None, True),
         # Отдельная группа «– 02(золото)»: суффикс и слово совпадают.
         ("Уголок 15*15 3,0 – 02(золото)  ПФ", set(), "ANOD_02", None, True),
         # Слово и суффикс после артикула: чёрный.
@@ -253,6 +256,21 @@ async def test_semi_finished_row_gets_anodizing_prefix_and_finished_stock(
     assert "Спанбонд" in (item.completed_operations_raw or "")
     assert item.target_section_id == finished.id
     assert item.target_section_name == finished.name
+
+
+async def test_semi_finished_row_with_dashless_sku_and_dashed_name_is_valid(
+    session: AsyncSession,
+) -> None:
+    """#474: SKU в справочнике ``ALS1360``, 1С пишет ``ALS-1360-01``."""
+    finished = await _seed_packaging_route(session)
+    product = await _make_product(session, "ALS1360")
+    item = _item(1, "ALS-1360-01 ПФ 2,5м", product.id)
+
+    await resolve_1c_osv_completed_operations(session, [item])
+
+    assert item.status == "valid", item.errors
+    assert "Серебро" in (item.completed_operations_raw or "")
+    assert item.target_section_id == finished.id
 
 
 async def test_press_and_color_row_prefix_includes_press_operation(

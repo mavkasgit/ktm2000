@@ -93,9 +93,16 @@ def _longest_color_hits(
 def _suffix_codes(
     text: str, anchors: set[str], vocabulary: ColorVocabulary
 ) -> set[str]:
-    """Коды цветов из суффиксов ``-NN`` (только существующие ANOD_xx)."""
+    """Коды цветов из суффиксов ``-NN`` (только существующие ANOD_xx).
+
+    После #474 канон SKU — слитная форма (``ALS1360``), а 1С продолжает
+    писать дефисную (``ALS-1360-01``). Поэтому суффикс ищется и в исходном
+    наименовании, и в ``sku_loose``: иначе цвет исполнения терялся и ПФ-строка
+    становилась ошибкой «не удалось определить цвет».
+    """
     valid = set(vocabulary.color_names)
     codes: set[str] = set()
+    haystacks = {text, sku_loose(text)}
 
     for anchor in anchors:
         variants = {normalize_sku(anchor), sku_loose(anchor)} - {""}
@@ -103,10 +110,11 @@ def _suffix_codes(
             pattern = re.compile(
                 rf"(?<![\w-]){re.escape(variant)}-(\d{{2}})(?![\d,])"
             )
-            for match in pattern.finditer(text):
-                code = f"ANOD_{match.group(1)}"
-                if code in valid:
-                    codes.add(code)
+            for haystack in haystacks:
+                for match in pattern.finditer(haystack):
+                    code = f"ANOD_{match.group(1)}"
+                    if code in valid:
+                        codes.add(code)
 
     for match in _STANDALONE_SUFFIX_RE.finditer(text):
         code = f"ANOD_{match.group(1)}"
