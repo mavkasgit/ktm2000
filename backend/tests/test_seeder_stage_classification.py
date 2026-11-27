@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def _seed_sections_only(session: AsyncSession) -> dict[str, Section]:
-    """Seed the 11 default sections without their SectionOperations — those
+    """Seed the default sections without their SectionOperations — those
     are not needed for the route shape checks below."""
     sections_map = await seed_sections(session, build_plant_config().production.sections)
     return sections_map
@@ -93,9 +93,15 @@ async def test_seed_routes_marks_storage_sections_as_transit(session: AsyncSessi
         # No real RouteOperation rows for transit stages
         assert stage.operations == [], f"{code} transit should not have operations"
 
-    # Every production section must be present as a production stage
+    # Every production section из шагов маршрута must be present as a
+    # production stage. Участок справочника без шага (например, LAMINATION
+    # из #491 до появления маршрутов) стадии не получает.
+    routed_codes = {step["section_code"] for step in ROUTES[0]["steps"]}
     for code, section in sections_map.items():
         if is_storage_section(section):
+            continue
+        if code not in routed_codes:
+            assert code not in by_code, f"{code} has no route step but got a stage"
             continue
         assert code in by_code, f"Production section {code} missing production stage"
         stage = by_code[code]
