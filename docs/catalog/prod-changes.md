@@ -21,6 +21,7 @@
 | `#466-codes-1c` | 2026-11-26 | 13 арт., `product_1c_codes` | Сверка ОСВ: 13 кодов 1С не были привязаны (круглые трубы, уголки, полосы, Ш-профиль). Привязка через ORM: `PATCH /api/products` коды не принимает. | `backup_ktm2000_prod_2026-11-26_08-19-29.zip` | `backup_ktm2000_prod_2026-11-26_08-21-12.zip` | applied |
 | `#469-2083-37` | 2026-11-26 | 2 арт., `name`, `attributes.mount_width_mm` | Вопрос издания 2083/3328 (38×3,7 vs 36,9×3,3) оставляем открытым; рабочий размер — 37 мм по решению заказчика. | `backup_ktm2000_prod_2026-11-26_08-21-12.zip` | `backup_ktm2000_prod_2026-11-26_08-23-33.zip` | applied |
 | `#474-als-sku` | 2026-11-26 | 11 арт., `sku`, `aliases` | Канон ALS без дефиса: `ALS-####` → `ALS####` в артикуле и эквивалентах, отмена 083. Применено миграцией 089 при деплое (086→089); резервные копии — `pg_dump -Fc`. | `pre-089-20261126-182414.dump` | `post-089-20261126-182646.dump` | applied |
+| `#490-pipe-length-3000` | 2026-11-27 | 5 арт., `product_lengths`, `attributes.quantity_per_hanger` | 1С пишет «3,0» у труб 8/10/12/20/28 мм, в карточках была только 2,7 (28 — 2,5). Добавлена нормальная 3000 с сырьевой 3050, старые длины сохранены; норма по π·D (102/96/90/67/48). Прямой SQL, без alembic: схема осталась на 089. | `pre-490-20261127-093123.dump` | `post-490-20261127-093148.dump` | applied |
 
 ## Артефакты
 
@@ -35,6 +36,7 @@
 - `#466-codes-1c` — data/storage-prod/backups/changesets/#466-codes-1c/
 - `#469-2083-37` — data/storage-prod/backups/changesets/#469-2083-37/
 - `#474-als-sku` — data/storage-prod/backups/changesets/#474-als-sku/
+- `#490-pipe-length-3000` — data/backups/changesets/#490-pipe-length-3000/ (dev: `direct.sql`, `report.md`, `before_rows.json`) и data/backups/prod/ (дампы prod)
 
 ## Как откатывать
 
