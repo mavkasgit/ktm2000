@@ -8,9 +8,12 @@ import type { ImportRawSegment } from "./importRawData";
 
 export function useImportRowExpansion() {
   const [expandAllRaw, setExpandAllRaw] = useState(false);
-  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  // Ключ строки — номер строки файла, а у ОСВ-предпросмотра ещё и позиция:
+  // одна строка с остатком метров даёт две (`${row}:${part}`, #495). Число
+  // остаётся ключом остальных импортов.
+  const [expandedRows, setExpandedRows] = useState<Set<string | number>>(new Set());
 
-  const toggleRow = useCallback((idx: number) => {
+  const toggleRow = useCallback((idx: string | number) => {
     setExpandedRows((prev) => {
       const next = new Set(prev);
       if (next.has(idx)) {
@@ -23,7 +26,7 @@ export function useImportRowExpansion() {
   }, []);
 
   const isRowExpanded = useCallback(
-    (idx: number) => expandAllRaw || expandedRows.has(idx),
+    (idx: string | number) => expandAllRaw || expandedRows.has(idx),
     [expandAllRaw, expandedRows],
   );
 

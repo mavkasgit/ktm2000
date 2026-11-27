@@ -148,6 +148,14 @@ class RemainderItem:
     skip_reason: str | None = None
     skip_reason_label: str | None = None
     skip_note: str | None = None
+    # ОСВ 1С (#495): одна строка файла может дать две позиции — целые штуки
+    # нормальной длины (``part=0``) и короткий остаток метров (``part=1``).
+    # Пара ``(source_row_number, part)`` — ключ позиции: React-ключ
+    # предпросмотра, связь строки истории с её проводкой. ``residue`` помечает
+    # короткую позицию; обе живут только в памяти, в БД позиция — обычная
+    # строка ``stock_import_rows`` со своим ``stock_transaction_id``.
+    part: int = 0
+    residue: bool = False
 
 
 @dataclass
@@ -1342,8 +1350,9 @@ async def apply_remainders_import(
     imported_count = 0
     # Строка импорта → созданная ею проводка (ADR-0052 п.8). Без этой связи
     # нельзя ни объяснить пропуск строки, ни показать, что именно забирает
-    # компенсация при откате.
-    tx_id_by_row: dict[int, int] = {}
+    # компенсация при откате. Ключ — позиция ``(строка файла, part)``: строка
+    # ОСВ с остатком метров даёт две проводки, и номер строки у них общий (#495).
+    tx_id_by_key: dict[tuple[int, int], int] = {}
     for item in valid_items:
         # Determine per-row to_location_id
         to_loc: int = location_id
@@ -1399,7 +1408,7 @@ async def apply_remainders_import(
         )
         tx = await svc.record(db, cmd)
         transaction_ids.append(tx.id)
-        tx_id_by_row[item.source_row_number] = tx.id
+        tx_id_by_key[(item.source_row_number, item.part)] = tx.id
         imported_count += 1
 
     # --- История импорта (ADR-0052) ------------------------------------------
@@ -1474,7 +1483,9 @@ async def apply_remainders_import(
                     if is_valid
                     else StockImportRowStatus.INVALID
                 ),
-                stock_transaction_id=tx_id_by_row.get(item.source_row_number),
+                stock_transaction_id=tx_id_by_key.get(
+                    (item.source_row_number, item.part)
+                ),
                 errors=list(item.errors),
                 warnings=list(item.warnings),
                 raw_values=list(item.raw_values),

@@ -31,6 +31,7 @@ from app.models.action_journal import Action
 from app.reversal.service import reversal_service
 from app.stock.import_1c_osv import _norm_cell
 from app.stock.import_history import get_batch, get_batch_rows, mark_rolled_back
+from app.stock.import_models import StockImportRow
 from app.stock.import_service import RemainderItem, apply_remainders_import
 from app.stock.models import QualityState, Reason, StockBalance, StockTransaction
 from httpx import AsyncClient
@@ -261,6 +262,113 @@ async def test_import_osv_creates_transactions_learns_codes_and_writes_history(
     assert Decimal(pieces_row["current_balance"]) == Decimal(7)
 
     await assert_no_invariants_violations(session, context="osv-apply")
+
+
+async def test_import_osv_osv_tail_creates_two_positions_with_own_transactions(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    """Строка с остатком метров: две проводки, две строки истории, откат обеих.
+
+    5,2 м при нормальной 2,5 м — 2 шт × 2,5 м + 1 шт × 0,2 м (#495). Обе
+    позиции — обычные строки ledger со своим ``stock_transaction_id``; откат
+    батча возвращает оба размера.
+    """
+    section = await _make_section(session, "RAW_STOCK", "Склад сырья")
+    product = await _make_product(
+        session, "OSV-TAIL", name="Плинтус алюм.", lengths=[(2500, None, True)]
+    )
+    session.add(Product1CCode(product_id=product.id, code="36905"))
+    await session.commit()
+
+    content = _make_osv_workbook(
+        [_osv_row("36905", "КП-3690-05 ПФ 2,5м", "м", 5.2)]
+    )
+    resp = await _post_import(client, section, content)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is True
+    assert body["imported_count"] == 2
+    assert body["errors"] == []
+
+    txs = await _transactions(session, body["action_id"])
+    assert len(txs) == 2
+    by_length = {
+        (tx.dimensions or {}).get("length_mm"): tx
+        for tx in txs
+        if tx.product_id == product.id
+    }
+    assert set(by_length) == {2500, 200}
+    assert by_length[2500].quantity == Decimal("2.0000")
+    assert by_length[200].quantity == Decimal("1.0000")
+    assert {tx.comment for tx in txs} == {OSV_TRANSACTION_COMMENT}
+
+    # ── История: две строки одного номера, у каждой своя проводка ─────────
+    rows = (
+        await session.scalars(
+            select(StockImportRow).where(
+                StockImportRow.batch_id == body["batch_id"]
+            )
+        )
+    ).all()
+    assert len(rows) == 2
+    assert {row.source_row_number for row in rows} == {10}
+    assert all(row.status == "valid" for row in rows)
+    assert {row.stock_transaction_id for row in rows} == {
+        by_length[2500].id,
+        by_length[200].id,
+    }
+    by_dimensions = {
+        (row.dimensions or {}).get("length_mm"): row for row in rows
+    }
+    # Метры источника — только у основной позиции.
+    assert by_dimensions[2500].source_quantity_m == Decimal("5.2")
+    assert by_dimensions[200].source_quantity_m is None
+    assert len(by_dimensions[2500].warnings) == 1
+    assert by_dimensions[2500].warnings == by_dimensions[200].warnings
+
+    # ── Остатки: два размера, дробных штук нет ────────────────────────────
+    balances = (
+        await session.scalars(
+            select(StockBalance).where(
+                StockBalance.product_id == product.id,
+                StockBalance.location_id == section.id,
+                StockBalance.quality_state == QualityState.GOOD.value,
+            )
+        )
+    ).all()
+    by_balance_dims = {
+        (balance.dimensions or {}).get("length_mm"): balance.balance_qty
+        for balance in balances
+    }
+    assert by_balance_dims == {
+        2500: Decimal("2.0000"),
+        200: Decimal("1.0000"),
+    }
+
+    # ── Откат возвращает оба размера ──────────────────────────────────────
+    action = await session.get(Action, body["action_id"])
+    preview = await reversal_service.preview_reverse(session, action.id)
+    assert not preview.blockers
+    await reversal_service.reverse(
+        session, action.id, plan_token=preview.plan_token, actor="tester"
+    )
+    await mark_rolled_back(
+        session, await get_batch(session, body["batch_id"]), user=None
+    )
+    await session.commit()
+
+    remaining = (
+        await session.scalars(
+            select(StockBalance).where(
+                StockBalance.product_id == product.id,
+                StockBalance.location_id == section.id,
+                StockBalance.quality_state == QualityState.GOOD.value,
+            )
+        )
+    ).all()
+    assert all(balance.balance_qty == 0 for balance in remaining)
+
+    await assert_no_invariants_violations(session, context="osv-tail-rollback")
 
 
 async def test_reimport_same_osv_file_keeps_single_code_and_new_batches(

@@ -1689,6 +1689,11 @@ class RemainderPreviewItemOut(BaseModel):
     length_raw: str | None = None
     dimensions: dict[str, Any] | None = None
     dimensions_label: str
+    # ОСВ 1С (#495): позиция строки — целые штуки (`part=0`) или короткий
+    # остаток метров (`part=1`, `residue=True`). Ключ позиции —
+    # `(source_row_number, part)`.
+    part: int = 0
+    residue: bool = False
     skip_reason: str | None = None
     skip_reason_label: str | None = None
     skip_note: str | None = None

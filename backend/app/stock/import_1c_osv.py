@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from typing import TYPE_CHECKING, Literal
@@ -1226,14 +1226,99 @@ def _unit_error(unit_raw: str | None) -> str:
     return f"Единица измерения '{unit_raw.strip()}' не поддерживается"
 
 
+def _residue_warning(*, total_mm: int, pieces: int, length_mm: int) -> str:
+    """Предупреждение о короткой штуке — одинаковое на обеих позициях строки.
+
+    Тексты зафиксированы грилингом 27.11.2026 (#495): оператор видит и
+    нормальную длину, и сколько целых штук из неё вышло.
+    """
+    remainder = _format_mm_as_meters(total_mm - pieces * length_mm)
+    if pieces == 0:
+        return (
+            f"Остаток {remainder} м короче нормальной длины "
+            f"{_format_mm_as_meters(length_mm)} м — импортируется одной штукой "
+            f"{remainder} м"
+        )
+    return (
+        f"Остаток {remainder} м после {pieces} шт × "
+        f"{_format_mm_as_meters(length_mm)} м — импортируется одной штукой "
+        f"{remainder} м"
+    )
+
+
+def _split_meters_item(
+    item: RemainderItem,
+    *,
+    total_mm: int,
+    length_mm: int,
+) -> list[RemainderItem]:
+    """Метры строки ОСВ → позиции «целые штуки» и «короткий остаток» (#495).
+
+    Дробных штук нет: целые — ``floor(total_mm / length_mm)``, остаток метров
+    от 1 мм становится отдельной позицией ``1 шт × остаток``. Остаток меньше
+    миллиметра — не позиция (округление до мм), предупреждения нет.
+    """
+    pieces = total_mm // length_mm
+    remainder = total_mm - pieces * length_mm
+    if pieces == 0:
+        if remainder < 1:
+            return []
+        item.part = 0
+        item.residue = True
+        item.quantity = 1.0
+        item.dimensions = build_length_dimensions(remainder)
+        item.dimensions_label = describe_length(remainder)
+        item.warnings.append(
+            _residue_warning(total_mm=total_mm, pieces=0, length_mm=length_mm)
+        )
+        return [item]
+
+    item.part = 0
+    item.residue = False
+    item.quantity = float(pieces)
+    item.dimensions = build_length_dimensions(length_mm)
+    item.dimensions_label = describe_length(length_mm)
+    positions = [item]
+    if remainder < 1:
+        return positions
+
+    warning = _residue_warning(
+        total_mm=total_mm, pieces=pieces, length_mm=length_mm
+    )
+    # Предупреждение стоит на обеих позициях: строка предпросмотра у них
+    # одинаковая по высоте, и оператор видит одну причину, а не половину.
+    item.warnings.append(warning)
+    positions.append(
+        replace(
+            item,
+            part=1,
+            residue=True,
+            quantity=1.0,
+            dimensions=build_length_dimensions(remainder),
+            dimensions_label=describe_length(remainder),
+            # Метры — «что было в файле»: производная короткая позиция их не
+            # несёт, иначе аудит показал бы одно и то же дважды (#495).
+            source_quantity_m=None,
+            # Свой список ошибок: маркеры наименования пишут причину в каждую
+            # позицию отдельно, общий список дал бы дубль текста.
+            errors=list(item.errors),
+            warnings=[warning],
+        )
+    )
+    return positions
+
+
 async def resolve_1c_osv_quantities(
     db: AsyncSession,
-    items: Sequence[RemainderItem],
+    items: list[RemainderItem],
 ) -> None:
     """Длина, штуки и единицы строк ОСВ (спека §6.3, §8), in-place.
 
     Требует уже выполненного ``_lookup_1c_products``: длина приводится к
     ``length_mm`` найденного артикула, штуки — ``floor(метры / длина)``.
+    Остаток метров от 1 мм становится отдельной короткой позицией строки
+    (``part=1``, ``residue=True``): дробных штук не создаётся, материал не
+    теряется (#495).
     """
     lengths_by_product = await _load_lengths_by_product(
         db, [item.product_id for item in items if item.product_id is not None]
@@ -1256,9 +1341,14 @@ async def resolve_1c_osv_quantities(
         else _SkippedRegistry(by_code={}, by_name={})
     )
 
+    # Итерируем по снимку: одна строка может дать две позиции, и обе встают
+    # на её место. `items[:]` сохраняет объект списка — на него ссылаются
+    # вызывающие (ParsedRemainders, кэш предпросмотра).
+    resolved_items: list[RemainderItem] = []
     for item in items:
         if item.product_id is None:
             # Артикул не найден — его ошибка уже стоит, единицы не добавляем.
+            resolved_items.append(item)
             continue
         unit_kind = _classify_unit(item.source_unit or "")
         if unit_kind == "other":
@@ -1274,13 +1364,16 @@ async def resolve_1c_osv_quantities(
                 else SKIP_LABEL_NO_MATCH
             )
             item.skip_note = _unit_error(item.source_unit)
+            resolved_items.append(item)
             continue
         if unit_kind == "pcs":
             # Штуки как есть: количества уже в item.quantity, длина не нужна.
+            resolved_items.append(item)
             continue
 
         meters = item.source_quantity_m
         if meters is None:
+            resolved_items.append(item)
             continue
 
         written_mm = parse_length_from_name(item.source_name)
@@ -1292,6 +1385,7 @@ async def resolve_1c_osv_quantities(
         if resolved.error or resolved.length_mm is None:
             item.errors.append(resolved.error or "Не удалось определить длину артикула")
             item.status = "invalid"
+            resolved_items.append(item)
             continue
 
         length_mm = resolved.length_mm
@@ -1302,15 +1396,12 @@ async def resolve_1c_osv_quantities(
                 f"Длина взята из карточки: {describe_length(length_mm)} "
                 "(в наименовании не указана)"
             )
-        pieces = int(Decimal(str(meters)) / (Decimal(length_mm) / Decimal(1000)))
-        if pieces <= 0:
-            item.errors.append("Остаток меньше одной штуки")
-            item.status = "invalid"
-            continue
+        total_mm = round(Decimal(str(meters)) * 1000)
+        resolved_items.extend(
+            _split_meters_item(item, total_mm=total_mm, length_mm=length_mm)
+        )
 
-        item.quantity = float(pieces)
-        item.dimensions = build_length_dimensions(length_mm)
-        item.dimensions_label = describe_length(length_mm)
+    items[:] = resolved_items
 
 
 # ─── Выполненные операции по маркерам наименования (#468) ─────────────────────
