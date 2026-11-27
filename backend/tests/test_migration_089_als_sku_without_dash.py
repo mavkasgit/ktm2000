@@ -118,8 +118,22 @@ async def _seed(conn: asyncpg.Connection, rows: list[tuple[str, list[str]]]) -> 
         )
 
 
-async def _state(conn: asyncpg.Connection) -> dict[str, list[str]]:
-    rows = await conn.fetch("SELECT sku, aliases FROM products ORDER BY sku")
+async def _state(
+    conn: asyncpg.Connection, skus: list[str] | None = None
+) -> dict[str, list[str]]:
+    """Состояние ``products``: всё или только перечисленные SKU.
+
+    ``upgrade head`` тянет миграции после 089, а они могут добавлять свои
+    артикулы (090 заводит ``1212``). Проверка 089 смотрит только свои строки,
+    иначе чужая data-миграция роняет тест.
+    """
+    if skus is None:
+        rows = await conn.fetch("SELECT sku, aliases FROM products ORDER BY sku")
+    else:
+        rows = await conn.fetch(
+            "SELECT sku, aliases FROM products WHERE sku = ANY($1::varchar[]) ORDER BY sku",
+            skus,
+        )
     return {row["sku"]: list(row["aliases"] or []) for row in rows}
 
 
@@ -160,13 +174,13 @@ async def test_migration_089_moves_als_sku_to_canonical_spelling(tmp_path: Path)
 
         conn = await _connect(target_url)
         try:
-            assert await _state(conn) == EXPECTED_AFTER_UPGRADE
+            assert await _state(conn, list(EXPECTED_AFTER_UPGRADE)) == EXPECTED_AFTER_UPGRADE
 
             # Повторный проход теми же запросами: состояние не меняется.
             update_sku, update_aliases = _migration_sql()
             await conn.execute(update_sku)
             await conn.execute(update_aliases)
-            assert await _state(conn) == EXPECTED_AFTER_UPGRADE
+            assert await _state(conn, list(EXPECTED_AFTER_UPGRADE)) == EXPECTED_AFTER_UPGRADE
         finally:
             await conn.close()
             conn = None
@@ -175,7 +189,7 @@ async def test_migration_089_moves_als_sku_to_canonical_spelling(tmp_path: Path)
 
         conn = await _connect(target_url)
         try:
-            assert await _state(conn) == EXPECTED_AFTER_ROLLBACK
+            assert await _state(conn, list(EXPECTED_AFTER_ROLLBACK)) == EXPECTED_AFTER_ROLLBACK
         finally:
             await conn.close()
             conn = None
