@@ -28,21 +28,33 @@
 
 ## Артефакты
 
-- `#461-aliases-1c` — data/storage-prod/backups/changesets/#461-aliases-1c/
-- `#463-081-perimeter` — data/storage-prod/backups/changesets/#463-081-perimeter/
-- `#463-1880-placeholder` — data/storage-prod/backups/changesets/#463-1880-placeholder/
-- `#463-2972-length-2700` — data/storage-prod/backups/changesets/#463-2972-length-2700/
-- `#463-perimeters-3077-7121` — data/storage-prod/backups/changesets/#463-perimeters-3077-7121/
-- `#463-renames-leftover` — data/storage-prod/backups/changesets/#463-renames-leftover/
-- `#463-styk-26` — data/storage-prod/backups/changesets/#463-styk-26/
-- `#466-2464-sku-rename` — data/storage-prod/backups/changesets/#466-2464-sku-rename/
-- `#466-codes-1c` — data/storage-prod/backups/changesets/#466-codes-1c/
-- `#469-2083-37` — data/storage-prod/backups/changesets/#469-2083-37/
-- `#474-als-sku` — data/storage-prod/backups/changesets/#474-als-sku/
+- `#461-aliases-1c` — data/backups/changesets/#461-aliases-1c/ (`catalog_before.json`, `delta.json`, `final_catalog_before/after.xlsx`); dev-снимок `pre-461-apply-20261125-231652.sql`
+- `#463-*` (081, 1880, 2972, perimeters, renames, styk) — построчных артефактов на диске нет; состояние правок 25.11 — в снапшотах `pre-#456-acceptance-final-20261125-193043.sql` (до) и `pre-461-apply-20261125-231652.sql` (после), поздние — по записи журнала и ближайшим дампам
+- `#466-2464-sku-rename` — отдельных артефактов нет; см. `#466-codes-1c` и дампы 089
+- `#466-codes-1c` — data/backups/changesets/#466-codes-1c/ (`before.json`, `after.json`, `mapping.json`) и data/backups/snapshots/#466-codes-1c-*.sql
+- `#469-2083-37` — data/backups/changesets/#469-2083-37/ (`before_dev.json`, `after_dev.json`)
+- `#474-als-sku` — data/backups/prod/`pre-089-20261126-182414.dump` / `post-089-20261126-182646.dump`
 - `#490-pipe-length-3000` — data/backups/changesets/#490-pipe-length-3000/ (dev: `direct.sql`, `cleanup-27.sql`, `report.md`, `before_rows.json`) и data/backups/prod/ (дампы prod)
 - `#493-raw-lengths-1c` — data/backups/changesets/#493-raw-lengths-1c/ (`direct.sql`, `before_rows.json`, `after_rows.json`, `report.md`, `meta.json`) и data/backups/prod/ (дампы prod)
 - `#492-porog-alum` — data/storage-prod/backups/changesets/#492-porog-alum/ (`review.html` — обзор «было → стало», `apply_prod.sql`, `apply_prod.py`, `before/after_rows_prod.json`, `ids_prod.json`, `preview_after_prod.json`, `report.md`, `meta.json`) и data/backups/prod/ (дампы prod); dev-черновик — data/backups/changesets/#492-porog-alum/
 - `#492-length-spectrum` — data/storage-prod/backups/changesets/#492-length-spectrum/ (`review.html`, `apply.sql`, `apply_prod.sql`, `fix_primary.py`, `primary_prod.sql`, `before/after_rows*`, `ids*.json`, `report.md`, `meta.json`) и data/backups/prod/ (дампы prod); dev-черновик — data/backups/changesets/#492-length-spectrum/
+
+## История артикула
+
+Состояние любого артикула на каждом шаге собирается из артефактов change-set'ов:
+
+```bash
+python scripts/article-history.py "Кр.труба 10мм"
+python scripts/article-history.py 1212
+```
+
+Скрипт только читает `data/backups/changesets/*` и печатает по каждому
+change-set'у: имя, алиасы, длины (нормальная/сырьевая/основная), коды 1С и
+ссылки на полные дампы. Источники — `before/after_rows*.json`, `before/after*.json`;
+если построчного снимка у правки нет, остаются дампы из `meta.json`
+(`data/backups/prod/*.dump`, `data/backups/snapshots/*.sql`). Полное
+восстановление артикула — `ids*.json` (точечный `delete`/`update`) либо
+восстановление дампа «до» в отдельную БД и выборка строки.
 
 ## Как откатывать
 
