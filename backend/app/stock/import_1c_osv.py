@@ -429,9 +429,10 @@ def resolve_normal_length(
 ) -> NormalLength:
     """Привести длину из наименования к нормальной ``length_mm`` (спека §8.2).
 
-    Точное ``length_mm`` → она; точное ``raw_length_mm`` → соответствующая
-    нормальная; иначе — наибольшая ``length_mm`` не больше написанной.
-    Расхождение больше 100 мм (кроме точного raw) — предупреждение.
+    Совпадение обязано быть точным: ``length_mm`` или ``raw_length_mm``.
+    «Ближайшая снизу» не подбирается: 3,0 м и 2,7 м — разные длины, и подмена
+    одной другой кредитует склад не тем, что пришло из 1С. Нет точного
+    совпадения — ошибка строки, а не тихая замена.
     """
     normal = sorted({round(length.length_mm) for length in lengths if length.length_mm})
     if written_mm is None:
@@ -463,8 +464,7 @@ def resolve_normal_length(
     if written_mm in normal:
         return NormalLength(written_mm)
     if not normal:
-        # У артикула нет ни одной ``length_mm``: приводить не к чему, и
-        # сравнивать написанную длину не с чем (иначе ``normal[0]`` падал бы).
+        # У артикула нет ни одной ``length_mm``: приводить не к чему.
         return NormalLength(None, error="У артикула не указана длина")
     for length in lengths:
         if length.raw_length_mm is None or not length.length_mm:
@@ -472,8 +472,7 @@ def resolve_normal_length(
         if round(length.raw_length_mm) == written_mm:
             return NormalLength(round(length.length_mm))
 
-    candidates = [value for value in normal if value <= written_mm]
-    if not candidates:
+    if written_mm < normal[0]:
         return NormalLength(
             None,
             error=(
@@ -481,16 +480,13 @@ def resolve_normal_length(
                 f"длины артикула ({_format_mm_as_meters(normal[0])})"
             ),
         )
-    chosen = max(candidates)
-    if written_mm - chosen > 100:
-        return NormalLength(
-            chosen,
-            warning=(
-                f"Длина {_format_mm_as_meters(written_mm)} приведена к "
-                f"{_format_mm_as_meters(chosen)}"
-            ),
-        )
-    return NormalLength(chosen)
+    return NormalLength(
+        None,
+        error=(
+            f"Длина {_format_mm_as_meters(written_mm)} не совпадает с длинами "
+            f"артикула ({', '.join(_format_mm_as_meters(value) for value in normal)})"
+        ),
+    )
 
 
 def build_length_dimensions(length_mm: int) -> dict | None:

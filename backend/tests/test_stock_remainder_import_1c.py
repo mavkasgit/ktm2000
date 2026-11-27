@@ -407,20 +407,22 @@ def test_resolve_normal_length_raw_maps_to_normal_without_warning() -> None:
     assert resolved.warning is None
 
 
-def test_resolve_normal_length_nearest_lower_with_warning() -> None:
-    """Расхождение больше 100 мм (ADR-0077 п.5) — предупреждение, не ошибка."""
-    resolved = resolve_normal_length(2610, _lengths((2500, None, True)))
+def test_resolve_normal_length_no_exact_match_is_error() -> None:
+    """3,0 при карточке 2,7 — не «ближайшая снизу», а ошибка: это разные длины."""
+    resolved = resolve_normal_length(3000, _lengths((2700, None, True)))
 
-    assert resolved.length_mm == 2500
-    assert resolved.warning == "Длина 2,61 приведена к 2,5"
+    assert resolved.length_mm is None
+    assert resolved.warning is None
+    assert resolved.error == "Длина 3,0 не совпадает с длинами артикула (2,7)"
 
 
-def test_resolve_normal_length_small_deviation_is_silent() -> None:
-    """Порог предупреждения — больше 100 мм: 2,55 → 2,5 молчит (ADR-0077 п.5)."""
+def test_resolve_normal_length_small_deviation_is_error() -> None:
+    """Даже 50 мм расхождения не подменяются: 2,55 при карточке 2,5 — ошибка."""
     resolved = resolve_normal_length(2550, _lengths((2500, None, True)))
 
-    assert resolved.length_mm == 2500
-    assert resolved.warning is None
+    assert resolved.length_mm is None
+    assert resolved.error == "Длина 2,55 не совпадает с длинами артикула (2,5)"
+
 
 
 def test_resolve_normal_length_smaller_than_minimum_is_error() -> None:
@@ -703,10 +705,10 @@ async def test_resolve_quantities_meters_to_pieces_by_normal_length(
     assert item.warnings == []
 
 
-async def test_resolve_quantities_nearest_lower_length_warns(
+async def test_resolve_quantities_length_not_in_card_is_error(
     session: AsyncSession,
 ) -> None:
-    """Наибольшая нормальная ≤ написанной (2,61 → 2,5) — штуки и предупреждение."""
+    """2,61 при карточке 2,5: длина не подменяется, строка не импортируется."""
     product = await _make_product(session, "PLINTH-100", lengths=[(2500, None, True)])
     await _bind_1c_code(session, product, "22069")
     items = _items([
@@ -716,10 +718,10 @@ async def test_resolve_quantities_nearest_lower_length_warns(
     await _resolve_quantities(session, items)
 
     item = items[0]
-    assert item.status == "valid"
-    assert item.quantity == 2033
-    assert item.dimensions == {"length_mm": 2500}
-    assert item.warnings == ["Длина 2,61 приведена к 2,5"]
+    assert item.status == "invalid"
+    assert item.quantity is None
+    assert item.warnings == []
+    assert item.errors == ["Длина 2,61 не совпадает с длинами артикула (2,5)"]
 
 
 async def test_resolve_quantities_without_name_length_uses_primary(

@@ -265,7 +265,7 @@ const EMPTY_QUALITY_OVERRIDES: Record<number, QualityState> = {};
  * строки. ``skipped`` (реестр исключений) по умолчанию скрыт: на листе
  * заказчика его сотни, и оператор листал их, чтобы дойти до рабочих строк.
  */
-type PreviewStatusFilter = "default" | "invalid" | "skipped";
+type PreviewStatusFilter = "default" | "invalid" | "skipped" | "warnings";
 
 function qualityStateLabel(state: QualityState): string {
   return (
@@ -1084,6 +1084,12 @@ export function ImportRemaindersDialog({
 
   const previewItems = useMemo(() => shownPreview?.items ?? [], [shownPreview]);
   const previewItemsTotal = shownPreview?.items_total ?? 0;
+  // Счётчик предупреждений — по загруженным строкам: фильтр клиентский, и
+  // бейдж обязан совпадать с тем, что покажет клик (#490).
+  const warningCount = useMemo(
+    () => previewItems.filter((item) => item.warnings.length > 0).length,
+    [previewItems],
+  );
 
   const stats = useMemo(() => {
     if (!shownPreview) return { total: 0, valid: 0, skipped: 0, invalid: 0, qty: 0 };
@@ -1101,6 +1107,9 @@ export function ImportRemaindersDialog({
   const visibleItems = useMemo(() => {
     if (filterStatus === "skipped") return previewItems.filter((item) => item.status === "skipped");
     if (filterStatus === "invalid") return previewItems.filter((item) => item.status === "invalid");
+    if (filterStatus === "warnings") {
+      return previewItems.filter((item) => item.warnings.length > 0);
+    }
     return previewItems.filter((item) => item.status !== "skipped");
   }, [previewItems, filterStatus]);
 
@@ -1177,8 +1186,23 @@ export function ImportRemaindersDialog({
         layoutSpan: "min-w-[0px]",
       });
     }
+    if (warningCount > 0 || filterStatus === "warnings") {
+      fields.push({
+        kind: "toggle",
+        key: "preview-status-warnings",
+        label: "Предупреждения",
+        tone: "amber",
+        hideIcon: true,
+        checked: filterStatus === "warnings",
+        badgeCount: warningCount,
+        onChange: () => {
+          setFilterStatus((prev) => (prev === "warnings" ? "default" : "warnings"));
+        },
+        layoutSpan: "min-w-[0px]",
+      });
+    }
     return fields;
-  }, [filterStatus, searchQuery, stats.invalid, stats.skipped]);
+  }, [filterStatus, searchQuery, stats.invalid, stats.skipped, warningCount]);
 
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 

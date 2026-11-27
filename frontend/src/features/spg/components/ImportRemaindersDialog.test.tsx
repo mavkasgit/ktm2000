@@ -500,7 +500,13 @@ describe("пропущенные строки и лист целиком", () =>
       items_total: 3,
       offset: 0,
       items: [
-        makeImportItem({ source_row_number: 2, sku: "RAW-001", quantity: 5, target_section_id: 11 }),
+        makeImportItem({
+          source_row_number: 2,
+          sku: "RAW-001",
+          quantity: 5,
+          target_section_id: 11,
+          warnings: ["Длина взята из карточки: 2,7 м (в наименовании не указана)"],
+        }),
         makeImportItem({
           source_row_number: 3,
           sku: "",
@@ -648,6 +654,39 @@ describe("пропущенные строки и лист целиком", () =>
         expect(bodyRowTexts()).toHaveLength(allRows);
       });
       expect(previewChip(/^Ошибки \d+$/).getAttribute("aria-pressed")).toBe("false");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("чип «Предупреждения» изолирует строки с предупреждениями", async () => {
+    mockPreviewReferences();
+    const { cleanup } = await mountPreview();
+    try {
+      // Строка годная, поэтому в «Ошибки» не попадает — у неё свой чип.
+      const warningsChip = previewChip(/^Предупреждения \d+$/);
+      expect(warningsChip.getAttribute("aria-pressed")).toBe("false");
+
+      await act(async () => {
+        fireEvent.click(warningsChip);
+      });
+      await vi.waitFor(() => {
+        expect(bodyRowTexts()).toHaveLength(1);
+      });
+      expect(document.body.textContent).toContain("RAW-001");
+      expect(document.body.textContent).toContain("в наименовании не указана");
+      expect(document.body.textContent).not.toContain("BAD-001");
+      expect(previewChip(/^Предупреждения \d+$/).getAttribute("aria-pressed")).toBe("true");
+
+      // Чипы взаимоисключающие: «Ошибки» снимает предупреждения.
+      await act(async () => {
+        fireEvent.click(previewChip(/^Ошибки \d+$/));
+      });
+      await vi.waitFor(() => {
+        expect(bodyRowTexts()).toHaveLength(1);
+      });
+      expect(document.body.textContent).toContain("BAD-001");
+      expect(previewChip(/^Предупреждения \d+$/).getAttribute("aria-pressed")).toBe("false");
     } finally {
       cleanup();
     }
