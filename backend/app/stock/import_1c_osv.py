@@ -438,7 +438,16 @@ def resolve_normal_length(
         if len(normal) == 1:
             return NormalLength(normal[0])
         if not normal:
-            return NormalLength(None, error="У артикула не указана длина")
+            # Длины нет ни в наименовании 1С, ни у артикула: подставлять
+            # нечего. Ошибка называет обе причины, чтобы оператор не искал
+            # длину в строке, где её действительно нет.
+            return NormalLength(
+                None,
+                error=(
+                    "Длина не определена: в наименовании её нет, "
+                    "у артикула она не задана"
+                ),
+            )
         primary = [
             round(length.length_mm)
             for length in lengths

@@ -438,6 +438,16 @@ def test_resolve_normal_length_without_product_lengths_is_error() -> None:
     assert resolved.error == "У артикула не указана длина"
 
 
+def test_resolve_normal_length_without_name_and_product_lengths_is_error() -> None:
+    """Ни в наименовании, ни у артикула нет длины — определить её нельзя."""
+    resolved = resolve_normal_length(None, [])
+
+    assert resolved.length_mm is None
+    assert resolved.error == (
+        "Длина не определена: в наименовании её нет, у артикула она не задана"
+    )
+
+
 def test_resolve_normal_length_without_name_uses_primary() -> None:
     resolved = resolve_normal_length(
         None, _lengths((2700, None, True), (3000, None, False))
@@ -760,6 +770,63 @@ async def test_resolve_quantities_product_without_lengths_is_error(
     assert items[0].status == "invalid"
     assert items[0].quantity is None
     assert items[0].errors == ["У артикула не указана длина"]
+
+
+async def test_resolve_quantities_without_name_or_product_length_is_error(
+    session: AsyncSession,
+) -> None:
+    """Строка без длины в имени и артикул без ``ProductLength``: причина видна."""
+    product = await _make_product(session, "KANT-NO-NAME-LENGTH")
+    await _bind_1c_code(session, product, "20933")
+    items = _items([_osv_row("20933", "Кант 26мм алюминий", "м", 5400)])
+
+    await _resolve_quantities(session, items)
+
+    assert items[0].status == "invalid"
+    assert items[0].quantity is None
+    assert items[0].errors == [
+        "Длина не определена: в наименовании её нет, у артикула она не задана"
+    ]
+
+
+async def test_resolve_quantities_profile_10x10x10_2m_is_valid(
+    session: AsyncSession,
+) -> None:
+    """14323: длина 2,0 м есть в имени и в реестре длин — 4200 м → 2100 шт."""
+    product = await _make_product(
+        session,
+        "ЮП-2397",
+        lengths=[(2000, None, False), (2700, 2750, True), (3000, None, False)],
+    )
+    await _bind_1c_code(session, product, "14323")
+    items = _items([
+        _osv_row("14323", "П-образный профиль 10*10*10 2,0м алюминий", "м", 4200),
+    ])
+
+    await _resolve_quantities(session, items)
+
+    assert items[0].status == "valid", items[0].errors
+    assert items[0].quantity == 2100
+    assert items[0].dimensions == {"length_mm": 2000}
+
+
+async def test_resolve_quantities_profile_1212_without_length_is_error(
+    session: AsyncSession,
+) -> None:
+    """13923: длины нет ни в имени, ни у артикула — подставлять нечего."""
+    product = await _make_product(session, "1212")
+    await _bind_1c_code(session, product, "13923")
+    items = _items([
+        _osv_row("13923", "Профиль алюм.#1212-00 сер.", "м", 1533.6),
+    ])
+
+    await _resolve_quantities(session, items)
+
+    assert items[0].status == "invalid"
+    assert items[0].quantity is None
+    assert items[0].errors == [
+        "Длина не определена: в наименовании её нет, у артикула она не задана"
+    ]
 
 
 async def test_resolve_quantities_less_than_one_piece_is_error(

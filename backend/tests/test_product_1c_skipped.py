@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 EXPECTED_REASONS = {
     SKIP_REASON_NOT_MES: 293,
     SKIP_REASON_PURCHASED: 5,
-    SKIP_REASON_NO_CATALOG: 49,
+    SKIP_REASON_NO_CATALOG: 47,
 }
 
 
@@ -45,13 +45,13 @@ async def test_seed_product_1c_skipped_is_idempotent(session: AsyncSession) -> N
     first = await seed_product_1c_skipped(session)
 
     assert first == {"created": len(PRODUCT_1C_SKIPPED), "existing": 0}
-    assert len(PRODUCT_1C_SKIPPED) == 347
+    assert len(PRODUCT_1C_SKIPPED) == 345
 
     second = await seed_product_1c_skipped(session)
 
-    assert second == {"created": 0, "existing": 347}
+    assert second == {"created": 0, "existing": 345}
     total = await session.scalar(select(func.count()).select_from(Product1CSkipped))
-    assert total == 347
+    assert total == 345
 
 
 async def test_seed_product_1c_skipped_reasons_and_names(
@@ -86,7 +86,7 @@ async def test_seed_product_1c_skipped_keeps_human_decision(
 
     result = await seed_product_1c_skipped(session)
 
-    assert result == {"created": 0, "existing": 347}
+    assert result == {"created": 0, "existing": 345}
     assert row.reason == SKIP_REASON_NO_CATALOG
     assert row.note == "решили иначе"
 
